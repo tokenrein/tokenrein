@@ -1,12 +1,14 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::providers::Provider;
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
     Skip,
@@ -25,7 +27,7 @@ impl Mode {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum FailMode {
     #[default]
@@ -33,7 +35,7 @@ pub enum FailMode {
     Closed,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BudgetPolicy {
     pub limit_usd: f64,
@@ -41,13 +43,18 @@ pub struct BudgetPolicy {
     pub mode: Mode,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Budgets {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub org_monthly: Option<BudgetPolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub project_monthly: Option<BudgetPolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_daily: Option<BudgetPolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub run: Option<BudgetPolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_run_usd: Option<f64>,
 }
 
@@ -127,17 +134,42 @@ pub struct PriceOverride {
     pub cache_write_per_mtok: Option<f64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectConfig {
     pub id: String,
-    #[serde(default)]
+    /// Bare key hashes, as written in the config file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub virtual_key_hashes: Vec<String>,
+    /// Keys created from the admin API / dashboard, with a name and a recognisable prefix.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<VirtualKey>,
     #[serde(default)]
     pub budgets: Budgets,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct VirtualKey {
+    /// sha256 of the key; the key itself is never stored.
+    pub hash: String,
+    pub name: String,
+    /// The first characters of the key, shown so people can tell keys apart.
+    pub prefix: String,
+    pub created_at: String,
+}
+
+impl ProjectConfig {
+    /// Every key hash that authenticates as this project.
+    pub fn key_hashes(&self) -> impl Iterator<Item = &str> {
+        self.virtual_key_hashes
+            .iter()
+            .map(String::as_str)
+            .chain(self.keys.iter().map(|k| k.hash.as_str()))
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OrgConfig {
     pub id: String,
@@ -145,7 +177,7 @@ pub struct OrgConfig {
     pub fail_mode: FailMode,
     #[serde(default)]
     pub budgets: Budgets,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub provider_key_env: HashMap<String, String>,
     #[serde(default)]
     pub projects: Vec<ProjectConfig>,
@@ -164,23 +196,44 @@ pub struct Config {
     pub orgs: Vec<OrgConfig>,
 }
 
+/// Looks up environment variables (provider keys, admin token); swapped out in tests.
+pub type EnvFn = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
 pub struct Resolved {
     pub cfg: Config,
     pub keys: HashMap<String, (usize, usize)>,
     provider_keys: HashMap<(usize, Provider), String>,
     pub admin_token: Option<String>,
+    env: EnvFn,
 }
 
 impl Resolved {
-    pub fn load(path: &str, env: impl Fn(&str) -> Option<String>) -> Result<Self> {
+    pub fn load(
+        path: &str,
+        env: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+    ) -> Result<Self> {
         let text =
             std::fs::read_to_string(path).with_context(|| format!("reading config {path}"))?;
         Self::from_toml(&text, env)
     }
 
-    pub fn from_toml(text: &str, env: impl Fn(&str) -> Option<String>) -> Result<Self> {
+    pub fn from_toml(
+        text: &str,
+        env: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+    ) -> Result<Self> {
         let cfg: Config = toml::from_str(text).context("parsing config")?;
+        Self::build(cfg, Arc::new(env))
+    }
 
+    /// The same server settings with a different set of orgs (from the admin API / dashboard).
+    /// Validates exactly like the config file.
+    pub fn with_orgs(&self, orgs: Vec<OrgConfig>) -> Result<Self> {
+        let mut cfg = self.cfg.clone();
+        cfg.orgs = orgs;
+        Self::build(cfg, self.env.clone())
+    }
+
+    fn build(cfg: Config, env: EnvFn) -> Result<Self> {
         let mut keys = HashMap::new();
         let mut org_ids = HashSet::new();
         for (oi, org) in cfg.orgs.iter().enumerate() {
@@ -204,7 +257,12 @@ impl Resolved {
                     bail!("org {:?}: duplicate project id {:?}", org.id, project.id);
                 }
                 validate_budgets(&project.budgets, &project.id)?;
-                for hash in &project.virtual_key_hashes {
+                for k in &project.keys {
+                    if k.name.len() > 100 || k.prefix.len() > 20 {
+                        bail!("{}/{}: key name or prefix too long", org.id, project.id);
+                    }
+                }
+                for hash in project.key_hashes() {
                     let hash = hash.to_ascii_lowercase();
                     if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
                         bail!(
@@ -257,6 +315,7 @@ impl Resolved {
             keys,
             provider_keys,
             admin_token,
+            env,
         })
     }
 

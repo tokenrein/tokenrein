@@ -81,18 +81,57 @@ Unknown models are reserved and charged at the provider's most expensive
 built-in price until you add a `[[pricing]]` override. Built-in prices were last
 checked in 2025-11 — **verify them before charging customers.**
 
+## Dashboard
+
+Open **http://127.0.0.1:8788/** (the admin listener) and sign in with `TL_ADMIN_TOKEN`.
+
+- **Overview**: this month's org and project spend against their limits, spend today, active runs, blocked requests.
+- **Runs**: every run of the last 7 days, sub-agent runs nested under their parent, with state,
+  project / agent / model, request and blocked counts, spend against the run limit, and
+  Pause / Resume / Kill buttons.
+- **Agents**: spend per agent today against the agent daily budget.
+- **Activity**: the latest requests (decision, run, model, reserved and actual cost, tokens, latency).
+- **Keys & limits**: create projects and orgs, create virtual keys (shown once; only the hash is
+  stored) and revoke them, set every budget (limit + enforce / check / skip) and the org's fail mode.
+
+Orgs, projects, keys and budgets are kept in Redis (`tl:control:*`). On first start they are
+seeded from the config file's `[[orgs]]`; after that Redis is the source of truth (edit them in
+the dashboard; later changes to `[[orgs]]` in the file are not re-read). Every proxy instance
+picks up changes within 2 seconds, no restart needed. Monthly and daily limits apply to the next
+request; a run's limit is fixed when the run starts, so a new run policy applies to new runs.
+Provider API keys stay in environment variables and are never shown or stored by the dashboard.
+
 ## Admin API (`:8788`, `Authorization: Bearer $TL_ADMIN_TOKEN`)
 
 | Method | Path | Effect |
 |---|---|---|
+| `GET` | `/` | The dashboard page (no data; it calls the API below) |
+| `GET` | `/admin/overview` | Orgs, projects, keys (prefix only), budgets, this month's spend |
+| `POST` | `/admin/orgs` | Create an org `{id, fail_mode?, budgets?}` |
+| `PUT` / `DELETE` | `/admin/orgs/{org}` | Set `{fail_mode?, budgets?}` / delete the org and its keys |
+| `POST` | `/admin/orgs/{org}/projects` | Create a project `{id, budgets?}` |
+| `PUT` / `DELETE` | `/admin/orgs/{org}/projects/{project}` | Set `{budgets}` (blank = inherit from org) / delete |
+| `POST` | `/admin/orgs/{org}/projects/{project}/keys` | Create a virtual key `{name}`; the response has the key, once |
+| `DELETE` | `/admin/orgs/{org}/projects/{project}/keys/{key_id}` | Revoke a key |
+| `GET` | `/admin/orgs/{org}/runs?limit=` | Recent runs with parent, state, project, agent, counts, spend |
+| `GET` | `/admin/orgs/{org}/agents?limit=` | Agents seen recently with today's spend |
+| `GET` | `/admin/orgs/{org}/events?limit=` | Latest request events |
 | `GET` | `/admin/orgs/{org}/runs/{run}` | State, parent, limit / spent / reserved |
 | `POST` | `/admin/orgs/{org}/runs/{run}/pause` | Block the run and its children |
 | `POST` | `/admin/orgs/{org}/runs/{run}/resume` | Unblock (not allowed after kill) |
 | `POST` | `/admin/orgs/{org}/runs/{run}/kill` | Block permanently |
 | `GET` | `/healthz`, `/readyz` | Liveness; Redis reachability |
 
+Budgets use the config file's shape, e.g.
+`{"budgets": {"agent_daily": {"limit_usd": 20, "mode": "enforce"}, "max_run_usd": 10}}`.
+Edits are validated like the config file and are compare-and-set, so concurrent edits never
+overwrite each other (the loser gets `409`).
+
 Logs go to stderr. Stdout carries one JSON event per request (decision, estimate,
-actual cost, usage, `pre_upstream_us` overhead) for the analytics pipeline.
+actual cost, usage, `pre_upstream_us` overhead) for the analytics pipeline. The same events
+feed the dashboard: a background task writes them to Redis (a capped stream of the last 5,000
+per org plus run and agent indexes), off the request path; if Redis is slow they are dropped,
+never the request.
 
 ## Tests
 
@@ -100,11 +139,13 @@ actual cost, usage, `pre_upstream_us` overhead) for the analytics pipeline.
 cargo test
 ```
 
-37 tests: unit tests plus integration tests that start a real `redis-server` and a
+44 tests: unit tests plus integration tests that start a real `redis-server` and a
 fake OpenAI/Anthropic upstream. They include a concurrency test (500 parallel
 reservations against a budget that fits exactly 100 — exactly 100 succeed),
 streaming settlement for both providers, child-run spend counting against the
-parent, shadow mode, and pause/resume/kill. Integration tests skip if
+parent, shadow mode, pause/resume/kill, and the dashboard API (keys and limits created
+there apply immediately, other instances pick them up, runs / agents / events are
+recorded). Integration tests skip if
 `redis-server` is missing unless `TL_REQUIRE_REDIS=1` (set in CI).
 
 Local smoke run of the release binary (Apple Silicon laptop, Redis on the same
@@ -116,9 +157,8 @@ expected cost exactly. This is not a production load test.
 
 - Loop detectors (identical-call repeats, spend velocity, run structure, retry storms)
 - Slack / email alerts with Resume / Raise / Kill
-- Control plane: signup, orgs, keys and policies in Postgres (config file today),
-  KMS-encrypted provider keys (environment variables today), dashboard, Stripe
+- Control plane: signup and multi-user login (the dashboard has one admin token today),
+  per-org access, KMS-encrypted provider keys (environment variables today), Stripe
 - Event pipeline to ClickHouse (stdout today), replay simulation, shadow-mode report
-- Python / TypeScript SDKs
 - Responses API: context size of a `previous_response_id` the proxy never saw is
   assumed to be 32k tokens

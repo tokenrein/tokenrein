@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use axum::Router;
@@ -23,10 +24,46 @@ use crate::pricing::{Catalog, Price};
 use crate::providers::{self, Api, StreamTracker, Usage};
 
 pub struct AppState {
-    pub rt: Resolved,
+    /// Current config; replaced when orgs, keys or budgets change from the admin API.
+    rt: RwLock<Arc<Resolved>>,
+    /// Version of the managed config in Redis that `rt` reflects (0 = not managed yet).
+    pub control_version: AtomicU64,
+    /// Serialises config edits made through this process.
+    pub control_edit: tokio::sync::Mutex<()>,
     pub ledger: Ledger,
     pub http: reqwest::Client,
     pub prices: Catalog,
+    /// Request events for the dashboard, written to Redis by a background task.
+    pub activity: mpsc::Sender<Value>,
+}
+
+impl AppState {
+    pub fn new(
+        rt: Resolved,
+        ledger: Ledger,
+        http: reqwest::Client,
+        prices: Catalog,
+        activity: mpsc::Sender<Value>,
+    ) -> Self {
+        Self {
+            rt: RwLock::new(Arc::new(rt)),
+            control_version: AtomicU64::new(0),
+            control_edit: tokio::sync::Mutex::new(()),
+            ledger,
+            http,
+            prices,
+            activity,
+        }
+    }
+
+    pub fn rt(&self) -> Arc<Resolved> {
+        self.rt.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn replace_rt(&self, rt: Resolved, version: u64) {
+        *self.rt.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(rt);
+        self.control_version.store(version, Ordering::SeqCst);
+    }
 }
 
 /// Input tokens assumed for a Responses API turn whose stored context we have never seen.
@@ -36,7 +73,7 @@ const RESERVATION_GRACE_SECS: u64 = 120;
 const RESERVATION_RECORD_EXTRA_SECS: u64 = 24 * 3600;
 
 pub fn router(state: Arc<AppState>) -> Router {
-    let limit = state.rt.cfg.server.max_body_bytes;
+    let limit = state.rt().cfg.server.max_body_bytes;
     Router::new()
         .route("/v1/chat/completions", post(openai_chat))
         .route("/v1/responses", post(openai_responses))
@@ -128,14 +165,15 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
             "missing TokenLens virtual key (send it as 'Authorization: Bearer' or 'x-api-key')",
         );
     };
-    let Some(&(oi, pi)) = st.rt.keys.get(&config::sha256_hex(token)) else {
+    let rt = st.rt();
+    let Some(&(oi, pi)) = rt.keys.get(&config::sha256_hex(token)) else {
         return reject(
             StatusCode::UNAUTHORIZED,
             "tokenlens_unauthorized",
             "invalid TokenLens virtual key",
         );
     };
-    let org = &st.rt.cfg.orgs[oi];
+    let org = &rt.cfg.orgs[oi];
     let project = &org.projects[pi];
 
     let run_id = match header_id(&headers, "x-tl-run-id") {
@@ -176,16 +214,13 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         },
     };
 
-    let prepared = match providers::prepare(api, &body, st.rt.cfg.server.default_max_output_tokens)
-    {
+    let prepared = match providers::prepare(api, &body, rt.cfg.server.default_max_output_tokens) {
         Ok(p) => p,
         Err(m) => return reject(StatusCode::BAD_REQUEST, "tokenlens_invalid_request", &m),
     };
     let provider = api.provider();
-    let (Some(base), Some(api_key)) = (
-        st.rt.upstream_base(provider),
-        st.rt.provider_key(oi, provider),
-    ) else {
+    let (Some(base), Some(api_key)) = (rt.upstream_base(provider), rt.provider_key(oi, provider))
+    else {
         return reject(
             StatusCode::BAD_REQUEST,
             "tokenlens_provider_not_configured",
@@ -300,7 +335,7 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         tracing::warn!(request_id, model = %ctx.model, "unknown model price; reserving at the provider's most expensive rate");
     }
 
-    let reservation_ttl = st.rt.cfg.server.upstream_timeout_secs + RESERVATION_GRACE_SECS;
+    let reservation_ttl = rt.cfg.server.upstream_timeout_secs + RESERVATION_GRACE_SECS;
     let mut runs = Vec::with_capacity(ancestors.len() + 1);
     runs.push(run_id.clone());
     runs.extend(ancestors);
@@ -324,7 +359,7 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
             reserved,
             limit,
         }) => {
-            emit(&ctx, &Outcome::blocked("blocked_budget", &label));
+            emit(&st, &ctx, &Outcome::blocked("blocked_budget", &label));
             let message = format!(
                 "TokenLens budget exceeded for {label}: spent ${} + in flight ${} + this request (up to ${}) is over the ${} limit",
                 usd(spent),
@@ -345,7 +380,11 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
             run_id: stopped,
             state,
         }) => {
-            emit(&ctx, &Outcome::blocked("blocked_run_stopped", &stopped));
+            emit(
+                &st,
+                &ctx,
+                &Outcome::blocked("blocked_run_stopped", &stopped),
+            );
             let kind = if state == "killed" {
                 "tokenlens_run_killed"
             } else {
@@ -487,6 +526,7 @@ async fn forward(
             };
             tracing::warn!(request_id = %ctx.request_id, error = %e, "{message}");
             emit(
+                &st,
                 &ctx,
                 &Outcome {
                     decision: "upstream_error",
@@ -565,6 +605,7 @@ async fn forward(
     };
     settle(&st, &ctx, actual).await;
     emit(
+        &st,
         &ctx,
         &Outcome {
             decision: if ctx.degraded {
@@ -653,6 +694,7 @@ async fn stream_through(
     let actual = ctx.price.usage_cost(&usage);
     settle(&st, &ctx, actual).await;
     emit(
+        &st,
         &ctx,
         &Outcome {
             decision: if ctx.degraded {
@@ -706,7 +748,7 @@ async fn settle(st: &AppState, ctx: &Ctx, actual: u64) {
     );
 }
 
-fn emit(ctx: &Ctx, o: &Outcome) {
+fn emit(st: &AppState, ctx: &Ctx, o: &Outcome) {
     let event = json!({
         "event": "request",
         "ts": Utc::now().to_rfc3339(),
@@ -734,6 +776,8 @@ fn emit(ctx: &Ctx, o: &Outcome) {
         "client_disconnected": o.client_disconnected,
     });
     println!("{event}");
+    // Dashboard activity is best effort: never block or fail a request for it.
+    let _ = st.activity.try_send(event);
 }
 
 fn usd(micros: i64) -> String {

@@ -147,6 +147,22 @@ impl<'a> Keys<'a> {
     pub fn done(&self, request_id: &str) -> String {
         format!("tl:{{{}}}:done:{request_id}", self.org)
     }
+    /// Recent request events (capped stream) for the dashboard.
+    pub fn events(&self) -> String {
+        format!("tl:{{{}}}:ev", self.org)
+    }
+    /// Run ids by last activity.
+    pub fn runs_seen(&self) -> String {
+        format!("tl:{{{}}}:runs", self.org)
+    }
+    /// Project, agent, request counts and timestamps of a run.
+    pub fn run_info(&self, run: &str) -> String {
+        format!("tl:{{{}}}:ri:{run}", self.org)
+    }
+    /// `project/agent` pairs by last activity.
+    pub fn agents_seen(&self) -> String {
+        format!("tl:{{{}}}:agents", self.org)
+    }
     pub fn response_tokens(&self, response_id: &str) -> String {
         format!("tl:{{{}}}:resp:{response_id}", self.org)
     }
@@ -213,6 +229,7 @@ pub struct Ledger {
     reserve: Script,
     settle: Script,
     release: Script,
+    control_cas: Script,
     ancestry: Mutex<HashMap<String, Arc<Vec<String>>>>,
 }
 
@@ -229,6 +246,7 @@ impl Ledger {
             reserve: Script::new(RESERVE_LUA),
             settle: Script::new(SETTLE_LUA),
             release: Script::new(RELEASE_LUA),
+            control_cas: Script::new(CONTROL_CAS_LUA),
             ancestry: Mutex::new(HashMap::new()),
         })
     }
@@ -475,4 +493,196 @@ impl Ledger {
         let mut conn = self.conn.clone();
         Ok(conn.hgetall(key).await?)
     }
+
+    pub async fn budgets(&self, keys: &[String]) -> Result<Vec<HashMap<String, String>>> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut pipe = redis::pipe();
+        for k in keys {
+            pipe.hgetall(k);
+        }
+        let mut conn = self.conn.clone();
+        Ok(pipe.query_async(&mut conn).await?)
+    }
+
+    // --- Managed orgs / projects / keys / budgets (admin API and dashboard) ---
+
+    /// The managed org list (JSON) and its version, if it has been seeded.
+    pub async fn control_load(&self) -> Result<Option<(u64, String)>> {
+        let mut conn = self.conn.clone();
+        let (doc, version): (Option<String>, Option<u64>) = redis::pipe()
+            .get(CONTROL_ORGS)
+            .get(CONTROL_VERSION)
+            .query_async(&mut conn)
+            .await?;
+        Ok(doc.map(|d| (version.unwrap_or(0), d)))
+    }
+
+    pub async fn control_version(&self) -> Result<u64> {
+        let mut conn = self.conn.clone();
+        let v: Option<u64> = conn.get(CONTROL_VERSION).await?;
+        Ok(v.unwrap_or(0))
+    }
+
+    /// Store `doc` if the version is still `expected` (0 = not seeded yet). Returns the new
+    /// version, or None if someone else wrote first.
+    pub async fn control_store(&self, expected: u64, doc: &str) -> Result<Option<u64>> {
+        let mut conn = self.conn.clone();
+        let v: i64 = self
+            .control_cas
+            .key(CONTROL_ORGS)
+            .key(CONTROL_VERSION)
+            .arg(expected)
+            .arg(doc)
+            .invoke_async(&mut conn)
+            .await?;
+        Ok(u64::try_from(v).ok())
+    }
+
+    // --- Activity for the dashboard (written off the request path) ---
+
+    pub async fn record_activity(&self, events: &[serde_json::Value]) -> Result<()> {
+        let now = unix_now();
+        let mut pipe = redis::pipe();
+        for e in events {
+            let s = |k: &str| e.get(k).and_then(|v| v.as_str()).unwrap_or("");
+            let (org, run, project, agent) = (s("org"), s("run_id"), s("project"), s("agent"));
+            if org.is_empty() || run.is_empty() {
+                continue;
+            }
+            let keys = Keys::new(org);
+            pipe.cmd("XADD")
+                .arg(keys.events())
+                .arg("MAXLEN")
+                .arg("~")
+                .arg(EVENTS_MAX)
+                .arg("*")
+                .arg("e")
+                .arg(e.to_string())
+                .ignore();
+            pipe.zadd(keys.runs_seen(), run, now).ignore();
+            pipe.zadd(keys.agents_seen(), format!("{project}/{agent}"), now)
+                .ignore();
+            let info = keys.run_info(run);
+            pipe.hset_multiple(
+                &info,
+                &[
+                    ("project", project),
+                    ("agent", agent),
+                    ("model", s("model")),
+                    ("last_decision", s("decision")),
+                ],
+            )
+            .ignore();
+            if let Some(p) = e.get("parent_run_id").and_then(|v| v.as_str()) {
+                pipe.hset(&info, "parent", p).ignore();
+            }
+            pipe.hset(&info, "last_seen", now).ignore();
+            pipe.hset_nx(&info, "first_seen", now).ignore();
+            pipe.hincr(&info, "requests", 1).ignore();
+            if s("decision").starts_with("blocked") {
+                pipe.hincr(&info, "blocked", 1).ignore();
+            }
+            pipe.expire(&info, RUN_TTL_SECS as i64).ignore();
+        }
+        let mut conn = self.conn.clone();
+        let _: () = pipe.query_async(&mut conn).await?;
+        Ok(())
+    }
+
+    /// Drop activity index entries older than the run TTL (their run data has expired).
+    pub async fn trim_activity(&self, org: &str) -> Result<()> {
+        let keys = Keys::new(org);
+        let cutoff = unix_now() - RUN_TTL_SECS as i64;
+        let mut conn = self.conn.clone();
+        let _: () = redis::pipe()
+            .zrembyscore(keys.runs_seen(), "-inf", cutoff)
+            .ignore()
+            .zrembyscore(keys.agents_seen(), "-inf", cutoff)
+            .ignore()
+            .query_async(&mut conn)
+            .await?;
+        Ok(())
+    }
+
+    /// Most recently active runs (newest first) with their last-activity time.
+    pub async fn recent_runs(&self, org: &str, limit: usize) -> Result<Vec<(String, i64)>> {
+        let mut conn = self.conn.clone();
+        Ok(conn
+            .zrevrange_withscores(Keys::new(org).runs_seen(), 0, limit as isize - 1)
+            .await?)
+    }
+
+    /// For each run: info hash, run budget hash, state, parent.
+    pub async fn run_details(&self, org: &str, runs: &[String]) -> Result<Vec<RunDetail>> {
+        if runs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let keys = Keys::new(org);
+        let mut pipe = redis::pipe();
+        for r in runs {
+            pipe.hgetall(keys.run_info(r))
+                .hgetall(keys.run_budget(r))
+                .get(keys.run_state(r))
+                .get(keys.run_parent(r));
+        }
+        let mut conn = self.conn.clone();
+        let flat: Vec<redis::Value> = pipe.query_async(&mut conn).await?;
+        let mut out = Vec::with_capacity(runs.len());
+        for chunk in flat.chunks(4) {
+            out.push(RunDetail {
+                info: redis::from_redis_value(&chunk[0])?,
+                budget: redis::from_redis_value(&chunk[1])?,
+                state: redis::from_redis_value(&chunk[2])?,
+                parent: redis::from_redis_value(&chunk[3])?,
+            });
+        }
+        Ok(out)
+    }
+
+    pub async fn recent_agents(&self, org: &str, limit: usize) -> Result<Vec<(String, i64)>> {
+        let mut conn = self.conn.clone();
+        Ok(conn
+            .zrevrange_withscores(Keys::new(org).agents_seen(), 0, limit as isize - 1)
+            .await?)
+    }
+
+    /// Newest request events first.
+    pub async fn recent_events(&self, org: &str, limit: usize) -> Result<Vec<serde_json::Value>> {
+        let mut conn = self.conn.clone();
+        let reply: redis::streams::StreamRangeReply = redis::cmd("XREVRANGE")
+            .arg(Keys::new(org).events())
+            .arg("+")
+            .arg("-")
+            .arg("COUNT")
+            .arg(limit)
+            .query_async(&mut conn)
+            .await?;
+        Ok(reply
+            .ids
+            .iter()
+            .filter_map(|id| id.get::<String>("e"))
+            .filter_map(|e| serde_json::from_str(&e).ok())
+            .collect())
+    }
 }
+
+pub struct RunDetail {
+    pub info: HashMap<String, String>,
+    pub budget: HashMap<String, String>,
+    pub state: Option<String>,
+    pub parent: Option<String>,
+}
+
+const CONTROL_ORGS: &str = "tl:control:orgs";
+const CONTROL_VERSION: &str = "tl:control:version";
+const EVENTS_MAX: usize = 5000;
+
+// KEYS: doc, version; ARGV: expected version, new doc. Returns the new version or -1.
+const CONTROL_CAS_LUA: &str = r#"
+local v = tonumber(redis.call('GET', KEYS[2]) or '0')
+if v ~= tonumber(ARGV[1]) then return -1 end
+redis.call('SET', KEYS[1], ARGV[2])
+return redis.call('INCR', KEYS[2])
+"#;

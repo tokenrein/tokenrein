@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
-use tokenlens_proxy::{admin, build_state, config, proxy, spawn_sweeper};
+use tokenlens_proxy::{admin, build_state, config, control, proxy, spawn_sweeper};
 use tracing_subscriber::EnvFilter;
 
 const USAGE: &str = "usage:
@@ -58,6 +58,10 @@ async fn main() -> Result<()> {
     }
 
     let state = build_state(rt).await?;
+    control::init(&state)
+        .await
+        .context("loading managed orgs, keys and budgets from Redis")?;
+    control::spawn_sync(state.clone());
     spawn_sweeper(state.clone());
 
     let proxy_listener = tokio::net::TcpListener::bind(listen)
@@ -66,7 +70,7 @@ async fn main() -> Result<()> {
     let admin_listener = tokio::net::TcpListener::bind(admin_listen)
         .await
         .with_context(|| format!("binding {admin_listen}"))?;
-    tracing::info!(%listen, %admin_listen, config = %path, "tokenlens proxy started");
+    tracing::info!(%listen, %admin_listen, config = %path, dashboard = %format!("http://{admin_listen}/"), "tokenlens proxy started");
 
     let proxy_server = axum::serve(proxy_listener, proxy::router(state.clone()))
         .with_graceful_shutdown(shutdown_signal());

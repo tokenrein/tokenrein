@@ -1,0 +1,725 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TokenLens Dashboard</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f1f3f6; --text: #14171c; --muted: #5d6673;
+  --line: #e2e6ec; --accent: #2f5bea; --accent-ink: #ffffff; --ok: #1f8a4c; --warn: #b76e00;
+  --bad: #c62f2f; --ok-bg: #e5f5ec; --warn-bg: #fff3dc; --bad-bg: #fde8e8; --info-bg: #e8eefe;
+  --meter: #dfe4ec; --shadow: 0 1px 2px rgba(16, 24, 40, .06);
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1216; --panel: #171b21; --panel-2: #1e232b; --text: #e7eaee; --muted: #9aa4b2;
+    --line: #2a313b; --accent: #6d8dff; --accent-ink: #0f1216; --ok: #4cc98a; --warn: #f0b04a;
+    --bad: #ff7676; --ok-bg: #16301f; --warn-bg: #33270f; --bad-bg: #3a1717; --info-bg: #1b2547;
+    --meter: #2a313b; --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+button, input, select { font: inherit; color: inherit; }
+a { color: var(--accent); }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.muted { color: var(--muted); }
+.wrap { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
+
+header.top { background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+header.top .wrap { display: flex; align-items: center; gap: 16px; height: 56px; }
+.brand { font-weight: 700; letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; }
+.brand .dot { width: 10px; height: 10px; border-radius: 3px; background: var(--accent); }
+.spacer { flex: 1; }
+nav.tabs { display: flex; gap: 2px; overflow-x: auto; }
+nav.tabs button {
+  background: none; border: 0; padding: 8px 12px; border-radius: 8px; cursor: pointer; color: var(--muted); white-space: nowrap;
+}
+nav.tabs button[aria-selected="true"] { background: var(--panel-2); color: var(--text); font-weight: 600; }
+.status { font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+main { padding: 20px 0 48px; }
+h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -.01em; }
+h2 { font-size: 15px; margin: 0; }
+.sub { color: var(--muted); margin: 0 0 16px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+.card + .card { margin-top: 16px; }
+.card-h { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.card-b { padding: 16px; }
+.grid { display: grid; gap: 16px; }
+.kpis { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 16px; }
+.kpi { padding: 14px 16px; }
+.kpi .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.kpi .value { font-size: 24px; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.kpi .hint { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; background: var(--panel-2); }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.table-wrap { overflow-x: auto; }
+table.wide { min-width: 960px; }
+.nowrap { white-space: nowrap; }
+.empty { padding: 28px 16px; text-align: center; color: var(--muted); }
+
+.badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.b-ok { background: var(--ok-bg); color: var(--ok); }
+.b-warn { background: var(--warn-bg); color: var(--warn); }
+.b-bad { background: var(--bad-bg); color: var(--bad); }
+.b-info { background: var(--info-bg); color: var(--accent); }
+.b-muted { background: var(--panel-2); color: var(--muted); }
+
+.meter { display: flex; align-items: center; gap: 8px; min-width: 180px; }
+.meter .bar { flex: 1; height: 6px; background: var(--meter); border-radius: 999px; overflow: hidden; min-width: 60px; }
+.meter .fill { display: block; height: 100%; background: var(--ok); border-radius: 999px; }
+.meter .fill.warn { background: var(--warn); }
+.meter .fill.bad { background: var(--bad); }
+.meter .txt { font-variant-numeric: tabular-nums; font-size: 12.5px; white-space: nowrap; }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--panel); cursor: pointer; white-space: nowrap;
+}
+.btn:hover { background: var(--panel-2); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.btn.danger { color: var(--bad); }
+.btn.sm { padding: 3px 9px; font-size: 12.5px; }
+.btn:disabled, select:disabled { opacity: .5; cursor: default; }
+.row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+input[type=text], input[type=password], input[type=number], input[type=search], select {
+  border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 6px 10px; min-width: 0;
+}
+input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+label.field { display: grid; gap: 4px; font-size: 12.5px; color: var(--muted); }
+.inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+.budgets { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.budget { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel-2); }
+.budget .t { font-weight: 600; font-size: 13px; }
+.budget .d { color: var(--muted); font-size: 12px; margin: 2px 0 8px; }
+.budget .inline input { width: 110px; }
+.inherit { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.help { color: var(--muted); font-size: 12.5px; margin: 0 0 12px; }
+
+.tree-indent { display: inline-block; width: 16px; color: var(--muted); }
+.login { max-width: 420px; margin: 12vh auto; padding: 24px; }
+.login h1 { margin-bottom: 8px; }
+.login form { display: grid; gap: 12px; margin-top: 16px; }
+.err { color: var(--bad); font-size: 13px; min-height: 18px; }
+.toast {
+  position: fixed; right: 16px; bottom: 16px; padding: 10px 14px; border-radius: 10px; background: var(--text); color: var(--bg);
+  box-shadow: 0 6px 20px rgba(0,0,0,.2); max-width: min(420px, calc(100vw - 32px)); z-index: 20;
+}
+.toast.bad { background: var(--bad); color: #fff; }
+dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--text); padding: 0; width: min(560px, calc(100vw - 32px)); max-width: none; }
+dialog .card-b > * { min-width: 0; }
+dialog::backdrop { background: rgba(10, 14, 20, .45); }
+dialog .card-b { display: grid; gap: 12px; }
+.keybox { font-family: var(--mono); background: var(--panel-2); border: 1px dashed var(--line); padding: 10px 12px; border-radius: 8px; word-break: break-all; }
+.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-left: auto; }
+.hide { display: none !important; }
+@media (max-width: 640px) {
+  header.top .wrap { height: auto; flex-wrap: wrap; padding-top: 8px; padding-bottom: 8px; gap: 8px; }
+  nav.tabs { order: 3; width: 100%; }
+  .kpi .value { font-size: 20px; }
+}
+</style>
+</head>
+<body>
+
+<section id="login" class="card login hide" aria-labelledby="login-title">
+  <div class="brand"><span class="dot"></span>TokenLens</div>
+  <h1 id="login-title">Sign in to the dashboard</h1>
+  <p class="sub">Enter the proxy's admin token (the value of <span class="mono">TL_ADMIN_TOKEN</span>). It stays in this browser tab only.</p>
+  <form id="login-form">
+    <label class="field">Admin token
+      <input id="token" type="password" autocomplete="current-password" required>
+    </label>
+    <div class="err" id="login-err" role="alert"></div>
+    <button class="btn primary" type="submit">Sign in</button>
+  </form>
+</section>
+
+<div id="app" class="hide">
+  <header class="top">
+    <div class="wrap">
+      <div class="brand"><span class="dot"></span>TokenLens</div>
+      <nav class="tabs" role="tablist" aria-label="Sections">
+        <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
+        <button role="tab" data-tab="runs">Runs</button>
+        <button role="tab" data-tab="agents">Agents</button>
+        <button role="tab" data-tab="activity">Activity</button>
+        <button role="tab" data-tab="settings">Keys &amp; limits</button>
+      </nav>
+      <div class="spacer"></div>
+      <label class="inline status">Org
+        <select id="org" aria-label="Organisation"></select>
+      </label>
+      <span class="status" id="updated"></span>
+      <button class="btn sm" id="signout" type="button">Sign out</button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section data-view="overview">
+      <h1>Overview</h1>
+      <p class="sub" id="ov-sub"></p>
+      <div class="grid kpis" id="kpis"></div>
+      <div class="card">
+        <div class="card-h"><h2>Projects this month</h2></div>
+        <div class="table-wrap"><table id="projects-table"></table></div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h2>Most recent runs</h2><button class="btn sm" data-goto="runs" style="margin-left:auto">All runs</button></div>
+        <div class="table-wrap"><table id="ov-runs" class="wide"></table></div>
+      </div>
+    </section>
+
+    <section data-view="runs" class="hide">
+      <h1>Runs</h1>
+      <p class="sub">Every agent run seen in the last 7 days. Sub-agent runs are nested under their parent, and their spend also counts against it.</p>
+      <div class="card">
+        <div class="card-h">
+          <input type="search" id="run-filter" placeholder="Filter by run, project or agent" aria-label="Filter runs" style="min-width:240px">
+          <label class="inline status"><input type="checkbox" id="run-flat"> Flat list</label>
+          <div class="toolbar"><label class="inline status"><input type="checkbox" id="autorefresh" checked> Auto-refresh</label></div>
+        </div>
+        <div class="table-wrap"><table id="runs-table" class="wide"></table></div>
+      </div>
+    </section>
+
+    <section data-view="agents" class="hide">
+      <h1>Agents</h1>
+      <p class="sub" id="agents-sub">Spend per agent today, against the agent daily budget.</p>
+      <div class="card"><div class="table-wrap"><table id="agents-table"></table></div></div>
+    </section>
+
+    <section data-view="activity" class="hide">
+      <h1>Activity</h1>
+      <p class="sub">The latest requests through the proxy, newest first.</p>
+      <div class="card">
+        <div class="card-h">
+          <select id="ev-filter" aria-label="Filter by decision">
+            <option value="">All decisions</option>
+            <option value="allowed">Allowed</option>
+            <option value="blocked">Blocked</option>
+            <option value="error">Errors</option>
+          </select>
+        </div>
+        <div class="table-wrap"><table id="events-table" class="wide"></table></div>
+      </div>
+    </section>
+
+    <section data-view="settings" class="hide">
+      <h1>Keys &amp; limits</h1>
+      <p class="sub">Changes apply to every proxy instance within a few seconds; no restart needed. Provider API keys (OpenAI, Anthropic) stay in the proxy's environment and are never shown here.</p>
+      <div id="settings"></div>
+    </section>
+  </main>
+</div>
+
+<dialog id="key-dialog" aria-labelledby="key-dialog-title">
+  <div class="card-h"><h2 id="key-dialog-title">New virtual key</h2></div>
+  <div class="card-b">
+    <p class="help" style="margin:0">Copy it now. Only its hash is stored, so it cannot be shown again.</p>
+    <div class="keybox" id="key-value"></div>
+    <div class="help mono" id="key-usage" style="margin:0;word-break:break-all"></div>
+    <div class="inline" style="justify-content:flex-end">
+      <button class="btn" id="key-copy" type="button">Copy key</button>
+      <button class="btn primary" id="key-close" type="button">Done</button>
+    </div>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+const TOKEN_KEY = "tokenlens.admin_token";
+const ORG_KEY = "tokenlens.org";
+const TAB_KEY = "tokenlens.tab";
+const MODES = { enforce: "Enforce: block the call", check: "Check: allow and warn", skip: "Skip: track spend only" };
+const POLICIES = [
+  ["org_monthly", "Org per month", "All spend in this org, per calendar month (UTC)."],
+  ["project_monthly", "Project per month", "Each project, per calendar month (UTC)."],
+  ["agent_daily", "Agent per day", "Each agent name within a project, per day (UTC)."],
+  ["run", "Run (default)", "Each run, unless the caller sends x-tl-run-budget-usd. Fixed when a run starts."],
+];
+
+const S = { token: null, org: null, overview: null, runs: [], agents: [], events: [], tab: "overview", timer: null, editing: false };
+
+function store(kind, key, value) {
+  try {
+    const s = kind === "session" ? sessionStorage : localStorage;
+    if (value === undefined) return s.getItem(key);
+    if (value === null) s.removeItem(key); else s.setItem(key, value);
+  } catch (_) { return null; }
+}
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+function esc(v) {
+  return String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function usd(micros) {
+  if (micros == null) return "–";
+  const v = micros / 1e6;
+  if (v === 0) return "$0";
+  if (Math.abs(v) < 0.01) return "$" + v.toFixed(4);
+  if (Math.abs(v) < 100) return "$" + v.toFixed(2);
+  return "$" + v.toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
+function ago(ts) {
+  if (!ts) return "–";
+  const s = Math.max(0, Math.round(Date.now() / 1000 - ts));
+  if (s < 60) return s + "s ago";
+  if (s < 3600) return Math.round(s / 60) + "m ago";
+  if (s < 86400) return Math.round(s / 3600) + "h ago";
+  return Math.round(s / 86400) + "d ago";
+}
+function when(iso) {
+  if (!iso) return "–";
+  const d = new Date(iso);
+  return isNaN(d) ? esc(iso) : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+function meter(b) {
+  if (!b) return '<span class="muted">–</span>';
+  const spent = (b.spent_micros || 0) + (b.reserved_micros || 0);
+  const limit = b.limit_micros;
+  if (limit == null || b.mode === "skip") {
+    return `<span class="meter"><span class="txt">${usd(b.spent_micros)}</span><span class="muted" style="font-size:12px">no limit</span></span>`;
+  }
+  const pct = limit > 0 ? Math.min(100, (spent / limit) * 100) : 100;
+  const cls = pct >= 100 ? "bad" : pct >= 80 ? "warn" : "";
+  const inflight = b.reserved_micros ? ` <span class="muted">(+${usd(b.reserved_micros)} in flight)</span>` : "";
+  return `<span class="meter" title="${esc(b.mode)} mode"><span class="bar"><span class="fill ${cls}" style="width:${pct.toFixed(1)}%"></span></span><span class="txt">${usd(b.spent_micros)} / ${usd(limit)}${inflight}</span></span>`;
+}
+function stateBadge(state) {
+  const cls = { running: "b-ok", paused: "b-warn", killed: "b-bad" }[state] || "b-muted";
+  return `<span class="badge ${cls}">${esc(state)}</span>`;
+}
+function decisionBadge(d) {
+  if (!d) return "";
+  const cls = d.startsWith("allowed") ? "b-ok" : d.startsWith("blocked") ? "b-bad" : "b-warn";
+  return `<span class="badge ${cls}">${esc(d.replace(/_/g, " "))}</span>`;
+}
+function modeBadge(m) {
+  const cls = { enforce: "b-bad", check: "b-warn", skip: "b-muted" }[m] || "b-muted";
+  return m ? `<span class="badge ${cls}">${esc(m)}</span>` : "";
+}
+function toast(msg, bad = false) {
+  const t = document.createElement("div");
+  t.className = "toast" + (bad ? " bad" : "");
+  t.setAttribute("role", "status");
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), bad ? 6000 : 2500);
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    method: opts.method || "GET",
+    headers: { Authorization: "Bearer " + S.token, ...(opts.body ? { "Content-Type": "application/json" } : {}) },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  if (res.status === 401) { signOut("That admin token was not accepted."); throw new Error("unauthorized"); }
+  if (res.status === 204) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+// --- auth ---
+function signOut(message) {
+  S.token = null;
+  store("session", TOKEN_KEY, null);
+  clearInterval(S.timer);
+  $("#app").classList.add("hide");
+  $("#login").classList.remove("hide");
+  $("#login-err").textContent = message || "";
+  $("#token").value = "";
+  $("#token").focus();
+}
+$("#login-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  S.token = $("#token").value.trim();
+  $("#login-err").textContent = "";
+  try {
+    await api("/admin/overview");
+    store("session", TOKEN_KEY, S.token);
+    start();
+  } catch (err) {
+    if (err.message !== "unauthorized") $("#login-err").textContent = err.message;
+  }
+});
+$("#signout").addEventListener("click", () => signOut());
+
+// --- navigation ---
+function showTab(tab) {
+  S.tab = tab;
+  store("local", TAB_KEY, tab);
+  $$("nav.tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
+  $$("[data-view]").forEach(v => v.classList.toggle("hide", v.dataset.view !== tab));
+  render();
+}
+$$("nav.tabs button").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
+document.addEventListener("click", e => {
+  const g = e.target.closest("[data-goto]");
+  if (g) showTab(g.dataset.goto);
+});
+$("#org").addEventListener("change", () => { S.org = $("#org").value; store("local", ORG_KEY, S.org); refresh(); });
+["#run-filter", "#run-flat", "#ev-filter"].forEach(sel => $(sel).addEventListener("input", render));
+
+// --- data ---
+async function refresh() {
+  try {
+    S.overview = await api("/admin/overview");
+    const orgs = S.overview.orgs.map(o => o.id);
+    if (!orgs.includes(S.org)) S.org = orgs[0] || null;
+    const sel = $("#org");
+    sel.innerHTML = orgs.map(id => `<option ${id === S.org ? "selected" : ""}>${esc(id)}</option>`).join("");
+    if (S.org) {
+      const o = encodeURIComponent(S.org);
+      const [runs, agents, events] = await Promise.all([
+        api(`/admin/orgs/${o}/runs?limit=300`),
+        api(`/admin/orgs/${o}/agents?limit=200`),
+        api(`/admin/orgs/${o}/events?limit=200`),
+      ]);
+      S.runs = runs.runs; S.agents = agents.agents; S.events = events.events;
+    } else {
+      S.runs = []; S.agents = []; S.events = [];
+    }
+    $("#updated").textContent = "Updated " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    render();
+  } catch (err) {
+    if (err.message !== "unauthorized") $("#updated").textContent = "Update failed: " + err.message;
+  }
+}
+function currentOrg() { return S.overview?.orgs.find(o => o.id === S.org); }
+
+// --- rendering ---
+function render() {
+  if (!S.overview) return;
+  if (S.tab === "overview") renderOverview();
+  if (S.tab === "runs") renderRuns();
+  if (S.tab === "agents") renderAgents();
+  if (S.tab === "activity") renderEvents();
+  if (S.tab === "settings" && !S.editing) renderSettings();
+}
+
+function renderOverview() {
+  const org = currentOrg();
+  if (!org) { $("#kpis").innerHTML = ""; $("#projects-table").innerHTML = `<tr><td class="empty">No orgs yet. Create one under Keys &amp; limits.</td></tr>`; return; }
+  const m = S.overview.month;
+  $("#ov-sub").textContent = `Org ${org.id} · ${m.slice(0, 4)}-${m.slice(4)} (UTC) · ${S.overview.managed ? "managed from this dashboard" : "read from the config file"}`;
+  const om = org.spend.org_monthly;
+  const hour = Date.now() / 1000 - 3600;
+  const activeRuns = S.runs.filter(r => r.last_seen >= hour).length;
+  const recent = S.events.length;
+  const blocked = S.events.filter(e => (e.decision || "").startsWith("blocked")).length;
+  const spentToday = S.agents.reduce((a, x) => a + (x.today?.spent_micros || 0), 0);
+  $("#kpis").innerHTML = [
+    kpi("Spend this month", usd(om?.spent_micros || 0), om?.limit_micros != null && om?.mode !== "skip" ? `of ${usd(om.limit_micros)} (${esc(om.mode)})` : "no org limit"),
+    kpi("Spend today", usd(spentToday), "across all agents"),
+    kpi("Active runs", String(activeRuns), "seen in the last hour"),
+    kpi("Blocked requests", String(blocked), `of the last ${recent} requests`),
+  ].join("");
+  const rows = org.projects.map(p => `
+    <tr><td><b>${esc(p.id)}</b></td><td>${meter(p.spend.project_monthly)}</td>
+    <td>${modeBadge(p.effective.project_monthly?.mode)}</td>
+    <td class="num">${p.keys.length}</td></tr>`).join("");
+  $("#projects-table").innerHTML = org.projects.length
+    ? `<thead><tr><th>Project</th><th>Spend / monthly limit</th><th>Mode</th><th class="num">Keys</th></tr></thead><tbody>${rows}</tbody>`
+    : `<tr><td class="empty">No projects. Create one under Keys &amp; limits.</td></tr>`;
+  $("#ov-runs").innerHTML = runTable(S.runs.slice(0, 8), true);
+}
+function kpi(label, value, hint) {
+  return `<div class="card kpi"><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="hint">${hint}</div></div>`;
+}
+
+function runTable(runs, flat) {
+  if (!runs.length) return `<tr><td class="empty">No runs yet. Requests through the proxy show up here within a second.</td></tr>`;
+  let ordered = runs.map(r => [r, 0]);
+  if (!flat) {
+    const byId = new Map(runs.map(r => [r.run_id, r]));
+    const kids = new Map();
+    const roots = [];
+    for (const r of runs) {
+      if (r.parent_run_id && byId.has(r.parent_run_id) && r.parent_run_id !== r.run_id) {
+        if (!kids.has(r.parent_run_id)) kids.set(r.parent_run_id, []);
+        kids.get(r.parent_run_id).push(r);
+      } else roots.push(r);
+    }
+    ordered = [];
+    const seen = new Set();
+    const walk = (r, depth) => {
+      if (seen.has(r.run_id) || depth > 16) return;
+      seen.add(r.run_id);
+      ordered.push([r, depth]);
+      for (const k of kids.get(r.run_id) || []) walk(k, depth + 1);
+    };
+    roots.forEach(r => walk(r, 0));
+  }
+  const rows = ordered.map(([r, depth]) => {
+    const indent = depth ? `<span class="tree-indent" style="width:${depth * 16}px">↳</span>` : "";
+    const actions = r.state === "killed" ? '<span class="muted">–</span>' : `
+      ${r.state === "paused"
+        ? `<button class="btn sm" data-run-action="resume" data-run="${esc(r.run_id)}">Resume</button>`
+        : `<button class="btn sm" data-run-action="pause" data-run="${esc(r.run_id)}">Pause</button>`}
+      <button class="btn sm danger" data-run-action="kill" data-run="${esc(r.run_id)}">Kill</button>`;
+    return `<tr>
+      <td>${indent}<span class="mono">${esc(r.run_id)}</span>${r.parent_run_id && flat ? `<div class="muted" style="font-size:12px">parent <span class="mono">${esc(r.parent_run_id)}</span></div>` : ""}</td>
+      <td>${stateBadge(r.state)}</td>
+      <td class="nowrap">${esc(r.project || "–")} / ${esc(r.agent || "–")}<div class="muted mono">${esc(r.model || "")}</div></td>
+      <td class="num">${r.requests}${r.blocked ? ` <span class="badge b-bad">${r.blocked} blocked</span>` : ""}</td>
+      <td>${meter(r.budget)}</td>
+      <td class="muted nowrap">${ago(r.last_seen)}</td>
+      <td><div class="row-actions">${actions}</div></td></tr>`;
+  }).join("");
+  return `<thead><tr><th>Run</th><th>State</th><th>Project / agent</th><th class="num">Requests</th><th>Spend / run limit</th><th>Last seen</th><th class="num">Actions</th></tr></thead><tbody>${rows}</tbody>`;
+}
+function renderRuns() {
+  const q = $("#run-filter").value.trim().toLowerCase();
+  const runs = q ? S.runs.filter(r => [r.run_id, r.project, r.agent, r.parent_run_id].some(v => (v || "").toLowerCase().includes(q))) : S.runs;
+  $("#runs-table").innerHTML = runTable(runs, $("#run-flat").checked || !!q);
+}
+document.addEventListener("click", async e => {
+  const b = e.target.closest("[data-run-action]");
+  if (!b) return;
+  const { runAction: action, run } = b.dataset;
+  if (action === "kill" && !confirm(`Kill run ${run}? It and its sub-agent runs are blocked permanently.`)) return;
+  b.disabled = true;
+  try {
+    await api(`/admin/orgs/${encodeURIComponent(S.org)}/runs/${encodeURIComponent(run)}/${action}`, { method: "POST" });
+    toast(`Run ${run}: ${action === "resume" ? "resumed" : action === "pause" ? "paused" : "killed"}`);
+    await refresh();
+  } catch (err) { toast(err.message, true); b.disabled = false; }
+});
+
+function renderAgents() {
+  const org = currentOrg();
+  $("#agents-sub").textContent = `Spend per agent today (${S.overview.day.slice(0, 4)}-${S.overview.day.slice(4, 6)}-${S.overview.day.slice(6)} UTC), against the agent daily budget.`;
+  const rows = S.agents.map(a => `<tr>
+    <td>${esc(a.project)}</td><td><b>${esc(a.agent)}</b></td>
+    <td>${meter(a.today)}</td><td>${modeBadge(a.today?.mode)}</td>
+    <td class="muted">${ago(a.last_seen)}</td></tr>`).join("");
+  $("#agents-table").innerHTML = S.agents.length
+    ? `<thead><tr><th>Project</th><th>Agent</th><th>Spend today / daily limit</th><th>Mode</th><th>Last seen</th></tr></thead><tbody>${rows}</tbody>`
+    : `<tr><td class="empty">No agents seen yet${org ? "" : " (no org selected)"}.</td></tr>`;
+}
+
+function renderEvents() {
+  const f = $("#ev-filter").value;
+  const events = S.events.filter(e => {
+    const d = e.decision || "";
+    if (f === "allowed") return d.startsWith("allowed");
+    if (f === "blocked") return d.startsWith("blocked");
+    if (f === "error") return !d.startsWith("allowed") && !d.startsWith("blocked");
+    return true;
+  });
+  const tokens = u => u ? `${(u.input || 0).toLocaleString()} in · ${(u.output || 0).toLocaleString()} out` : "–";
+  const rows = events.map(e => `<tr>
+    <td class="muted nowrap">${when(e.ts)}</td>
+    <td>${decisionBadge(e.decision)}${e.blocked_scope ? `<div class="muted mono">${esc(e.blocked_scope)}</div>` : ""}${(e.check_exceeded || []).length ? `<div><span class="badge b-warn">over: ${esc(e.check_exceeded.join(", "))}</span></div>` : ""}</td>
+    <td class="mono">${esc(e.run_id)}${e.parent_run_id ? `<div class="muted">↳ ${esc(e.parent_run_id)}</div>` : ""}</td>
+    <td class="nowrap">${esc(e.project)} / ${esc(e.agent)}</td>
+    <td class="mono nowrap">${esc(e.provider)}<div class="muted">${esc(e.model)}</div></td>
+    <td class="num">${usd(e.estimate_micros)}</td>
+    <td class="num">${e.decision?.startsWith("allowed") ? usd(e.actual_micros) : "–"}</td>
+    <td class="muted nowrap">${tokens(e.usage)}</td>
+    <td class="num muted">${e.upstream_ms ? e.upstream_ms + " ms" : "–"}</td></tr>`).join("");
+  $("#events-table").innerHTML = events.length
+    ? `<thead><tr><th>Time</th><th>Decision</th><th>Run</th><th>Project / agent</th><th>Model</th><th class="num">Reserved</th><th class="num">Cost</th><th>Tokens</th><th class="num">Upstream</th></tr></thead><tbody>${rows}</tbody>`
+    : `<tr><td class="empty">No requests yet.</td></tr>`;
+}
+
+// --- settings: orgs, projects, keys, budgets ---
+function budgetEditor(scope, budgets, inherited, policies) {
+  const cells = policies.map(([key, title, desc]) => {
+    const p = budgets?.[key];
+    const inh = inherited?.[key];
+    const inhText = inherited
+      ? (inh ? `Inherits ${usd(inh.limit_usd * 1e6)} · ${inh.mode} from the org` : "Inherits: no limit")
+      : "";
+    return `<div class="budget" data-policy="${key}">
+      <div class="t">${esc(title)}</div><div class="d">${esc(desc)}</div>
+      <div class="inline">
+        <input type="number" min="0" step="any" placeholder="${inherited ? "inherit" : "no limit"}" aria-label="${esc(title)} limit in USD" data-f="limit" value="${p ? esc(p.limit_usd) : ""}">
+        <select data-f="mode" aria-label="${esc(title)} mode" ${p ? "" : "disabled"}>${Object.entries(MODES).map(([m, label]) => `<option value="${m}" ${(p?.mode || "check") === m ? "selected" : ""}>${esc(label.split(":")[0])}</option>`).join("")}</select>
+      </div>
+      ${inhText ? `<div class="inherit">${inhText}</div>` : ""}
+    </div>`;
+  }).join("");
+  const max = budgets?.max_run_usd;
+  const inhMax = inherited ? (inherited.max_run_usd ? `Inherits ${usd(inherited.max_run_usd * 1e6)}` : "Inherits: none") : "";
+  return `<div class="budgets" data-scope="${esc(scope)}">${cells}
+    <div class="budget" data-policy="max_run_usd">
+      <div class="t">Max run budget</div><div class="d">Caps any x-tl-run-budget-usd a caller asks for.</div>
+      <div class="inline"><input type="number" min="0" step="any" placeholder="${inherited ? "inherit" : "none"}" aria-label="Max run budget in USD" data-f="max" value="${max ?? ""}"></div>
+      ${inhMax ? `<div class="inherit">${inhMax}</div>` : ""}
+    </div></div>`;
+}
+function readBudgets(root) {
+  const out = {};
+  for (const el of $$(".budget[data-policy]", root)) {
+    const key = el.dataset.policy;
+    if (key === "max_run_usd") {
+      const v = $("[data-f=max]", el).value.trim();
+      if (v !== "") out.max_run_usd = Number(v);
+      continue;
+    }
+    const v = $("[data-f=limit]", el).value.trim();
+    if (v !== "") out[key] = { limit_usd: Number(v), mode: $("[data-f=mode]", el).value };
+  }
+  return out;
+}
+
+function renderSettings() {
+  const org = currentOrg();
+  const modeHelp = `<p class="help">Modes: <b>enforce</b> blocks a call that would go over (HTTP 402) · <b>check</b> lets it through and adds an <span class="mono">x-tl-warning</span> header · <b>skip</b> only tracks spend. Leave a limit blank for no limit${org ? " (or to inherit, for projects)" : ""}.</p>`;
+  let html = "";
+  if (org) {
+    html += `<div class="card" data-org-card>
+      <div class="card-h"><h2>Org <span class="mono">${esc(org.id)}</span> defaults</h2>
+        <div class="toolbar">
+          <label class="inline status">If Redis is down
+            <select data-f="fail_mode"><option value="open" ${org.fail_mode === "open" ? "selected" : ""}>Keep serving (fail open)</option><option value="closed" ${org.fail_mode === "closed" ? "selected" : ""}>Refuse calls (fail closed)</option></select>
+          </label>
+          <button class="btn primary sm" data-save-org>Save org limits</button>
+        </div></div>
+      <div class="card-b">${modeHelp}${budgetEditor("org", org.budgets, null, POLICIES)}</div></div>`;
+    for (const p of org.projects) {
+      const keys = p.keys.map(k => `<tr>
+        <td>${esc(k.name)}${k.source === "config" ? ' <span class="badge b-muted">config file</span>' : ""}</td>
+        <td class="mono">${k.prefix ? esc(k.prefix) + "…" : `hash ${esc(k.id)}…`}</td>
+        <td class="muted">${k.created_at ? new Date(k.created_at).toLocaleString() : "–"}</td>
+        <td><div class="row-actions"><button class="btn sm danger" data-revoke="${esc(k.id)}" data-project="${esc(p.id)}" data-name="${esc(k.name)}">Revoke</button></div></td></tr>`).join("");
+      html += `<div class="card" data-project-card="${esc(p.id)}">
+        <div class="card-h"><h2>Project <span class="mono">${esc(p.id)}</span></h2>
+          <span class="muted">${meter(p.spend.project_monthly)}</span>
+          <div class="toolbar"><button class="btn sm danger" data-delete-project="${esc(p.id)}">Delete project</button></div></div>
+        <div class="card-b">
+          <h2 style="margin-bottom:8px">Virtual keys</h2>
+          <p class="help">Give a key to an agent instead of your real OpenAI or Anthropic key. Calls made with it are counted against this project.</p>
+          <div class="table-wrap" style="border:1px solid var(--line);border-radius:10px;margin-bottom:10px">
+            <table>${p.keys.length ? `<thead><tr><th>Name</th><th>Key</th><th>Created</th><th></th></tr></thead><tbody>${keys}</tbody>` : `<tr><td class="empty">No keys yet: agents can't use this project.</td></tr>`}</table>
+          </div>
+          <form class="inline" data-new-key="${esc(p.id)}">
+            <input type="text" required maxlength="100" placeholder="Key name, e.g. support-bot prod" aria-label="New key name" style="min-width:240px">
+            <button class="btn" type="submit">Create key</button>
+          </form>
+          <h2 style="margin:20px 0 8px">Limits for this project</h2>
+          ${budgetEditor("project", p.budgets, org.budgets, POLICIES.slice(1))}
+          <div class="inline" style="justify-content:flex-end;margin-top:12px"><button class="btn primary sm" data-save-project="${esc(p.id)}">Save project limits</button></div>
+        </div></div>`;
+    }
+    html += `<div class="card"><div class="card-h"><h2>New project in ${esc(org.id)}</h2></div>
+      <div class="card-b"><form class="inline" data-new-project>
+        <input type="text" required pattern="[A-Za-z0-9._\\-]{1,128}" placeholder="project id, e.g. research-agent" aria-label="New project id" style="min-width:240px">
+        <button class="btn" type="submit">Create project</button></form></div></div>`;
+  }
+  html += `<div class="card"><div class="card-h"><h2>New org</h2></div>
+    <div class="card-b"><p class="help">An org has its own monthly budget and projects. It uses the proxy's provider keys.</p><form class="inline" data-new-org>
+      <input type="text" required pattern="[A-Za-z0-9._\\-]{1,128}" placeholder="org id, e.g. acme" aria-label="New org id" style="min-width:240px">
+      <button class="btn" type="submit">Create org</button></form></div></div>`;
+  if (org) {
+    html += `<div class="card"><div class="card-h"><h2>Danger zone</h2>
+      <div class="toolbar"><button class="btn sm danger" data-delete-org>Delete org ${esc(org.id)}</button></div></div>
+      <div class="card-b"><p class="help" style="margin:0">Deleting an org or project revokes all of its keys at once. Recorded spend stays in Redis until it expires.</p></div></div>`;
+  }
+  if (!S.overview.managed) {
+    html = `<div class="card"><div class="card-b"><b>Read-only.</b> This proxy has not loaded the managed config, so edits are disabled.</div></div>` + html;
+  }
+  $("#settings").innerHTML = html;
+}
+// A mode only means something once a limit is set.
+$("#settings").addEventListener("input", e => {
+  if (e.target.matches("[data-f=limit]")) {
+    $("[data-f=mode]", e.target.closest(".budget")).disabled = e.target.value.trim() === "";
+  }
+});
+// Don't re-render the forms under someone who is typing.
+$("#settings").addEventListener("focusin", () => { S.editing = true; });
+$("#settings").addEventListener("focusout", () => { setTimeout(() => { S.editing = $("#settings").contains(document.activeElement); }, 0); });
+
+async function mutate(fn, ok) {
+  try { const r = await fn(); if (ok) toast(ok); S.editing = false; await refresh(); return r; }
+  catch (err) { if (err.message !== "unauthorized") toast(err.message, true); }
+}
+$("#settings").addEventListener("click", async e => {
+  const org = encodeURIComponent(S.org);
+  const t = e.target;
+  if (t.closest("[data-save-org]")) {
+    const card = t.closest("[data-org-card]");
+    await mutate(() => api(`/admin/orgs/${org}`, { method: "PUT", body: { fail_mode: $("[data-f=fail_mode]", card).value, budgets: readBudgets(card) } }), "Org limits saved");
+  } else if (t.closest("[data-save-project]")) {
+    const id = t.closest("[data-save-project]").dataset.saveProject;
+    const card = t.closest("[data-project-card]");
+    await mutate(() => api(`/admin/orgs/${org}/projects/${encodeURIComponent(id)}`, { method: "PUT", body: { budgets: readBudgets(card) } }), `Limits for ${id} saved`);
+  } else if (t.closest("[data-revoke]")) {
+    const b = t.closest("[data-revoke]");
+    if (!confirm(`Revoke key "${b.dataset.name}"? Agents using it get 401 within a few seconds.`)) return;
+    await mutate(() => api(`/admin/orgs/${org}/projects/${encodeURIComponent(b.dataset.project)}/keys/${encodeURIComponent(b.dataset.revoke)}`, { method: "DELETE" }), "Key revoked");
+  } else if (t.closest("[data-delete-project]")) {
+    const id = t.closest("[data-delete-project]").dataset.deleteProject;
+    if (!confirm(`Delete project ${id} and revoke all its keys?`)) return;
+    await mutate(() => api(`/admin/orgs/${org}/projects/${encodeURIComponent(id)}`, { method: "DELETE" }), `Project ${id} deleted`);
+  } else if (t.closest("[data-delete-org]")) {
+    if (prompt(`Type the org id (${S.org}) to delete it and revoke every key in it.`) !== S.org) return;
+    await mutate(() => api(`/admin/orgs/${org}`, { method: "DELETE" }), `Org ${S.org} deleted`);
+  }
+});
+$("#settings").addEventListener("submit", async e => {
+  e.preventDefault();
+  const f = e.target;
+  const value = $("input", f).value.trim();
+  const org = encodeURIComponent(S.org);
+  if (f.matches("[data-new-key]")) {
+    const project = f.dataset.newKey;
+    const r = await mutate(() => api(`/admin/orgs/${org}/projects/${encodeURIComponent(project)}/keys`, { method: "POST", body: { name: value } }));
+    if (r?.key) showKey(r.key);
+  } else if (f.matches("[data-new-project]")) {
+    await mutate(() => api(`/admin/orgs/${org}/projects`, { method: "POST", body: { id: value } }), `Project ${value} created`);
+  } else if (f.matches("[data-new-org]")) {
+    const r = await mutate(() => api(`/admin/orgs`, { method: "POST", body: { id: value } }), `Org ${value} created`);
+    if (r) { S.org = value; store("local", ORG_KEY, value); await refresh(); }
+  }
+});
+function showKey(key) {
+  $("#key-value").textContent = key;
+  const proxy = `${location.protocol}//${location.hostname}:8787`;
+  $("#key-usage").textContent = `export TOKENLENS_API_KEY=${key}\nexport TOKENLENS_BASE_URL=${proxy}`;
+  $("#key-usage").style.whiteSpace = "pre-wrap";
+  $("#key-dialog").showModal();
+}
+$("#key-copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("#key-value").textContent); toast("Key copied"); }
+  catch (_) { toast("Copy failed: select the key and copy it manually", true); }
+});
+$("#key-close").addEventListener("click", () => { $("#key-value").textContent = ""; $("#key-dialog").close(); });
+
+// --- start ---
+function start() {
+  $("#login").classList.add("hide");
+  $("#app").classList.remove("hide");
+  S.org = store("local", ORG_KEY) || null;
+  showTab(store("local", TAB_KEY) || "overview");
+  refresh();
+  clearInterval(S.timer);
+  S.timer = setInterval(() => {
+    if (document.hidden) return;
+    if (S.tab === "settings" || !$("#autorefresh").checked && S.tab === "runs") return;
+    refresh();
+  }, 5000);
+}
+S.token = store("session", TOKEN_KEY);
+if (S.token) start(); else signOut();
+</script>
+</body>
+</html>
