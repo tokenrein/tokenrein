@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod config;
 pub mod control;
+pub mod ingest;
 pub mod ledger;
 pub mod packs;
 pub mod pricing;
@@ -19,7 +20,6 @@ pub async fn build_state(rt: config::Resolved) -> Result<Arc<AppState>> {
     let ledger = ledger::Ledger::connect(&rt.cfg.redis.url)
         .await
         .context("connecting to Redis")?;
-    let prices = pricing::Catalog::with_overrides(&rt.cfg.pricing)?;
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(rt.cfg.server.upstream_timeout_secs))
         .connect_timeout(Duration::from_secs(10))
@@ -27,7 +27,7 @@ pub async fn build_state(rt: config::Resolved) -> Result<Arc<AppState>> {
         .build()
         .context("building HTTP client")?;
     let (activity, events) = tokio::sync::mpsc::channel(ACTIVITY_QUEUE);
-    let state = Arc::new(AppState::new(rt, ledger, http, prices, activity));
+    let state = Arc::new(AppState::new(rt, ledger, http, activity));
     spawn_activity_writer(state.clone(), events);
     Ok(state)
 }

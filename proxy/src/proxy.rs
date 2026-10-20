@@ -20,7 +20,7 @@ use crate::ledger::{
     self, DAILY_TTL_SECS, Keys, Ledger, LimitSpec, MONTHLY_TTL_SECS, RUN_TTL_SECS, Reservation,
     Scope,
 };
-use crate::pricing::{Catalog, Price};
+use crate::pricing::Price;
 use crate::providers::{self, Api, StreamTracker, Usage};
 
 pub struct AppState {
@@ -32,7 +32,6 @@ pub struct AppState {
     pub control_edit: tokio::sync::Mutex<()>,
     pub ledger: Ledger,
     pub http: reqwest::Client,
-    pub prices: Catalog,
     /// Request events for the dashboard, written to Redis by a background task.
     pub activity: mpsc::Sender<Value>,
 }
@@ -42,7 +41,6 @@ impl AppState {
         rt: Resolved,
         ledger: Ledger,
         http: reqwest::Client,
-        prices: Catalog,
         activity: mpsc::Sender<Value>,
     ) -> Self {
         Self {
@@ -51,7 +49,6 @@ impl AppState {
             control_edit: tokio::sync::Mutex::new(()),
             ledger,
             http,
-            prices,
             activity,
         }
     }
@@ -78,6 +75,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/chat/completions", post(openai_chat))
         .route("/v1/responses", post(openai_responses))
         .route("/v1/messages", post(anthropic_messages))
+        // TokenLens out of the request path: reported usage, budget checks, agent telemetry.
+        .route("/v1/usage", post(crate::ingest::usage))
+        .route("/v1/check", post(crate::ingest::check))
+        .route("/v1/otel/v1/logs", post(crate::ingest::otel_logs))
+        .route(
+            "/v1/hooks/claude-code",
+            post(crate::ingest::claude_code_hook),
+        )
         .route("/healthz", get(|| async { "ok" }))
         .layer(DefaultBodyLimit::max(limit))
         .with_state(state)
@@ -197,9 +202,16 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         Err(m) => return reject(StatusCode::BAD_REQUEST, "tokenlens_invalid_request", &m),
     };
     // The person or service on whose behalf the agent runs; for spend reports only.
-    let user = match header_id(&headers, "x-tl-user") {
-        Ok(u) => u,
-        Err(m) => return reject(StatusCode::BAD_REQUEST, "tokenlens_invalid_request", &m),
+    let user = match headers.get("x-tl-user").map(|v| v.to_str().map(str::trim)) {
+        None => None,
+        Some(Ok(u)) if config::valid_user(u) => Some(u.to_string()),
+        Some(_) => {
+            return reject(
+                StatusCode::BAD_REQUEST,
+                "tokenlens_invalid_request",
+                "x-tl-user must be 1-128 letters, digits, '.', '_', '-', '@' or '+'",
+            );
+        }
     };
     let run_budget_header = match headers.get("x-tl-run-budget-usd") {
         None => None,
@@ -277,7 +289,7 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
     };
     let mut degraded = false;
 
-    let (price, price_known) = st.prices.lookup(provider, &prepared.model);
+    let (price, price_known) = rt.prices.lookup(provider, &prepared.model);
     let mut input_est = prepared.input_tokens_est;
     if let Some(prev) = prepared.previous_response_id.as_deref() {
         let known = if config::valid_id(prev) {
@@ -451,17 +463,17 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
     }
 }
 
-struct ScopeInput<'a> {
-    project: &'a str,
-    agent: &'a str,
-    run: &'a str,
-    ancestors: &'a [String],
-    run_budget_usd: Option<f64>,
-    ymd: &'a str,
-    ym: &'a str,
+pub(crate) struct ScopeInput<'a> {
+    pub(crate) project: &'a str,
+    pub(crate) agent: &'a str,
+    pub(crate) run: &'a str,
+    pub(crate) ancestors: &'a [String],
+    pub(crate) run_budget_usd: Option<f64>,
+    pub(crate) ymd: &'a str,
+    pub(crate) ym: &'a str,
 }
 
-fn build_scopes(keys: &Keys, b: &Budgets, input: &ScopeInput) -> Vec<Scope> {
+pub(crate) fn build_scopes(keys: &Keys, b: &Budgets, input: &ScopeInput) -> Vec<Scope> {
     let run_limit = match (input.run_budget_usd, b.run) {
         (Some(requested), _) => Some(b.max_run_usd.map_or(requested, |max| requested.min(max))),
         (None, Some(policy)) => Some(policy.limit_usd),

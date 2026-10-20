@@ -72,6 +72,53 @@ Create a real customer key (store only the hash in config):
 cargo run -p tokenlens-proxy -- gen-key
 ```
 
+## Without the proxy
+
+TokenLens doesn't have to sit in the request path. Agents and SDKs can call providers directly
+and report usage to TokenLens, which charges the same budgets and feeds the same dashboard. All
+of these use a TokenLens key (`Authorization: Bearer tl_…`) on the `:8787` listener:
+
+| Endpoint | Used by | What it does |
+|---|---|---|
+| `POST /v1/usage` | SDK direct mode, any client | Report calls after they happen: `{"events": [{run_id, parent_run_id, agent, user, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd?, duration_ms}]}`. Priced from the model list unless `cost_usd` is given. Returns the enforced limits now used up |
+| `POST /v1/check` | SDK direct mode, agent hooks | "May this run make another call?" (`run_id`, optional `estimate_usd` or `model` + `max_output_tokens`). Answers `allowed` plus a reason; paused or killed runs and used-up enforced budgets are refused |
+| `POST /v1/otel/v1/logs` | Claude Code telemetry | OpenTelemetry logs over HTTP/JSON. Each `claude_code.api_request` becomes a call on run `cc-<session>` (sub-agents on `cc-<session>-sub`), with model, tokens, Claude Code's own cost and the user's email |
+| `POST /v1/hooks/claude-code` | Claude Code HTTP hooks | Blocks the next prompt or tool call when the session's run is paused, killed or over an enforced budget; fails open if the ledger is down |
+
+Enforcement here happens between calls: the call that crosses a limit has already been made,
+and the next one is refused. Use the proxy when you need every call checked before it is sent.
+
+**Claude Code** needs no code: add to `~/.claude/settings.json` (replace `tl_…` with a key from
+the dashboard):
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL": "http/json",
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "http://127.0.0.1:8787/v1/otel/v1/logs",
+    "OTEL_EXPORTER_OTLP_LOGS_HEADERS": "Authorization=Bearer tl_…,x-tl-agent=claude-code",
+    "TOKENLENS_API_KEY": "tl_…"
+  },
+  "hooks": {
+    "UserPromptSubmit": [{"hooks": [{"type": "http", "url": "http://127.0.0.1:8787/v1/hooks/claude-code",
+      "headers": {"Authorization": "Bearer $TOKENLENS_API_KEY"}, "allowedEnvVars": ["TOKENLENS_API_KEY"], "timeout": 5}]}],
+    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "http", "url": "http://127.0.0.1:8787/v1/hooks/claude-code",
+      "headers": {"Authorization": "Bearer $TOKENLENS_API_KEY"}, "allowedEnvVars": ["TOKENLENS_API_KEY"], "timeout": 5}]}]
+  }
+}
+```
+
+New sessions then report every model call; this works with a Claude subscription login too
+(cost is Claude Code's own estimate).
+
+**Model prices** cover OpenAI, Anthropic, Google Gemini, Mistral, DeepSeek, xAI, Groq and
+Cohere models; local providers (`ollama`, `vllm`, `lmstudio`, `llamacpp`, `local`) cost $0.
+Reseller names are understood (`us.anthropic.claude-…`, `anthropic/claude-…`,
+`models/gemini-…`). Unknown models are charged at the provider's most expensive price until
+you add an override.
+
 ## Request headers
 
 | Header | Meaning |
@@ -200,14 +247,15 @@ request. Spend reports come from these events; budgets are always enforced from 
 cargo test
 ```
 
-58 tests: unit tests plus integration tests that start a real `redis-server` and a
+64 tests: unit tests plus integration tests that start a real `redis-server` and a
 fake OpenAI/Anthropic upstream. They include a concurrency test (500 parallel
 reservations against a budget that fits exactly 100 — exactly 100 succeed),
 streaming settlement for both providers, child-run spend counting against the
 parent, shadow mode, pause/resume/kill, and the dashboard API (keys and limits created
 there apply immediately, other instances pick them up, runs / agents / events are
 recorded, provider keys saved there are encrypted, used and never returned, guardrail packs, the
-Check-mode review, run timelines and spend by model and user). Integration tests skip if
+Check-mode review, run timelines and spend by model and user, and the proxy-free endpoints:
+reported usage, checks, Claude Code telemetry and hooks). Integration tests skip if
 `redis-server` is missing unless `TL_REQUIRE_REDIS=1` (set in CI).
 
 Local smoke run of the release binary (Apple Silicon laptop, Redis on the same

@@ -722,3 +722,207 @@ async fn anthropic_workspace_id_is_set_cleared_and_validated() {
     assert_eq!(s, StatusCode::OK);
     assert!(h.get("/admin/overview").await["orgs"][0]["anthropic_workspace_id"].is_null());
 }
+
+// --- TokenLens out of the request path: reported usage, checks, Claude Code ---
+
+impl H {
+    async fn ingest(&self, path: &str, body: Value) -> (StatusCode, Value) {
+        let resp = self
+            .http
+            .post(format!("{}{path}", self.proxy))
+            .bearer_auth(CONFIG_KEY)
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        let status = resp.status();
+        (status, resp.json().await.unwrap_or(Value::Null))
+    }
+}
+
+fn otlp(session: &str, query_source: &str, cost_usd: f64) -> Value {
+    let s = |k: &str, v: &str| json!({"key": k, "value": {"stringValue": v}});
+    let i = |k: &str, v: i64| json!({"key": k, "value": {"intValue": v.to_string()}});
+    json!({"resourceLogs": [{
+        "resource": {"attributes": [s("service.name", "claude-code")]},
+        "scopeLogs": [{"logRecords": [{
+            "body": {"stringValue": "claude_code.api_request"},
+            "attributes": [
+                s("event.name", "api_request"), s("session.id", session),
+                s("user.email", "dev@example.com"), s("model", "claude-opus-5-5"),
+                s("query_source", query_source),
+                i("input_tokens", 1000), i("output_tokens", 200),
+                i("cache_read_tokens", 5000), i("cache_creation_tokens", 0),
+                {"key": "cost_usd", "value": {"doubleValue": cost_usd}},
+                i("duration_ms", 1500)
+            ]
+        }]}]
+    }]})
+}
+
+#[tokio::test]
+async fn reported_usage_is_priced_charged_and_enforced() {
+    let Some(h) = H::start().await else { return };
+    let (s, _) = h
+        .admin(
+            Method::PUT,
+            "/admin/orgs/acme/projects/bot",
+            Some(json!({"budgets": {"agent_daily": {"limit_usd": 0.001, "mode": "enforce"}}})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let ev = json!({"events": [{
+        "run_id": "direct-1", "agent": "writer", "user": "ana@example.com",
+        "provider": "google", "model": "gemini-2.5-flash",
+        "input_tokens": 1000, "output_tokens": 1000, "source": "python-sdk"
+    }]});
+    let (s, body) = h.ingest("/v1/usage", ev).await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    assert_eq!(body["accepted"], 1);
+    // 1000 * $0.30/M + 1000 * $2.50/M = $0.0028, over the $0.001 agent budget.
+    assert_eq!(body["over"][0], "agent_daily:bot/writer");
+
+    let (_, verdict) = h
+        .ingest(
+            "/v1/check",
+            json!({"run_id": "direct-2", "agent": "writer"}),
+        )
+        .await;
+    assert_eq!(verdict["allowed"], false, "{verdict}");
+    assert!(verdict["reason"].as_str().unwrap().contains("agent_daily"));
+    let (_, verdict) = h
+        .ingest(
+            "/v1/check",
+            json!({"run_id": "direct-2", "agent": "someone-else"}),
+        )
+        .await;
+    assert_eq!(verdict["allowed"], true);
+
+    let runs = h
+        .eventually("/admin/orgs/acme/runs", |b| {
+            b["runs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["run_id"] == "direct-1")
+        })
+        .await;
+    let r = runs["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["run_id"] == "direct-1")
+        .unwrap()
+        .clone();
+    assert_eq!(r["budget"]["spent_micros"], 2800);
+    let spend = h.get("/admin/orgs/acme/spend?days=1").await;
+    assert_eq!(spend["by"]["model"][0]["key"], "google/gemini-2.5-flash");
+    assert_eq!(spend["by"]["user"][0]["key"], "ana@example.com");
+
+    // Bad input is reported per event, the rest are accepted.
+    let (_, body) = h
+        .ingest(
+            "/v1/usage",
+            json!({"events": [{"model": "gpt-4o-mini", "run_id": "bad id"}, {"model": "gpt-4o-mini"}]}),
+        )
+        .await;
+    assert_eq!(body["accepted"], 1);
+    assert_eq!(body["rejected"][0]["index"], 0);
+}
+
+#[tokio::test]
+async fn checks_follow_run_state() {
+    let Some(h) = H::start().await else { return };
+    let (_, v) = h.ingest("/v1/check", json!({"run_id": "loop-1"})).await;
+    assert_eq!(v["allowed"], true);
+    let (s, _) = h
+        .admin(Method::POST, "/admin/orgs/acme/runs/loop-1/pause", None)
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, v) = h
+        .ingest(
+            "/v1/check",
+            json!({"run_id": "loop-1-child", "parent_run_id": "loop-1"}),
+        )
+        .await;
+    assert_eq!(v["allowed"], false);
+    assert_eq!(v["run_state"], "paused");
+    let unauth = h
+        .http
+        .post(format!("{}/v1/check", h.proxy))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn claude_code_telemetry_and_hooks() {
+    let Some(h) = H::start().await else { return };
+    let (s, _) = h
+        .ingest("/v1/otel/v1/logs", otlp("sess-1", "main", 0.0125))
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = h
+        .ingest("/v1/otel/v1/logs", otlp("sess-1", "subagent", 0.002))
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let tl = h
+        .eventually("/admin/orgs/acme/runs/cc-sess-1/timeline", |b| {
+            b["events"].as_array().unwrap().len() == 2
+        })
+        .await;
+    let runs: Vec<&str> = tl["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["run_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(runs, ["cc-sess-1", "cc-sess-1-sub"]);
+    let e = &tl["events"][0];
+    assert_eq!(e["agent"], "claude-code");
+    assert_eq!(e["user"], "dev@example.com");
+    assert_eq!(e["source"], "claude-code");
+    assert_eq!(e["actual_micros"], 12_500);
+    assert_eq!(e["usage"]["cached_input"], 5000);
+    // The parent run's budget includes the sub-agent's spend.
+    assert_eq!(tl["runs"][0]["budget"]["spent_micros"], 14_500);
+
+    let hook = |event: &str| {
+        json!({"session_id": "sess-1", "hook_event_name": event, "cwd": "/tmp",
+               "tool_name": "Bash", "prompt": "hi"})
+    };
+    let (s, body) = h
+        .ingest("/v1/hooks/claude-code", hook("UserPromptSubmit"))
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body, json!({}));
+
+    let (s, _) = h
+        .admin(Method::POST, "/admin/orgs/acme/runs/cc-sess-1/pause", None)
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, body) = h
+        .ingest("/v1/hooks/claude-code", hook("UserPromptSubmit"))
+        .await;
+    assert_eq!(body["decision"], "block");
+    assert!(body["reason"].as_str().unwrap().contains("paused"));
+    let (_, body) = h.ingest("/v1/hooks/claude-code", hook("PreToolUse")).await;
+    assert_eq!(body["hookSpecificOutput"]["permissionDecision"], "deny");
+    // Non-blocking events never block.
+    let (_, body) = h.ingest("/v1/hooks/claude-code", hook("Stop")).await;
+    assert_eq!(body, json!({}));
+
+    // OTLP protobuf is refused with a hint.
+    let resp = h
+        .http
+        .post(format!("{}/v1/otel/v1/logs", h.proxy))
+        .bearer_auth(CONFIG_KEY)
+        .header("content-type", "application/x-protobuf")
+        .body(vec![1u8, 2, 3])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}

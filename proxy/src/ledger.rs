@@ -89,6 +89,81 @@ if est then return 'settled' end
 return 'late'
 "#;
 
+// Read-only budget check. KEYS: budget keys..., run state keys...;
+// ARGV: n, m, estimate, then (limit spec, mode, ttl) per budget key.
+const CHECK_LUA: &str = r#"
+local n = tonumber(ARGV[1])
+local m = tonumber(ARGV[2])
+local est = tonumber(ARGV[3])
+for j = 1, m do
+  local st = redis.call('GET', KEYS[n + j])
+  if st then return {'stopped', tostring(j), st} end
+end
+local exceeded = {}
+for i = 1, n do
+  local key = KEYS[i]
+  local base = 3 + (i - 1) * 3
+  local spec = ARGV[base + 1]
+  local limit, mode
+  if spec == 'stored' then
+    limit = tonumber(redis.call('HGET', key, 'limit') or '-1')
+    mode = redis.call('HGET', key, 'mode') or 'skip'
+  elseif string.sub(spec, 1, 3) == 'nx:' then
+    local l = redis.call('HGET', key, 'limit')
+    if l then
+      limit = tonumber(l)
+      mode = redis.call('HGET', key, 'mode') or ARGV[base + 2]
+    else
+      limit = tonumber(string.sub(spec, 4))
+      mode = ARGV[base + 2]
+    end
+  else
+    limit = tonumber(spec)
+    mode = ARGV[base + 2]
+  end
+  if limit >= 0 and mode ~= 'skip' then
+    local spent = tonumber(redis.call('HGET', key, 'spent') or '0')
+    local reserved = tonumber(redis.call('HGET', key, 'reserved') or '0')
+    local over
+    if est > 0 then over = spent + reserved + est > limit else over = spent + reserved >= limit end
+    if over then
+      if mode == 'enforce' then
+        return {'over', tostring(i), tostring(spent), tostring(reserved), tostring(limit)}
+      end
+      table.insert(exceeded, tostring(i))
+    end
+  end
+end
+return {'ok', table.concat(exceeded, ',')}
+"#;
+
+// Record spend that already happened. KEYS: budget keys...; ARGV: n, actual, then
+// (limit spec, mode, ttl) per key. Returns "index:mode" for each key now over its limit.
+const CHARGE_LUA: &str = r#"
+local n = tonumber(ARGV[1])
+local actual = tonumber(ARGV[2])
+local over = {}
+for i = 1, n do
+  local key = KEYS[i]
+  local base = 2 + (i - 1) * 3
+  local spec = ARGV[base + 1]
+  if string.sub(spec, 1, 3) == 'nx:' then
+    redis.call('HSETNX', key, 'limit', string.sub(spec, 4))
+    redis.call('HSETNX', key, 'mode', ARGV[base + 2])
+  elseif spec ~= 'stored' then
+    redis.call('HSET', key, 'limit', spec, 'mode', ARGV[base + 2])
+  end
+  local spent = redis.call('HINCRBY', key, 'spent', actual)
+  redis.call('EXPIRE', key, tonumber(ARGV[base + 3]))
+  local limit = tonumber(redis.call('HGET', key, 'limit') or '-1')
+  local mode = redis.call('HGET', key, 'mode') or 'skip'
+  if limit >= 0 and mode ~= 'skip' and spent >= limit then
+    table.insert(over, tostring(i) .. ':' .. mode)
+  end
+end
+return over
+"#;
+
 // KEYS: reservation, expiry zset, budget keys...; ARGV: request id.
 const RELEASE_LUA: &str = r#"
 local est = redis.call('HGET', KEYS[1], 'est')
@@ -241,6 +316,8 @@ pub struct Ledger {
     reserve: Script,
     settle: Script,
     release: Script,
+    check: Script,
+    charge: Script,
     control_cas: Script,
     ancestry: Mutex<HashMap<String, Arc<Vec<String>>>>,
 }
@@ -258,6 +335,8 @@ impl Ledger {
             reserve: Script::new(RESERVE_LUA),
             settle: Script::new(SETTLE_LUA),
             release: Script::new(RELEASE_LUA),
+            check: Script::new(CHECK_LUA),
+            charge: Script::new(CHARGE_LUA),
             control_cas: Script::new(CONTROL_CAS_LUA),
             ancestry: Mutex::new(HashMap::new()),
         })
@@ -302,6 +381,116 @@ impl Ledger {
         }
         let mut conn = self.conn.clone();
         let out: Vec<String> = inv.invoke_async(&mut conn).await?;
+        parse_reservation(&out, scopes, runs)
+    }
+
+    /// Would a call costing up to `estimate` be allowed right now? Reserves nothing; used where
+    /// TokenLens is not in the request path (agent hooks, SDK direct mode). With `estimate` 0 it
+    /// asks whether a budget is already used up.
+    pub async fn check(
+        &self,
+        org: &str,
+        estimate: u64,
+        scopes: &[Scope],
+        runs: &[String],
+    ) -> Result<Reservation> {
+        let keys = Keys::new(org);
+        let mut inv = self.check.prepare_invoke();
+        for s in scopes {
+            inv.key(&s.key);
+        }
+        for r in runs {
+            inv.key(keys.run_state(r));
+        }
+        inv.arg(scopes.len()).arg(runs.len()).arg(estimate);
+        for s in scopes {
+            inv.arg(s.limit.arg()).arg(s.mode.as_str()).arg(s.ttl_secs);
+        }
+        let mut conn = self.conn.clone();
+        let out: Vec<String> = inv.invoke_async(&mut conn).await?;
+        parse_reservation(&out, scopes, runs)
+    }
+
+    /// Record spend that already happened (reported usage). Returns the scopes now over their
+    /// limit, with their mode.
+    pub async fn charge(&self, scopes: &[Scope], actual: u64) -> Result<Vec<(String, Mode)>> {
+        let mut inv = self.charge.prepare_invoke();
+        for s in scopes {
+            inv.key(&s.key);
+        }
+        inv.arg(scopes.len()).arg(actual);
+        for s in scopes {
+            inv.arg(s.limit.arg()).arg(s.mode.as_str()).arg(s.ttl_secs);
+        }
+        let mut conn = self.conn.clone();
+        let out: Vec<String> = inv.invoke_async(&mut conn).await?;
+        Ok(out
+            .iter()
+            .filter_map(|item| {
+                let (i, mode) = item.split_once(':')?;
+                let scope = scopes.get(i.parse::<usize>().ok()?.checked_sub(1)?)?;
+                let mode = match mode {
+                    "enforce" => Mode::Enforce,
+                    "check" => Mode::Check,
+                    _ => Mode::Skip,
+                };
+                Some((scope.label.clone(), mode))
+            })
+            .collect())
+    }
+
+    /// Mark a run and agent as active without a request (agent hooks: prompt submitted, tool
+    /// used, session ended), for live status.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn touch(
+        &self,
+        org: &str,
+        project: &str,
+        agent: &str,
+        user: Option<&str>,
+        run: &str,
+        parent: Option<&str>,
+        source: &str,
+        ended: bool,
+    ) -> Result<()> {
+        let keys = Keys::new(org);
+        let now = unix_now();
+        let info = keys.run_info(run);
+        let mut pipe = redis::pipe();
+        pipe.zadd(keys.runs_seen(), run, now).ignore();
+        pipe.zadd(keys.agents_seen(), format!("{project}/{agent}"), now)
+            .ignore();
+        pipe.hset_multiple(
+            &info,
+            &[("project", project), ("agent", agent), ("source", source)],
+        )
+        .ignore();
+        if let Some(u) = user {
+            pipe.hset(&info, "user", u).ignore();
+        }
+        if let Some(p) = parent {
+            pipe.hset(&info, "parent", p).ignore();
+            pipe.set_ex(keys.run_parent(run), p, RUN_TTL_SECS).ignore();
+            let children = keys.run_children(p);
+            pipe.sadd(&children, run).ignore();
+            pipe.expire(&children, RUN_TTL_SECS as i64).ignore();
+        }
+        pipe.hset(&info, "last_seen", now).ignore();
+        pipe.hset_nx(&info, "first_seen", now).ignore();
+        if ended {
+            pipe.hset(&info, "ended_at", now).ignore();
+        } else {
+            pipe.hdel(&info, "ended_at").ignore();
+        }
+        pipe.expire(&info, RUN_TTL_SECS as i64).ignore();
+        let mut conn = self.conn.clone();
+        let _: () = pipe.query_async(&mut conn).await?;
+        Ok(())
+    }
+}
+
+fn parse_reservation(out: &[String], scopes: &[Scope], runs: &[String]) -> Result<Reservation> {
+    {
         let index = |i: Option<&String>| {
             i.and_then(|s| s.parse::<usize>().ok())
                 .and_then(|i| i.checked_sub(1))
@@ -343,7 +532,9 @@ impl Ledger {
             _ => Err(anyhow!("unexpected reserve reply {out:?}")),
         }
     }
+}
 
+impl Ledger {
     /// Replaces the reservation with the actual cost; idempotent per request id, and still records spend if the reservation already expired.
     pub async fn settle(
         &self,
@@ -588,6 +779,11 @@ impl Ledger {
                 ],
             )
             .ignore();
+            for field in ["source", "user"] {
+                if !s(field).is_empty() {
+                    pipe.hset(&info, field, s(field)).ignore();
+                }
+            }
             if let Some(p) = e.get("parent_run_id").and_then(|v| v.as_str()) {
                 pipe.hset(&info, "parent", p).ignore();
                 let children = keys.run_children(p);

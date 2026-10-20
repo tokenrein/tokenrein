@@ -130,14 +130,16 @@ pub struct ProvidersConfig {
     pub anthropic: Option<ProviderConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PriceOverride {
     pub provider: String,
     pub model: String,
     pub input_per_mtok: f64,
     pub output_per_mtok: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cached_input_per_mtok: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_write_per_mtok: Option<f64>,
 }
 
@@ -254,6 +256,8 @@ pub struct Resolved {
     /// Human-readable list of org/provider pairs with no usable key.
     pub missing_provider_keys: Vec<String>,
     pub admin_token: Option<String>,
+    /// Model prices: built-in list plus `cfg.pricing` overrides.
+    pub prices: crate::pricing::Catalog,
     secrets: Option<Arc<SecretBox>>,
     env: EnvFn,
 }
@@ -279,8 +283,14 @@ impl Resolved {
     /// The same server settings with a different set of orgs (from the admin API / dashboard).
     /// Validates exactly like the config file.
     pub fn with_orgs(&self, orgs: Vec<OrgConfig>) -> Result<Self> {
+        self.with_managed(orgs, self.cfg.pricing.clone())
+    }
+
+    /// Orgs and price overrides managed from the admin API / dashboard.
+    pub fn with_managed(&self, orgs: Vec<OrgConfig>, pricing: Vec<PriceOverride>) -> Result<Self> {
         let mut cfg = self.cfg.clone();
         cfg.orgs = orgs;
+        cfg.pricing = pricing;
         Self::build(cfg, self.env.clone())
     }
 
@@ -413,7 +423,9 @@ impl Resolved {
         }
 
         let admin_token = env(&cfg.server.admin_token_env).filter(|t| t.len() >= 16);
+        let prices = crate::pricing::Catalog::with_overrides(&cfg.pricing)?;
         Ok(Self {
+            prices,
             cfg,
             keys,
             provider_keys,
@@ -458,6 +470,14 @@ pub fn valid_id(s: &str) -> bool {
         && s.len() <= 128
         && s.bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// Users may be emails: ids plus '@' and '+'.
+pub fn valid_user(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'@' | b'+'))
 }
 
 fn ensure_id(kind: &str, s: &str) -> Result<()> {

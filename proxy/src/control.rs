@@ -1,8 +1,9 @@
-//! Orgs, projects, virtual keys and budgets managed at runtime (admin API / dashboard).
+//! Orgs, projects, virtual keys, budgets and model prices managed at runtime (admin API /
+//! dashboard).
 //!
 //! The managed copy lives in Redis as one JSON document with a version number. On first start
-//! it is seeded from the config file's `[[orgs]]`; after that Redis is the source of truth and
-//! the config file only supplies server, provider and pricing settings. Every proxy instance
+//! it is seeded from the config file's `[[orgs]]` and `[[pricing]]`; after that Redis is the
+//! source of truth and the config file only supplies server and provider settings. Every proxy instance
 //! polls the version and swaps in the new config when it changes; edits are compare-and-set,
 //! so two admins (or two instances) cannot overwrite each other's changes.
 
@@ -12,8 +13,28 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
-use crate::config::OrgConfig;
+use serde::{Deserialize, Serialize};
+
+use crate::config::{OrgConfig, PriceOverride};
 use crate::proxy::AppState;
+
+/// The managed document. Older versions stored a bare array of orgs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Managed {
+    pub orgs: Vec<OrgConfig>,
+    #[serde(default)]
+    pub pricing: Vec<PriceOverride>,
+}
+
+fn parse(doc: &str) -> Result<Managed> {
+    if doc.trim_start().starts_with('[') {
+        return Ok(Managed {
+            orgs: serde_json::from_str(doc)?,
+            pricing: Vec::new(),
+        });
+    }
+    Ok(serde_json::from_str(doc)?)
+}
 
 const SYNC_EVERY: Duration = Duration::from_secs(2);
 
@@ -22,7 +43,11 @@ pub async fn init(state: &AppState) -> Result<()> {
     if let Some((version, doc)) = state.ledger.control_load().await? {
         return apply(state, version, &doc).context("managed config in Redis is invalid");
     }
-    let doc = serde_json::to_string(&state.rt().cfg.orgs)?;
+    let rt = state.rt();
+    let doc = serde_json::to_string(&Managed {
+        orgs: rt.cfg.orgs.clone(),
+        pricing: rt.cfg.pricing.clone(),
+    })?;
     match state.ledger.control_store(0, &doc).await? {
         Some(version) => {
             tracing::info!(
@@ -51,8 +76,8 @@ pub async fn sync(state: &AppState) -> Result<()> {
 }
 
 fn apply(state: &AppState, version: u64, doc: &str) -> Result<()> {
-    let orgs: Vec<OrgConfig> = serde_json::from_str(doc)?;
-    let rt = state.rt().with_orgs(orgs)?;
+    let m = parse(doc)?;
+    let rt = state.rt().with_managed(m.orgs, m.pricing)?;
     state.replace_rt(rt, version);
     Ok(())
 }
@@ -86,6 +111,21 @@ pub async fn edit<T>(
     state: &AppState,
     edit: impl FnOnce(&mut Vec<OrgConfig>) -> Result<T, EditError>,
 ) -> Result<T, EditError> {
+    edit_managed(state, |m| edit(&mut m.orgs)).await
+}
+
+/// Like [`edit`] for the model price overrides.
+pub async fn edit_pricing<T>(
+    state: &AppState,
+    edit: impl FnOnce(&mut Vec<PriceOverride>) -> Result<T, EditError>,
+) -> Result<T, EditError> {
+    edit_managed(state, |m| edit(&mut m.pricing)).await
+}
+
+async fn edit_managed<T>(
+    state: &AppState,
+    edit: impl FnOnce(&mut Managed) -> Result<T, EditError>,
+) -> Result<T, EditError> {
     let _guard = state.control_edit.lock().await;
     sync(state).await.map_err(EditError::Unavailable)?;
     let version = state.control_version.load(Ordering::SeqCst);
@@ -93,13 +133,19 @@ pub async fn edit<T>(
         return Err(EditError::Disabled);
     }
     let rt = state.rt();
-    let mut orgs = rt.cfg.orgs.clone();
-    let out = edit(&mut orgs)?;
+    let mut m = Managed {
+        orgs: rt.cfg.orgs.clone(),
+        pricing: rt.cfg.pricing.clone(),
+    };
+    let out = edit(&mut m)?;
     let next = rt
-        .with_orgs(orgs)
+        .with_managed(m.orgs, m.pricing)
         .map_err(|e| EditError::Invalid(format!("{e:#}")))?;
-    let doc =
-        serde_json::to_string(&next.cfg.orgs).map_err(|e| EditError::Unavailable(e.into()))?;
+    let doc = serde_json::to_string(&Managed {
+        orgs: next.cfg.orgs.clone(),
+        pricing: next.cfg.pricing.clone(),
+    })
+    .map_err(|e| EditError::Unavailable(e.into()))?;
     match state.ledger.control_store(version, &doc).await {
         Ok(Some(v)) => {
             state.replace_rt(next, v);
