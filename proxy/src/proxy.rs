@@ -246,7 +246,7 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
             ),
         );
     };
-    let upstream_headers = match providers::upstream_headers(api, &headers, api_key) {
+    let mut upstream_headers = match providers::upstream_headers(api, &headers, api_key) {
         Ok(h) => h,
         Err(m) => {
             return reject(
@@ -256,6 +256,14 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
             );
         }
     };
+
+    if matches!(provider, providers::Provider::Anthropic)
+        && let Some(ws) = org.anthropic_workspace_id.as_deref()
+        && !upstream_headers.contains_key("anthropic-workspace-id")
+        && let Ok(v) = HeaderValue::from_str(ws)
+    {
+        upstream_headers.insert(HeaderName::from_static("anthropic-workspace-id"), v);
+    }
 
     let closed = org.fail_mode == FailMode::Closed;
     let unavailable = || {

@@ -148,6 +148,12 @@ The real OpenAI / Anthropic keys can come from two places; a key saved in the da
 The proxy starts without any provider key, so you can add them from the dashboard; calls to a
 provider with no key get `400 tokenlens_provider_not_configured` until one is set.
 
+**Anthropic workspace ID.** Personal or service-account Anthropic keys that span several
+workspaces need an `anthropic-workspace-id` header on every call. Set the org's workspace ID
+(`wrkspc_…`, from the Claude Console under Settings → Workspaces) next to the Anthropic key in
+the dashboard, or as `anthropic_workspace_id` on the org in the config; the proxy adds it to the
+org's Claude calls. A client that sends its own `anthropic-workspace-id` header keeps it.
+
 ## Admin API (`:8788`, `Authorization: Bearer $TL_ADMIN_TOKEN`)
 
 | Method | Path | Effect |
@@ -155,7 +161,7 @@ provider with no key get `400 tokenlens_provider_not_configured` until one is se
 | `GET` | `/` | The dashboard page (no data; it calls the API below) |
 | `GET` | `/admin/overview` | Orgs, projects, keys (prefix only), budgets, this month's spend |
 | `POST` | `/admin/orgs` | Create an org `{id, fail_mode?, budgets?}` |
-| `PUT` / `DELETE` | `/admin/orgs/{org}` | Set `{fail_mode?, budgets?}` / delete the org and its keys |
+| `PUT` / `DELETE` | `/admin/orgs/{org}` | Set `{fail_mode?, budgets?, anthropic_workspace_id?}` (`""` clears it) / delete the org and its keys |
 | `PUT` / `DELETE` | `/admin/orgs/{org}/provider-keys/{openai\|anthropic}` | Save `{api_key}` (encrypted) / remove it (falls back to the environment) |
 | `POST` | `/admin/orgs/{org}/provider-keys/{provider}/test` | Check the key with the provider's (free) model list |
 | `GET` | `/admin/packs` | Guardrail packs and their budgets |
@@ -194,7 +200,7 @@ request. Spend reports come from these events; budgets are always enforced from 
 cargo test
 ```
 
-56 tests: unit tests plus integration tests that start a real `redis-server` and a
+58 tests: unit tests plus integration tests that start a real `redis-server` and a
 fake OpenAI/Anthropic upstream. They include a concurrency test (500 parallel
 reservations against a budget that fits exactly 100 — exactly 100 succeed),
 streaming settlement for both providers, child-run spend counting against the

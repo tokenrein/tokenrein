@@ -144,6 +144,7 @@ impl Harness {
             api_key_env = "ANTHROPIC_KEY"
             [[orgs]]
             id = "acme"
+            anthropic_workspace_id = "wrkspc_test"
             [orgs.budgets]
             max_run_usd = 2.0
             [[orgs.projects]]
@@ -494,4 +495,44 @@ async fn rejects_bad_keys_and_ids() {
         .unwrap();
     assert_eq!(resp.status(), 400);
     assert_eq!(h.upstream.count(), 0);
+}
+
+#[tokio::test]
+async fn anthropic_calls_carry_the_org_workspace_unless_the_client_sends_one() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    let send = |workspace: Option<&'static str>| {
+        let mut req = h
+            .http
+            .post(format!("{}/v1/messages", h.proxy))
+            .header("x-api-key", KEY)
+            .header("x-tl-run-id", "run-ws");
+        if let Some(ws) = workspace {
+            req = req.header("anthropic-workspace-id", ws);
+        }
+        req.json(&json!({"model": "claude-haiku-4-5", "max_tokens": 50, "messages": hi()}))
+            .send()
+    };
+    assert_eq!(send(None).await.unwrap().status(), 200);
+    let (_, headers, _) = h.upstream.last();
+    assert_eq!(headers["anthropic-workspace-id"], "wrkspc_test");
+
+    assert_eq!(send(Some("wrkspc_client")).await.unwrap().status(), 200);
+    let (_, headers, _) = h.upstream.last();
+    assert_eq!(headers["anthropic-workspace-id"], "wrkspc_client");
+
+    // Not added to OpenAI calls.
+    let resp = h
+        .chat(
+            "run-ws-oai",
+            json!({"model": "gpt-4o-mini", "messages": hi()}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let (provider, headers, _) = h.upstream.last();
+    assert_eq!(provider, "openai");
+    assert!(headers.get("anthropic-workspace-id").is_none());
 }

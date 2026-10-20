@@ -699,3 +699,26 @@ async fn provider_keys_can_be_tested() {
     assert_eq!(body["status"], 401);
     assert!(!body.to_string().contains("sk-wrong-key-123"));
 }
+
+#[tokio::test]
+async fn anthropic_workspace_id_is_set_cleared_and_validated() {
+    let Some(h) = H::start().await else { return };
+    let set = |ws: &str| json!({ "anthropic_workspace_id": ws });
+    let (s, _) = h
+        .admin(Method::PUT, "/admin/orgs/acme", Some(set("wrkspc_01abc")))
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        h.get("/admin/overview").await["orgs"][0]["anthropic_workspace_id"],
+        "wrkspc_01abc"
+    );
+    let (s, _) = h
+        .admin(Method::PUT, "/admin/orgs/acme", Some(set("not valid")))
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let (s, _) = h
+        .admin(Method::PUT, "/admin/orgs/acme", Some(set("  ")))
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(h.get("/admin/overview").await["orgs"][0]["anthropic_workspace_id"].is_null());
+}

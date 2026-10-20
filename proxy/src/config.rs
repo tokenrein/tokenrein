@@ -193,6 +193,10 @@ pub struct OrgConfig {
     /// environment. Keyed by provider name.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub provider_secrets: HashMap<String, ProviderSecret>,
+    /// Sent as `anthropic-workspace-id` on this org's Anthropic calls (unless the client sends
+    /// one). Required by Anthropic keys that are not scoped to a workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anthropic_workspace_id: Option<String>,
     #[serde(default)]
     pub projects: Vec<ProjectConfig>,
 }
@@ -289,6 +293,14 @@ impl Resolved {
                 bail!("duplicate org id {:?}", org.id);
             }
             validate_budgets(&org.budgets, &org.id)?;
+            if let Some(ws) = &org.anthropic_workspace_id
+                && !valid_id(ws)
+            {
+                bail!(
+                    "org {:?}: anthropic_workspace_id must be 1-128 letters, digits, '.', '_' or '-'",
+                    org.id
+                );
+            }
             for name in org.provider_key_env.keys() {
                 if Provider::from_name(name).is_none() {
                     bail!(

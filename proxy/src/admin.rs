@@ -256,6 +256,7 @@ async fn overview(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
             json!({
                 "id": org.id,
                 "providers": providers,
+                "anthropic_workspace_id": org.anthropic_workspace_id,
                 "fail_mode": org.fail_mode,
                 "budgets": org.budgets,
                 "spend": { "org_monthly": org_spend },
@@ -284,6 +285,8 @@ struct OrgBody {
     id: Option<String>,
     fail_mode: Option<FailMode>,
     budgets: Option<Budgets>,
+    /// Empty string clears it.
+    anthropic_workspace_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -345,6 +348,7 @@ async fn create_org(
             budgets: body.budgets.unwrap_or_default(),
             provider_key_env: HashMap::new(),
             provider_secrets: HashMap::new(),
+            anthropic_workspace_id: None,
             projects: Vec::new(),
         });
         Ok(id)
@@ -375,6 +379,10 @@ async fn update_org(
         }
         if let Some(b) = body.budgets {
             o.budgets = b;
+        }
+        if let Some(ws) = body.anthropic_workspace_id {
+            let ws = ws.trim();
+            o.anthropic_workspace_id = (!ws.is_empty()).then(|| ws.to_string());
         }
         Ok(())
     })
@@ -724,9 +732,15 @@ async fn test_provider_key(
         .timeout(std::time::Duration::from_secs(10));
     let req = match p {
         Provider::OpenAI => req.bearer_auth(key),
-        Provider::Anthropic => req
-            .header("x-api-key", key)
-            .header("anthropic-version", "2023-06-01"),
+        Provider::Anthropic => {
+            let req = req
+                .header("x-api-key", key)
+                .header("anthropic-version", "2023-06-01");
+            match &rt.cfg.orgs[oi].anthropic_workspace_id {
+                Some(ws) => req.header("anthropic-workspace-id", ws),
+                None => req,
+            }
+        }
     };
     let (ok, status, message) = match req.send().await {
         Ok(r) if r.status().is_success() => {

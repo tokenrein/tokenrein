@@ -173,10 +173,14 @@ a.runlink:hover { color: var(--accent); border-color: var(--accent); }
 .prov-row + .prov-row { border-top: 1px solid var(--line); }
 .prov-row form { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .prov-row input { width: 230px; }
+.prov-row .ws { grid-column: 2 / -1; display: grid; gap: 4px; }
+.prov-row .ws .field { color: var(--text); font-weight: 600; font-size: 12.5px; }
+.prov-row .ws .field .muted { font-weight: 400; }
 @media (max-width: 760px) {
   .prov-row { grid-template-columns: minmax(0, 1fr); }
   .prov-row form { justify-content: flex-start; }
   .prov-row input { width: 100%; }
+  .prov-row .ws { grid-column: 1 / -1; }
 }
 .hide { display: none !important; }
 @media (max-width: 640px) {
@@ -1093,7 +1097,15 @@ function providerKeysCard(org) {
         <button class="btn sm" type="submit" ${canSave ? "" : "disabled"}>${st.source === "dashboard" ? "Replace" : "Save"}</button>
         ${st.source ? `<button class="btn sm" type="button" data-test-provider="${id}">Test</button>` : ""}
         ${removable ? `<button class="btn sm danger" type="button" data-remove-provider="${id}">Remove</button>` : ""}
-      </form>` : ""}</div></div>`;
+      </form>` : ""}</div>
+      ${id === "anthropic" && st.configured ? `<form class="ws" data-workspace>
+        <label class="field">Workspace ID <span class="muted">(only if your key isn't scoped to a workspace)</span>
+          <span class="inline" style="flex-wrap:nowrap">
+            <input type="text" spellcheck="false" placeholder="wrkspc_…" aria-label="Anthropic workspace ID" value="${esc(org.anthropic_workspace_id || "")}">
+            <button class="btn sm" type="submit">Save</button>
+          </span></label>
+        <span class="muted" style="font-size:12px">${org.anthropic_workspace_id ? "Sent as <span class=\"mono\">anthropic-workspace-id</span> on this org's Claude calls (a client's own header wins)." : "Find it in the Anthropic Console under Settings → Workspaces. Leave empty for workspace-scoped keys."}</span>
+      </form>` : ""}</div>`;
   }).join("");
   const note = enabled
     ? `Keys are encrypted (AES-256-GCM) with the proxy's <span class="mono">${esc(S.overview.secrets_key_env)}</span> before they are stored, are never shown again (only the last 4 characters), and take effect within a few seconds. A key saved here overrides the environment variable.`
@@ -1153,7 +1165,9 @@ $("#settings").addEventListener("submit", async e => {
   const f = e.target;
   const value = $("input", f)?.value.trim() ?? "";
   const org = encodeURIComponent(S.org);
-  if (f.matches("[data-project-pack]")) {
+  if (f.matches("[data-workspace]")) {
+    await mutate(() => api(`/admin/orgs/${org}`, { method: "PUT", body: { anthropic_workspace_id: value } }), value ? "Anthropic workspace ID saved" : "Anthropic workspace ID cleared");
+  } else if (f.matches("[data-project-pack]")) {
     await applyPack(f.dataset.projectPack, $("select", f).value);
   } else if (f.matches("[data-provider-key]")) {
     const id = f.dataset.providerKey;

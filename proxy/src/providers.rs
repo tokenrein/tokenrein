@@ -413,9 +413,10 @@ pub fn error_body(api: Api, kind: &str, message: &str) -> Value {
     }
 }
 
-const PASSTHROUGH_HEADERS: [&str; 4] = [
+const PASSTHROUGH_HEADERS: [&str; 5] = [
     "anthropic-version",
     "anthropic-beta",
+    "anthropic-workspace-id",
     "openai-beta",
     "idempotency-key",
 ];
