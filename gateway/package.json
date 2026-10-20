@@ -1,0 +1,19 @@
+{
+  "name": "tokenlens-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Marketing site + billing control-plane in front of a self-hosted Langfuse instance.",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "pg": "^8.13.0",
+    "stripe": "^17.3.0",
+    "uuid": "^10.0.0"
+  }
+}

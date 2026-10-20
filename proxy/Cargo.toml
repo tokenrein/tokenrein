@@ -1,0 +1,32 @@
+[package]
+name = "tokenlens-proxy"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "tokenlens_proxy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tokenlens-proxy"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+bytes = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+futures-util = "0.3"
+hex = "0.4"
+redis = { version = "0.32", features = ["tokio-comp", "connection-manager"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1", features = ["v4"] }

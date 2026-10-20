@@ -1,0 +1,45 @@
+# Local development config for the TokenLens proxy.
+# Needs OPENAI_API_KEY and ANTHROPIC_API_KEY in the environment (remove a provider block to skip it).
+# Make customer keys with: cargo run -p tokenlens-proxy -- gen-key
+
+[server]
+listen = "127.0.0.1:8787"
+admin_listen = "127.0.0.1:8788"
+admin_token_env = "TL_ADMIN_TOKEN"
+upstream_timeout_secs = 600
+default_max_output_tokens = 4096
+
+[redis]
+url = "redis://127.0.0.1:6379"
+
+[providers.openai]
+base_url = "https://api.openai.com"
+api_key_env = "OPENAI_API_KEY"
+
+[providers.anthropic]
+base_url = "https://api.anthropic.com"
+api_key_env = "ANTHROPIC_API_KEY"
+
+# Prices for models missing from the built-in list, or that changed since it was checked:
+# [[pricing]]
+# provider = "anthropic"
+# model = "claude-sonnet-5"
+# input_per_mtok = 3.0
+# output_per_mtok = 15.0
+
+[[orgs]]
+id = "demo"
+fail_mode = "open"
+
+# Policies inherit org -> project. Modes: skip | check (shadow: allow + warn) | enforce.
+[orgs.budgets]
+org_monthly = { limit_usd = 200.0, mode = "enforce" }
+project_monthly = { limit_usd = 100.0, mode = "enforce" }
+agent_daily = { limit_usd = 20.0, mode = "check" }
+run = { limit_usd = 2.0, mode = "check" }
+max_run_usd = 10.0
+
+[[orgs.projects]]
+id = "support-bot"
+# sha256 of the dev-only key "tl_dev_support_bot_key_change_me"; never use it outside local dev.
+virtual_key_hashes = ["efecd1d2d2c5a6c4f93f91ce03f782928bd1301c1a243ef8894fa84e868b285e"]

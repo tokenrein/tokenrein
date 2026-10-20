@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TokenLens — know what your AI costs, before the invoice does</title>
+<style>
+  :root { --bg:#0b0e14; --panel:#121723; --ink:#e8ecf4; --muted:#9aa5b8; --accent:#5ee6c6; --border:#232a3b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 20px; }
+  header { padding: 64px 0 32px; text-align:center; }
+  h1 { font-size: 2.4rem; margin: 0 0 12px; }
+  p.lead { color: var(--muted); font-size: 1.1rem; max-width: 640px; margin: 0 auto; }
+  .plans { display:grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap:16px; margin: 40px 0; }
+  .plan { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:24px; }
+  .plan h3 { margin:0 0 4px; }
+  .plan .price { font-size:2rem; font-weight:700; margin: 8px 0; }
+  .plan .price span { font-size:1rem; color:var(--muted); font-weight:400; }
+  .plan ul { color:var(--muted); padding-left: 18px; margin: 16px 0; }
+  .plan button { width:100%; padding:10px; border-radius:8px; border:1px solid var(--accent); background:transparent; color:var(--accent); cursor:pointer; font-size:1rem; }
+  .plan button:hover { background:var(--accent); color:#06120f; }
+  table.compare { width:100%; border-collapse:collapse; margin: 32px 0 64px; font-size:0.95rem; }
+  table.compare th, table.compare td { border:1px solid var(--border); padding:10px 12px; text-align:left; }
+  table.compare th { background:var(--panel); }
+  .us { color: var(--accent); font-weight:600; }
+  #signup-email { padding:10px; border-radius:8px; border:1px solid var(--border); background:#0e1320; color:var(--ink); width:100%; margin-bottom:12px; }
+  footer { color:var(--muted); text-align:center; padding: 24px 0 48px; font-size:0.85rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Know what your AI costs, before the invoice does.</h1>
+    <p class="lead">Drop-in LLM cost &amp; usage tracking with budgets, alerts, and caching — at a third of what the big observability platforms charge.</p>
+  </header>
+
+  <input id="signup-email" type="email" placeholder="you@company.com" />
+
+  <div class="plans" id="plans"></div>
+
+  <table class="compare">
+    <thead><tr><th>Provider</th><th>Entry paid tier</th></tr></thead>
+    <tbody>
+      <tr><td class="us">TokenLens</td><td class="us">$15/mo</td></tr>
+      <tr><td>Portkey</td><td>$49/mo</td></tr>
+      <tr><td>Helicone</td><td>$79/mo</td></tr>
+      <tr><td>LangSmith</td><td>$39/seat/mo</td></tr>
+      <tr><td>Langfuse Cloud</td><td>$199/mo (Pro)</td></tr>
+      <tr><td>Braintrust</td><td>$249/mo</td></tr>
+    </tbody>
+  </table>
+
+  <footer>Not affiliated with Langfuse, Helicone, Portkey, LangSmith, or Braintrust. Built on open-source components under their respective licenses.</footer>
+</div>
+
+<script>
+async function loadPlans() {
+  const res = await fetch('/pricing.json');
+  const data = await res.json();
+  const el = document.getElementById('plans');
+  el.innerHTML = data.plans.map(p => `
+    <div class="plan">
+      <h3>${p.name}</h3>
+      <div class="price">$${p.priceMonthly}<span>/mo</span></div>
+      <ul><li>${p.observationsIncluded.toLocaleString()} observations/mo included</li></ul>
+      <button data-plan="${p.id}">Get started</button>
+    </div>
+  `).join('');
+  el.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => checkout(btn.dataset.plan)));
+}
+
+async function checkout(planId) {
+  const email = document.getElementById('signup-email').value.trim();
+  if (!email) { alert('Enter your email first.'); return; }
+  const res = await fetch('/billing/checkout', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, planId }),
+  });
+  const data = await res.json();
+  if (data.url) window.location.href = data.url;
+  else alert(data.error || 'Something went wrong.');
+}
+
+loadPlans();
+</script>
+</body>
+</html>

@@ -1,0 +1,478 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use anyhow::{Result, anyhow};
+use redis::aio::ConnectionManager;
+use redis::{AsyncCommands, Script};
+
+use crate::config::Mode;
+
+pub const RUN_TTL_SECS: u64 = 7 * 24 * 3600;
+pub const DAILY_TTL_SECS: u64 = 3 * 24 * 3600;
+pub const MONTHLY_TTL_SECS: u64 = 40 * 24 * 3600;
+pub const MAX_RUN_DEPTH: usize = 16;
+const DONE_TTL_SECS: u64 = 24 * 3600;
+const RESPONSE_TTL_SECS: u64 = 30 * 24 * 3600;
+const ANCESTRY_CACHE_MAX: usize = 100_000;
+
+// Every key for an org shares the `{org}` hash tag, so all keys a script touches live in one cluster slot.
+const RESERVE_LUA: &str = r#"
+local n = tonumber(ARGV[1])
+local m = tonumber(ARGV[2])
+local est = tonumber(ARGV[3])
+local req = ARGV[4]
+local expire_at = tonumber(ARGV[5])
+local record_ttl = tonumber(ARGV[6])
+for j = 1, m do
+  local st = redis.call('GET', KEYS[n + j])
+  if st then return {'stopped', tostring(j), st} end
+end
+local exceeded = {}
+for i = 1, n do
+  local key = KEYS[i]
+  local base = 6 + (i - 1) * 3
+  local spec = ARGV[base + 1]
+  local limit, mode
+  if spec == 'stored' then
+    limit = tonumber(redis.call('HGET', key, 'limit') or '-1')
+    mode = redis.call('HGET', key, 'mode') or 'skip'
+  elseif string.sub(spec, 1, 3) == 'nx:' then
+    redis.call('HSETNX', key, 'limit', string.sub(spec, 4))
+    redis.call('HSETNX', key, 'mode', ARGV[base + 2])
+    limit = tonumber(redis.call('HGET', key, 'limit'))
+    mode = redis.call('HGET', key, 'mode')
+  else
+    limit = tonumber(spec)
+    mode = ARGV[base + 2]
+    redis.call('HSET', key, 'limit', spec, 'mode', mode)
+  end
+  if limit >= 0 and mode ~= 'skip' then
+    local spent = tonumber(redis.call('HGET', key, 'spent') or '0')
+    local reserved = tonumber(redis.call('HGET', key, 'reserved') or '0')
+    if spent + reserved + est > limit then
+      if mode == 'enforce' then
+        return {'over', tostring(i), tostring(spent), tostring(reserved), tostring(limit)}
+      end
+      table.insert(exceeded, tostring(i))
+    end
+  end
+end
+local names = {}
+for i = 1, n do
+  redis.call('HINCRBY', KEYS[i], 'reserved', est)
+  redis.call('EXPIRE', KEYS[i], tonumber(ARGV[6 + (i - 1) * 3 + 3]))
+  table.insert(names, KEYS[i])
+end
+local res_key = KEYS[n + m + 1]
+redis.call('HSET', res_key, 'est', est, 'keys', table.concat(names, '\n'))
+redis.call('EXPIRE', res_key, record_ttl)
+redis.call('ZADD', KEYS[n + m + 2], expire_at, req)
+return {'ok', table.concat(exceeded, ',')}
+"#;
+
+// KEYS: reservation, expiry zset, done marker, budget keys...; ARGV: request id, actual, done ttl, then one ttl per budget key.
+const SETTLE_LUA: &str = r#"
+if not redis.call('SET', KEYS[3], '1', 'NX', 'EX', tonumber(ARGV[3])) then
+  return 'duplicate'
+end
+local actual = tonumber(ARGV[2])
+local est = redis.call('HGET', KEYS[1], 'est')
+for i = 4, #KEYS do
+  if est then redis.call('HINCRBY', KEYS[i], 'reserved', -tonumber(est)) end
+  redis.call('HINCRBY', KEYS[i], 'spent', actual)
+  redis.call('EXPIRE', KEYS[i], tonumber(ARGV[i]))
+end
+redis.call('DEL', KEYS[1])
+redis.call('ZREM', KEYS[2], ARGV[1])
+if est then return 'settled' end
+return 'late'
+"#;
+
+// KEYS: reservation, expiry zset, budget keys...; ARGV: request id.
+const RELEASE_LUA: &str = r#"
+local est = redis.call('HGET', KEYS[1], 'est')
+if est then
+  for i = 3, #KEYS do
+    if redis.call('EXISTS', KEYS[i]) == 1 then
+      redis.call('HINCRBY', KEYS[i], 'reserved', -tonumber(est))
+    end
+  end
+end
+redis.call('DEL', KEYS[1])
+redis.call('ZREM', KEYS[2], ARGV[1])
+if est then return 1 end
+return 0
+"#;
+
+pub fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+pub struct Keys<'a> {
+    org: &'a str,
+}
+
+impl<'a> Keys<'a> {
+    pub fn new(org: &'a str) -> Self {
+        Self { org }
+    }
+    pub fn run_budget(&self, run: &str) -> String {
+        format!("tl:{{{}}}:b:run:{run}", self.org)
+    }
+    pub fn agent_daily(&self, project: &str, agent: &str, ymd: &str) -> String {
+        format!("tl:{{{}}}:b:agent:{project}:{agent}:d:{ymd}", self.org)
+    }
+    pub fn project_monthly(&self, project: &str, ym: &str) -> String {
+        format!("tl:{{{}}}:b:proj:{project}:m:{ym}", self.org)
+    }
+    pub fn org_monthly(&self, ym: &str) -> String {
+        format!("tl:{{{}}}:b:org:m:{ym}", self.org)
+    }
+    pub fn run_parent(&self, run: &str) -> String {
+        format!("tl:{{{}}}:rp:{run}", self.org)
+    }
+    pub fn run_state(&self, run: &str) -> String {
+        format!("tl:{{{}}}:rs:{run}", self.org)
+    }
+    pub fn reservation(&self, request_id: &str) -> String {
+        format!("tl:{{{}}}:res:{request_id}", self.org)
+    }
+    pub fn reservation_expiry(&self) -> String {
+        format!("tl:{{{}}}:resexp", self.org)
+    }
+    pub fn done(&self, request_id: &str) -> String {
+        format!("tl:{{{}}}:done:{request_id}", self.org)
+    }
+    pub fn response_tokens(&self, response_id: &str) -> String {
+        format!("tl:{{{}}}:resp:{response_id}", self.org)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LimitSpec {
+    /// Track spend only.
+    Unlimited,
+    /// Overwrite limit and mode on every request (period budgets follow the current policy).
+    Set(u64),
+    /// Fix limit and mode the first time the run is seen.
+    SetIfAbsent(u64),
+    /// Use whatever limit and mode the run was created with.
+    Stored,
+}
+
+impl LimitSpec {
+    fn arg(&self) -> String {
+        match self {
+            LimitSpec::Unlimited => "-1".into(),
+            LimitSpec::Set(n) => n.to_string(),
+            LimitSpec::SetIfAbsent(n) => format!("nx:{n}"),
+            LimitSpec::Stored => "stored".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Scope {
+    pub label: String,
+    pub key: String,
+    pub limit: LimitSpec,
+    pub mode: Mode,
+    pub ttl_secs: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reservation {
+    Allowed {
+        check_exceeded: Vec<String>,
+    },
+    OverBudget {
+        label: String,
+        spent: i64,
+        reserved: i64,
+        limit: i64,
+    },
+    RunStopped {
+        run_id: String,
+        state: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Settlement {
+    Settled,
+    Late,
+    Duplicate,
+}
+
+pub struct Ledger {
+    conn: ConnectionManager,
+    reserve: Script,
+    settle: Script,
+    release: Script,
+    ancestry: Mutex<HashMap<String, Arc<Vec<String>>>>,
+}
+
+fn lua_num(s: &str) -> i64 {
+    s.parse::<f64>().map(|f| f as i64).unwrap_or(0)
+}
+
+impl Ledger {
+    pub async fn connect(url: &str) -> Result<Self> {
+        let client = redis::Client::open(url)?;
+        let conn = ConnectionManager::new(client).await?;
+        Ok(Self {
+            conn,
+            reserve: Script::new(RESERVE_LUA),
+            settle: Script::new(SETTLE_LUA),
+            release: Script::new(RELEASE_LUA),
+            ancestry: Mutex::new(HashMap::new()),
+        })
+    }
+
+    pub async fn ping(&self) -> Result<()> {
+        let mut conn = self.conn.clone();
+        let _: String = redis::cmd("PING").query_async(&mut conn).await?;
+        Ok(())
+    }
+
+    /// Atomically checks run state and every scope, then reserves `estimate` micro-USD on all of them or none.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn reserve(
+        &self,
+        org: &str,
+        request_id: &str,
+        estimate: u64,
+        scopes: &[Scope],
+        runs: &[String],
+        expire_at: i64,
+        record_ttl_secs: u64,
+    ) -> Result<Reservation> {
+        let keys = Keys::new(org);
+        let mut inv = self.reserve.prepare_invoke();
+        for s in scopes {
+            inv.key(&s.key);
+        }
+        for r in runs {
+            inv.key(keys.run_state(r));
+        }
+        inv.key(keys.reservation(request_id))
+            .key(keys.reservation_expiry());
+        inv.arg(scopes.len())
+            .arg(runs.len())
+            .arg(estimate)
+            .arg(request_id)
+            .arg(expire_at)
+            .arg(record_ttl_secs);
+        for s in scopes {
+            inv.arg(s.limit.arg()).arg(s.mode.as_str()).arg(s.ttl_secs);
+        }
+        let mut conn = self.conn.clone();
+        let out: Vec<String> = inv.invoke_async(&mut conn).await?;
+        let index = |i: Option<&String>| {
+            i.and_then(|s| s.parse::<usize>().ok())
+                .and_then(|i| i.checked_sub(1))
+        };
+        match out.first().map(String::as_str) {
+            Some("ok") => {
+                let check_exceeded = out
+                    .get(1)
+                    .map(|list| {
+                        list.split(',')
+                            .filter_map(|i| i.parse::<usize>().ok()?.checked_sub(1))
+                            .filter_map(|i| scopes.get(i))
+                            .map(|s| s.label.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Ok(Reservation::Allowed { check_exceeded })
+            }
+            Some("over") => {
+                let scope = index(out.get(1))
+                    .and_then(|i| scopes.get(i))
+                    .ok_or_else(|| anyhow!("bad reserve reply {out:?}"))?;
+                Ok(Reservation::OverBudget {
+                    label: scope.label.clone(),
+                    spent: lua_num(out.get(2).map(String::as_str).unwrap_or("0")),
+                    reserved: lua_num(out.get(3).map(String::as_str).unwrap_or("0")),
+                    limit: lua_num(out.get(4).map(String::as_str).unwrap_or("0")),
+                })
+            }
+            Some("stopped") => {
+                let run_id = index(out.get(1))
+                    .and_then(|i| runs.get(i))
+                    .ok_or_else(|| anyhow!("bad reserve reply {out:?}"))?;
+                Ok(Reservation::RunStopped {
+                    run_id: run_id.clone(),
+                    state: out.get(2).cloned().unwrap_or_default(),
+                })
+            }
+            _ => Err(anyhow!("unexpected reserve reply {out:?}")),
+        }
+    }
+
+    /// Replaces the reservation with the actual cost; idempotent per request id, and still records spend if the reservation already expired.
+    pub async fn settle(
+        &self,
+        org: &str,
+        request_id: &str,
+        actual: u64,
+        scopes: &[Scope],
+    ) -> Result<Settlement> {
+        let keys = Keys::new(org);
+        let mut inv = self.settle.prepare_invoke();
+        inv.key(keys.reservation(request_id))
+            .key(keys.reservation_expiry())
+            .key(keys.done(request_id));
+        for s in scopes {
+            inv.key(&s.key);
+        }
+        inv.arg(request_id).arg(actual).arg(DONE_TTL_SECS);
+        for s in scopes {
+            inv.arg(s.ttl_secs);
+        }
+        let mut conn = self.conn.clone();
+        let out: String = inv.invoke_async(&mut conn).await?;
+        Ok(match out.as_str() {
+            "settled" => Settlement::Settled,
+            "late" => Settlement::Late,
+            _ => Settlement::Duplicate,
+        })
+    }
+
+    /// Releases reservations whose requests died without settling.
+    pub async fn sweep(&self, org: &str, now: i64, limit: usize) -> Result<usize> {
+        let keys = Keys::new(org);
+        let expiry = keys.reservation_expiry();
+        let mut conn = self.conn.clone();
+        let ids: Vec<String> = redis::cmd("ZRANGEBYSCORE")
+            .arg(&expiry)
+            .arg("-inf")
+            .arg(now)
+            .arg("LIMIT")
+            .arg(0)
+            .arg(limit)
+            .query_async(&mut conn)
+            .await?;
+        let mut released = 0;
+        for id in ids {
+            let res_key = keys.reservation(&id);
+            let budget_keys: Option<String> = conn.hget(&res_key, "keys").await?;
+            let mut inv = self.release.prepare_invoke();
+            inv.key(&res_key).key(&expiry);
+            for k in budget_keys
+                .as_deref()
+                .unwrap_or("")
+                .split('\n')
+                .filter(|k| !k.is_empty())
+            {
+                inv.key(k);
+            }
+            inv.arg(&id);
+            let n: i64 = inv.invoke_async(&mut conn).await?;
+            released += n as usize;
+        }
+        Ok(released)
+    }
+
+    /// Registers `run`'s parent (first one wins) and returns its ancestors, nearest first.
+    pub async fn ancestors(&self, org: &str, run: &str, parent: &str) -> Result<Arc<Vec<String>>> {
+        let cache_key = format!("{org}\u{0}{run}");
+        if let Some(hit) = self.cache().get(&cache_key) {
+            return Ok(hit.clone());
+        }
+        let keys = Keys::new(org);
+        let mut conn = self.conn.clone();
+        let _: Option<String> = redis::cmd("SET")
+            .arg(keys.run_parent(run))
+            .arg(parent)
+            .arg("NX")
+            .arg("EX")
+            .arg(RUN_TTL_SECS)
+            .query_async(&mut conn)
+            .await?;
+        let mut chain: Vec<String> = Vec::new();
+        let mut cur = run.to_string();
+        while chain.len() < MAX_RUN_DEPTH {
+            let next: Option<String> = conn.get(keys.run_parent(&cur)).await?;
+            match next {
+                Some(p) if p != run && !chain.contains(&p) => {
+                    chain.push(p.clone());
+                    cur = p;
+                }
+                _ => break,
+            }
+        }
+        let chain = Arc::new(chain);
+        let mut cache = self.cache();
+        if cache.len() >= ANCESTRY_CACHE_MAX {
+            cache.clear();
+        }
+        cache.insert(cache_key, chain.clone());
+        Ok(chain)
+    }
+
+    fn cache(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Vec<String>>>> {
+        self.ancestry.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub async fn response_context_tokens(
+        &self,
+        org: &str,
+        response_id: &str,
+    ) -> Result<Option<u64>> {
+        let mut conn = self.conn.clone();
+        Ok(conn
+            .get(Keys::new(org).response_tokens(response_id))
+            .await?)
+    }
+
+    pub async fn remember_response_tokens(
+        &self,
+        org: &str,
+        response_id: &str,
+        tokens: u64,
+    ) -> Result<()> {
+        let mut conn = self.conn.clone();
+        let _: () = conn
+            .set_ex(
+                Keys::new(org).response_tokens(response_id),
+                tokens,
+                RESPONSE_TTL_SECS,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn run_state(&self, org: &str, run: &str) -> Result<Option<String>> {
+        let mut conn = self.conn.clone();
+        Ok(conn.get(Keys::new(org).run_state(run)).await?)
+    }
+
+    pub async fn set_run_state(&self, org: &str, run: &str, state: &str) -> Result<()> {
+        let mut conn = self.conn.clone();
+        let _: () = conn
+            .set_ex(Keys::new(org).run_state(run), state, RUN_TTL_SECS)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn clear_run_state(&self, org: &str, run: &str) -> Result<()> {
+        let mut conn = self.conn.clone();
+        let _: () = conn.del(Keys::new(org).run_state(run)).await?;
+        Ok(())
+    }
+
+    pub async fn run_parent(&self, org: &str, run: &str) -> Result<Option<String>> {
+        let mut conn = self.conn.clone();
+        Ok(conn.get(Keys::new(org).run_parent(run)).await?)
+    }
+
+    pub async fn budget(&self, key: &str) -> Result<HashMap<String, String>> {
+        let mut conn = self.conn.clone();
+        Ok(conn.hgetall(key).await?)
+    }
+}
