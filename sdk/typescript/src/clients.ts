@@ -17,6 +17,8 @@ export const DEFAULT_BASE_URL = 'http://127.0.0.1:8787';
 export interface GuardOptions {
   /** Agent name sent as `x-tl-agent` (per-agent daily budget). */
   agent?: string;
+  /** Person or service the agent works for, sent as `x-tl-user` (spend reports). */
+  user?: string;
   /** TokenLens virtual key; defaults to `process.env.TOKENLENS_API_KEY`. */
   apiKey?: string;
   /** Proxy URL; defaults to `process.env.TOKENLENS_BASE_URL` or `http://127.0.0.1:8787`. */
@@ -84,22 +86,29 @@ function deleteHeader(h: HeaderBag, name: string): void {
   for (const k of Object.keys(h)) if (k.toLowerCase() === name) delete (h as Record<string, unknown>)[k];
 }
 
-function tlHeaders(agent: string | undefined): Record<string, string> {
+function tlHeaders(agent: string | undefined, user: string | undefined): Record<string, string> {
   const run = currentRun();
   const h: Record<string, string> = run ? run.headers() : {};
   const name = agent ?? run?.agent;
   if (name) h['x-tl-agent'] = name;
+  const who = user ?? run?.user;
+  if (who) h['x-tl-user'] = who;
   return h;
 }
 
-function guardedClass(Base: ClientClass, agent: string | undefined, stripBearer: boolean): ClientClass {
+function guardedClass(
+  Base: ClientClass,
+  agent: string | undefined,
+  user: string | undefined,
+  stripBearer: boolean,
+): ClientClass {
   // Request options objects already counted. SDK retries reuse the options object; older
   // SDKs (openai < 4.6x) do not pass `retryCount`, so this is how their retries are skipped.
   const counted = new WeakSet<object>();
   const guardRequest = (built: BuiltRequest, options: unknown, opts: { retryCount?: number }): BuiltRequest => {
     const req = built.req;
     req.headers ??= {};
-    for (const [name, value] of Object.entries(tlHeaders(agent))) {
+    for (const [name, value] of Object.entries(tlHeaders(agent, user))) {
       // Headers the caller set explicitly (request headers / defaultHeaders) win.
       if (!hasHeader(req.headers, name)) setHeader(req.headers, name, value);
     }
@@ -146,6 +155,7 @@ export function wrap<T>(client: T, opts: GuardOptions, provider: 'openai' | 'ant
     throw new TypeError(`guard.${provider}() needs an ${provider === 'openai' ? 'OpenAI' : 'Anthropic'} client instance`);
   }
   if (opts.agent !== undefined) validateId(opts.agent, 'agent');
+  if (opts.user !== undefined) validateId(opts.user, 'user');
   const stripBearer = provider === 'anthropic';
   const root = resolveBaseURL(opts.baseURL);
   const overrides = {
@@ -154,7 +164,7 @@ export function wrap<T>(client: T, opts: GuardOptions, provider: 'openai' | 'ant
     ...(stripBearer ? { authToken: null } : {}),
   };
   const Base = (c.constructor as ClientClass)[UNGUARDED] ?? (c.constructor as ClientClass);
-  const Guarded = guardedClass(Base, opts.agent, stripBearer);
+  const Guarded = guardedClass(Base, opts.agent, opts.user, stripBearer);
   if (typeof c.withOptions !== 'function') {
     return new Guarded({ ...c._options, ...overrides }) as T;
   }

@@ -109,6 +109,7 @@ struct Ctx {
     org: String,
     project: String,
     agent: String,
+    user: Option<String>,
     run_id: String,
     parent_run_id: Option<String>,
     api: Api,
@@ -195,6 +196,11 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         Ok(a) => a.unwrap_or_else(|| "default".into()),
         Err(m) => return reject(StatusCode::BAD_REQUEST, "tokenlens_invalid_request", &m),
     };
+    // The person or service on whose behalf the agent runs; for spend reports only.
+    let user = match header_id(&headers, "x-tl-user") {
+        Ok(u) => u,
+        Err(m) => return reject(StatusCode::BAD_REQUEST, "tokenlens_invalid_request", &m),
+    };
     let run_budget_header = match headers.get("x-tl-run-budget-usd") {
         None => None,
         Some(v) => match v
@@ -219,14 +225,24 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         Err(m) => return reject(StatusCode::BAD_REQUEST, "tokenlens_invalid_request", &m),
     };
     let provider = api.provider();
-    let (Some(base), Some(api_key)) = (rt.upstream_base(provider), rt.provider_key(oi, provider))
-    else {
+    let Some(base) = rt.upstream_base(provider) else {
         return reject(
             StatusCode::BAD_REQUEST,
             "tokenlens_provider_not_configured",
             &format!(
                 "provider {} is not configured on this proxy",
                 provider.name()
+            ),
+        );
+    };
+    let Some(api_key) = rt.provider_key(oi, provider) else {
+        return reject(
+            StatusCode::BAD_REQUEST,
+            "tokenlens_provider_not_configured",
+            &format!(
+                "no {} API key for org {}: add one in the TokenLens dashboard",
+                provider.name(),
+                org.id
             ),
         );
     };
@@ -316,6 +332,7 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         org: org.id.clone(),
         project: project.id.clone(),
         agent,
+        user,
         run_id: run_id.clone(),
         parent_run_id: parent,
         api,
@@ -756,6 +773,7 @@ fn emit(st: &AppState, ctx: &Ctx, o: &Outcome) {
         "org": ctx.org,
         "project": ctx.project,
         "agent": ctx.agent,
+        "user": ctx.user,
         "run_id": ctx.run_id,
         "parent_run_id": ctx.parent_run_id,
         "provider": ctx.api.provider().name(),

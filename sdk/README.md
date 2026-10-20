@@ -41,6 +41,7 @@ Inside `guard.run(...)` every request from a guarded client carries:
 | `x-tl-run-budget-usd` | `budget_usd` / `budgetUsd`, if set (the proxy fixes it on first use) |
 | `x-tl-parent-run-id` | the enclosing run's id, when runs are nested — sub-agent spend counts against every ancestor |
 | `x-tl-agent` | the client's `agent`, else the run's `agent` |
+| `x-tl-user` | the client's `user`, else the run's `user` (inherited by sub-agent runs) — for spend reports by user |
 
 Outside a run only `x-tl-agent` is sent and the proxy treats each request as its own run.
 Headers you set yourself on a request (`extra_headers` / `headers`) take precedence.

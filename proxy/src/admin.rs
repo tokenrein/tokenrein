@@ -13,10 +13,12 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::config::{
-    Budgets, FailMode, OrgConfig, ProjectConfig, VirtualKey, generate_virtual_key, valid_id,
+    Budgets, FailMode, OrgConfig, ProjectConfig, ProviderSecret, VirtualKey, generate_virtual_key,
+    valid_id, valid_provider_key,
 };
 use crate::control::{self, EditError};
 use crate::ledger::Keys;
+use crate::providers::Provider;
 use crate::proxy::AppState;
 
 const DASHBOARD_HTML: &str = include_str!("dashboard.html");
@@ -27,8 +29,24 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .route("/readyz", get(readyz))
         .route("/admin/overview", get(overview))
+        .route("/admin/packs", get(list_packs))
+        .route(
+            "/admin/orgs/{org}/projects/{project}/pack",
+            post(apply_pack),
+        )
+        .route(
+            "/admin/orgs/{org}/provider-keys/{provider}/test",
+            post(test_provider_key),
+        )
+        .route("/admin/orgs/{org}/review", get(review))
+        .route("/admin/orgs/{org}/spend", get(spend))
+        .route("/admin/orgs/{org}/runs/{run}/timeline", get(run_timeline))
         .route("/admin/orgs", post(create_org))
         .route("/admin/orgs/{org}", put(update_org).delete(delete_org))
+        .route(
+            "/admin/orgs/{org}/provider-keys/{provider}",
+            put(set_provider_key).delete(remove_provider_key),
+        )
         .route("/admin/orgs/{org}/projects", post(create_project))
         .route(
             "/admin/orgs/{org}/projects/{project}",
@@ -195,7 +213,15 @@ async fn overview(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
         .cfg
         .orgs
         .iter()
-        .map(|org| {
+        .enumerate()
+        .map(|(oi, org)| {
+            let providers: serde_json::Map<String, Value> = [Provider::OpenAI, Provider::Anthropic]
+                .into_iter()
+                .map(|p| {
+                    let status = rt.provider_status(oi, p).map_or(Value::Null, |s| json!(s));
+                    (p.name().to_string(), status)
+                })
+                .collect();
             let org_spend = spend.next().map(budget_json);
             let projects: Vec<Value> = org
                 .projects
@@ -219,6 +245,7 @@ async fn overview(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
                     }));
                     json!({
                         "id": p.id,
+                        "pack": p.pack,
                         "budgets": p.budgets,
                         "effective": Budgets::effective(&org.budgets, &p.budgets),
                         "keys": keys,
@@ -228,6 +255,7 @@ async fn overview(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
                 .collect();
             json!({
                 "id": org.id,
+                "providers": providers,
                 "fail_mode": org.fail_mode,
                 "budgets": org.budgets,
                 "spend": { "org_monthly": org_spend },
@@ -239,6 +267,8 @@ async fn overview(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respon
     Json(json!({
         "version": version,
         "managed": version > 0,
+        "secrets_enabled": rt.secrets().is_some(),
+        "secrets_key_env": rt.cfg.server.secrets_key_env,
         "month": ym,
         "day": now.format("%Y%m%d").to_string(),
         "orgs": orgs,
@@ -314,6 +344,7 @@ async fn create_org(
             fail_mode: body.fail_mode.unwrap_or_default(),
             budgets: body.budgets.unwrap_or_default(),
             provider_key_env: HashMap::new(),
+            provider_secrets: HashMap::new(),
             projects: Vec::new(),
         });
         Ok(id)
@@ -393,6 +424,7 @@ async fn create_project(
             virtual_key_hashes: Vec::new(),
             keys: Vec::new(),
             budgets: body.budgets.unwrap_or_default(),
+            pack: None,
         });
         Ok(id)
     })
@@ -524,6 +556,413 @@ async fn revoke_key(
     }
 }
 
+// --- Provider API keys (stored encrypted; never returned) ---
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderKeyBody {
+    api_key: String,
+}
+
+async fn set_provider_key(
+    State(st): State<Arc<AppState>>,
+    Path((org, provider)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<ProviderKeyBody>,
+) -> Response {
+    if let Err(r) = authorize_org(&st, &headers, &org) {
+        return r;
+    }
+    let Some(p) = Provider::from_name(&provider) else {
+        return err(StatusCode::NOT_FOUND, "unknown provider");
+    };
+    let rt = st.rt();
+    if rt.upstream_base(p).is_none() {
+        return err(
+            StatusCode::CONFLICT,
+            &format!("add a [providers.{provider}] section to the proxy config first"),
+        );
+    }
+    let Some(secrets) = rt.secrets() else {
+        return err(
+            StatusCode::CONFLICT,
+            &format!(
+                "set {} on the proxy (e.g. `openssl rand -hex 32`) and restart it to save provider keys here",
+                rt.cfg.server.secrets_key_env
+            ),
+        );
+    };
+    let key = body.api_key.trim();
+    if !valid_provider_key(key) {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "API key must be 8-512 printable characters without spaces",
+        );
+    }
+    let sealed = match secrets.seal(&crate::secrets::context(&org, p.name()), key) {
+        Ok(s) => s,
+        Err(e) => return unavailable(e),
+    };
+    let saved = ProviderSecret {
+        sealed,
+        last4: key
+            .chars()
+            .rev()
+            .take(4)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect(),
+        updated_at: Utc::now().to_rfc3339(),
+    };
+    let last4 = saved.last4.clone();
+    let result = control::edit(&st, |orgs| {
+        find_org(orgs, &org)?
+            .provider_secrets
+            .insert(p.name().to_string(), saved);
+        Ok(())
+    })
+    .await;
+    match result {
+        Ok(()) => Json(json!({ "provider": p.name(), "source": "dashboard", "last4": last4 }))
+            .into_response(),
+        Err(e) => edit_error(e),
+    }
+}
+
+async fn remove_provider_key(
+    State(st): State<Arc<AppState>>,
+    Path((org, provider)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(r) = authorize_org(&st, &headers, &org) {
+        return r;
+    }
+    let Some(p) = Provider::from_name(&provider) else {
+        return err(StatusCode::NOT_FOUND, "unknown provider");
+    };
+    let result = control::edit(&st, |orgs| {
+        match find_org(orgs, &org)?.provider_secrets.remove(p.name()) {
+            Some(_) => Ok(()),
+            None => Err(EditError::NotFound("no key saved for this provider".into())),
+        }
+    })
+    .await;
+    match result {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => edit_error(e),
+    }
+}
+
+// --- Guardrail packs ---
+
+async fn list_packs(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if let Err(r) = check_token(&st, &headers) {
+        return r;
+    }
+    Json(json!({ "packs": crate::packs::all() })).into_response()
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PackBody {
+    pack: String,
+}
+
+/// Replace a project's budgets with a pack's (all in Check mode).
+async fn apply_pack(
+    State(st): State<Arc<AppState>>,
+    Path((org, project)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<PackBody>,
+) -> Response {
+    if let Err(r) = authorize_org(&st, &headers, &org) {
+        return r;
+    }
+    let Some(pack) = crate::packs::find(&body.pack) else {
+        return err(StatusCode::NOT_FOUND, "unknown pack");
+    };
+    let result = control::edit(&st, |orgs| {
+        let p = find_project(orgs, &org, &project)?;
+        p.budgets = pack.budgets.clone();
+        p.pack = Some(pack.id.to_string());
+        Ok(())
+    })
+    .await;
+    match result {
+        Ok(()) => Json(json!({ "project": project, "pack": pack.id, "budgets": pack.budgets }))
+            .into_response(),
+        Err(e) => edit_error(e),
+    }
+}
+
+// --- Provider key check ---
+
+/// Ask the provider to list models with the org's key: free, and proves the key works.
+async fn test_provider_key(
+    State(st): State<Arc<AppState>>,
+    Path((org, provider)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(r) = authorize_org(&st, &headers, &org) {
+        return r;
+    }
+    let Some(p) = Provider::from_name(&provider) else {
+        return err(StatusCode::NOT_FOUND, "unknown provider");
+    };
+    let rt = st.rt();
+    let Some(oi) = rt.cfg.orgs.iter().position(|o| o.id == org) else {
+        return err(StatusCode::NOT_FOUND, "unknown org");
+    };
+    let (Some(base), Some(key)) = (rt.upstream_base(p), rt.provider_key(oi, p)) else {
+        return Json(json!({ "ok": false, "message": "no key set for this provider" }))
+            .into_response();
+    };
+    let req = st
+        .http
+        .get(format!("{base}/v1/models?limit=1"))
+        .timeout(std::time::Duration::from_secs(10));
+    let req = match p {
+        Provider::OpenAI => req.bearer_auth(key),
+        Provider::Anthropic => req
+            .header("x-api-key", key)
+            .header("anthropic-version", "2023-06-01"),
+    };
+    let (ok, status, message) = match req.send().await {
+        Ok(r) if r.status().is_success() => {
+            (true, Some(r.status().as_u16()), "key works".to_string())
+        }
+        Ok(r) if matches!(r.status().as_u16(), 401 | 403) => (
+            false,
+            Some(r.status().as_u16()),
+            "the provider rejected this key".to_string(),
+        ),
+        Ok(r) => (
+            false,
+            Some(r.status().as_u16()),
+            format!("the provider answered HTTP {}", r.status().as_u16()),
+        ),
+        Err(e) if e.is_timeout() => (
+            false,
+            None,
+            "the provider did not answer in 10 seconds".into(),
+        ),
+        Err(_) => (false, None, "could not reach the provider".into()),
+    };
+    Json(json!({ "ok": ok, "status": status, "message": message })).into_response()
+}
+
+// --- Check-mode review: what Enforce would have blocked ---
+
+#[derive(Default)]
+struct ReviewGroup {
+    requests: i64,
+    cost_micros: i64,
+    runs: Vec<String>,
+    agents: Vec<String>,
+    first_ts: Option<String>,
+    last_ts: Option<String>,
+}
+
+async fn review(
+    State(st): State<Arc<AppState>>,
+    Path(org): Path<String>,
+    Query(q): Query<ListQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(r) = authorize_org(&st, &headers, &org) {
+        return r;
+    }
+    let events = match st
+        .ledger
+        .recent_events(&org, q.limit.unwrap_or(5000).clamp(100, 5000))
+        .await
+    {
+        Ok(e) => e,
+        Err(e) => return unavailable(e),
+    };
+    // (policy, project) -> group
+    let mut groups: std::collections::BTreeMap<(String, String), ReviewGroup> = Default::default();
+    // Per event: the limits it exceeded, and its cost.
+    let mut event_groups: Vec<(Vec<(String, String)>, i64)> = Vec::new();
+    for e in &events {
+        let Some(labels) = e.get("check_exceeded").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        let s = |k: &str| e.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        // One request can exceed several scopes of the same limit (its run and every ancestor
+        // run); count it once per limit.
+        let mut hit: Vec<(String, String)> = Vec::new();
+        for label in labels.iter().filter_map(|l| l.as_str()) {
+            let (policy, project) = match label.split_once(':') {
+                Some(("run", _)) => ("run", s("project")),
+                Some(("agent_daily", rest)) => (
+                    "agent_daily",
+                    rest.split_once('/').map_or(rest, |(p, _)| p).to_string(),
+                ),
+                Some(("project_monthly", p)) => ("project_monthly", p.to_string()),
+                _ if label == "org_monthly" => ("org_monthly", String::new()),
+                _ => continue,
+            };
+            let key = (policy.to_string(), project);
+            if !hit.contains(&key) {
+                hit.push(key);
+            }
+        }
+        if !hit.is_empty() {
+            event_groups.push((
+                hit.clone(),
+                e.get("actual_micros").and_then(|v| v.as_i64()).unwrap_or(0),
+            ));
+        }
+        for key in hit {
+            let g = groups.entry(key).or_default();
+            g.requests += 1;
+            g.cost_micros += e.get("actual_micros").and_then(|v| v.as_i64()).unwrap_or(0);
+            let run = s("run_id");
+            if !g.runs.contains(&run) {
+                g.runs.push(run);
+            }
+            let agent = s("agent");
+            if !g.agents.contains(&agent) {
+                g.agents.push(agent);
+            }
+            let ts = s("ts");
+            // Events arrive newest first.
+            if g.last_ts.is_none() {
+                g.last_ts = Some(ts.clone());
+            }
+            g.first_ts = Some(ts);
+        }
+    }
+    let rt = st.rt();
+    let org_cfg = rt.cfg.orgs.iter().find(|o| o.id == org);
+    let current_policy = |policy: &str, project: &str| {
+        let o = org_cfg?;
+        let p = o.projects.iter().find(|p| p.id == project);
+        let b = Budgets::effective(&o.budgets, p.map_or(&Budgets::default(), |p| &p.budgets));
+        match policy {
+            "run" => b.run,
+            "agent_daily" => b.agent_daily,
+            "project_monthly" => b.project_monthly,
+            "org_monthly" => b.org_monthly,
+            _ => None,
+        }
+    };
+    let in_check = |(policy, project): &(String, String)| {
+        current_policy(policy, project).is_some_and(|c| c.mode == crate::config::Mode::Check)
+    };
+    let (mut total_requests, mut total_cost) = (0i64, 0i64);
+    for (hit, cost) in &event_groups {
+        if hit.iter().any(in_check) {
+            total_requests += 1;
+            total_cost += cost;
+        }
+    }
+    let items: Vec<Value> = groups
+        .into_iter()
+        .map(|((policy, project), g)| {
+            let current = current_policy(&policy, &project);
+            json!({
+                "policy": policy,
+                "project": if project.is_empty() { Value::Null } else { json!(project) },
+                "requests": g.requests,
+                "cost_micros": g.cost_micros,
+                "run_count": g.runs.len(),
+                "runs": g.runs.iter().take(5).collect::<Vec<_>>(),
+                "agents": g.agents.iter().take(5).collect::<Vec<_>>(),
+                "first_ts": g.first_ts,
+                "last_ts": g.last_ts,
+                "current": current,
+            })
+        })
+        .collect();
+    Json(json!({
+        "events_scanned": events.len(),
+        "oldest_ts": events.last().and_then(|e| e.get("ts")),
+        // Distinct requests that at least one limit still in Check mode would have blocked.
+        "check_requests": total_requests,
+        "check_cost_micros": total_cost,
+        "items": items,
+    }))
+    .into_response()
+}
+
+// --- Spend analytics (from recorded activity; budgets stay authoritative in the ledger) ---
+
+#[derive(Deserialize)]
+struct SpendQuery {
+    days: Option<u32>,
+}
+
+async fn spend(
+    State(st): State<Arc<AppState>>,
+    Path(org): Path<String>,
+    Query(q): Query<SpendQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(r) = authorize_org(&st, &headers, &org) {
+        return r;
+    }
+    let n = q.days.unwrap_or(30).clamp(1, 40) as i64;
+    let today = Utc::now().date_naive();
+    let days: Vec<String> = (0..n)
+        .rev()
+        .map(|i| {
+            (today - chrono::Duration::days(i))
+                .format("%Y%m%d")
+                .to_string()
+        })
+        .collect();
+    let hashes = match st.ledger.spend_days(&org, &days).await {
+        Ok(h) => h,
+        Err(e) => return unavailable(e),
+    };
+    // dim -> value -> [cost, requests, blocked]
+    let mut by: HashMap<String, HashMap<String, [i64; 3]>> = HashMap::new();
+    let mut series = Vec::with_capacity(days.len());
+    for (day, h) in days.iter().zip(&hashes) {
+        let mut total = [0i64; 3];
+        for (field, v) in h {
+            let Some((dim, rest)) = field.split_once(':') else {
+                continue;
+            };
+            let Some((value, kind)) = rest.rsplit_once(':') else {
+                continue;
+            };
+            let i = match kind {
+                "c" => 0,
+                "n" => 1,
+                "b" => 2,
+                _ => continue,
+            };
+            by.entry(dim.to_string())
+                .or_default()
+                .entry(value.to_string())
+                .or_default()[i] += v;
+            // Each request is counted once per dimension; total it from one of them.
+            if dim == "project" {
+                total[i] += v;
+            }
+        }
+        series.push(json!({ "day": day, "cost_micros": total[0], "requests": total[1], "blocked": total[2] }));
+    }
+    let breakdown: serde_json::Map<String, Value> = ["model", "user", "project", "agent"]
+        .into_iter()
+        .map(|dim| {
+            let mut rows: Vec<(String, [i64; 3])> = by.remove(dim).unwrap_or_default().into_iter().collect();
+            rows.sort_by(|a, b| b.1[0].cmp(&a.1[0]).then(b.1[1].cmp(&a.1[1])));
+            let rows: Vec<Value> = rows
+                .into_iter()
+                .take(50)
+                .map(|(k, v)| json!({ "key": k, "cost_micros": v[0], "requests": v[1], "blocked": v[2] }))
+                .collect();
+            (dim.to_string(), json!(rows))
+        })
+        .collect();
+    Json(json!({ "days": series, "by": breakdown })).into_response()
+}
+
 // --- Activity: runs, agents and request events ---
 
 #[derive(Deserialize)]
@@ -632,6 +1071,44 @@ async fn list_events(
         Ok(events) => Json(json!({ "events": events })).into_response(),
         Err(e) => unavailable(e),
     }
+}
+
+async fn run_timeline(
+    State(st): State<Arc<AppState>>,
+    Path((org, run)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(r) = authorize(&st, &headers, &org, &run) {
+        return r;
+    }
+    let (runs, events) = match st.ledger.run_timeline(&org, &run, 200).await {
+        Ok(t) => t,
+        Err(e) => return unavailable(e),
+    };
+    let details = match st.ledger.run_details(&org, &runs).await {
+        Ok(d) => d,
+        Err(e) => return unavailable(e),
+    };
+    let runs: Vec<Value> = runs
+        .iter()
+        .zip(details)
+        .map(|(id, d)| {
+            let num = |k: &str| d.info.get(k).and_then(|v| v.parse::<i64>().ok());
+            json!({
+                "run_id": id,
+                "parent_run_id": d.parent.or_else(|| d.info.get("parent").cloned()),
+                "state": d.state.unwrap_or_else(|| "running".into()),
+                "project": d.info.get("project"),
+                "agent": d.info.get("agent"),
+                "requests": num("requests").unwrap_or(0),
+                "blocked": num("blocked").unwrap_or(0),
+                "first_seen": num("first_seen"),
+                "last_seen": num("last_seen"),
+                "budget": budget_json(&d.budget),
+            })
+        })
+        .collect();
+    Json(json!({ "run_id": run, "runs": runs, "events": events })).into_response()
 }
 
 // --- Single runs: state, pause / resume / kill ---

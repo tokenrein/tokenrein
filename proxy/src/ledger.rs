@@ -163,6 +163,18 @@ impl<'a> Keys<'a> {
     pub fn agents_seen(&self) -> String {
         format!("tl:{{{}}}:agents", self.org)
     }
+    /// The latest request events of one run, newest first.
+    pub fn run_events(&self, run: &str) -> String {
+        format!("tl:{{{}}}:re:{run}", self.org)
+    }
+    /// Runs whose parent is `run`.
+    pub fn run_children(&self, run: &str) -> String {
+        format!("tl:{{{}}}:rc:{run}", self.org)
+    }
+    /// Spend and request counts for one UTC day, by model, user, project and agent.
+    pub fn spend_day(&self, ymd: &str) -> String {
+        format!("tl:{{{}}}:sp:{ymd}", self.org)
+    }
     pub fn response_tokens(&self, response_id: &str) -> String {
         format!("tl:{{{}}}:resp:{response_id}", self.org)
     }
@@ -544,6 +556,7 @@ impl Ledger {
 
     pub async fn record_activity(&self, events: &[serde_json::Value]) -> Result<()> {
         let now = unix_now();
+        let ymd = chrono::Utc::now().format("%Y%m%d").to_string();
         let mut pipe = redis::pipe();
         for e in events {
             let s = |k: &str| e.get(k).and_then(|v| v.as_str()).unwrap_or("");
@@ -577,7 +590,36 @@ impl Ledger {
             .ignore();
             if let Some(p) = e.get("parent_run_id").and_then(|v| v.as_str()) {
                 pipe.hset(&info, "parent", p).ignore();
+                let children = keys.run_children(p);
+                pipe.sadd(&children, run).ignore();
+                pipe.expire(&children, RUN_TTL_SECS as i64).ignore();
             }
+            let run_events = keys.run_events(run);
+            pipe.lpush(&run_events, e.to_string()).ignore();
+            pipe.ltrim(&run_events, 0, RUN_EVENTS_MAX as isize - 1)
+                .ignore();
+            pipe.expire(&run_events, RUN_TTL_SECS as i64).ignore();
+
+            let spend = keys.spend_day(&ymd);
+            let cost = e.get("actual_micros").and_then(|v| v.as_i64()).unwrap_or(0);
+            let blocked = s("decision").starts_with("blocked");
+            let model = format!("{}/{}", s("provider"), s("model"));
+            let user = e.get("user").and_then(|v| v.as_str()).unwrap_or("-");
+            let agent_key = format!("{project}/{agent}");
+            for (dim, value) in [
+                ("model", model.as_str()),
+                ("user", user),
+                ("project", project),
+                ("agent", agent_key.as_str()),
+            ] {
+                pipe.hincr(&spend, format!("{dim}:{value}:c"), cost)
+                    .ignore();
+                pipe.hincr(&spend, format!("{dim}:{value}:n"), 1).ignore();
+                if blocked {
+                    pipe.hincr(&spend, format!("{dim}:{value}:b"), 1).ignore();
+                }
+            }
+            pipe.expire(&spend, MONTHLY_TTL_SECS as i64).ignore();
             pipe.hset(&info, "last_seen", now).ignore();
             pipe.hset_nx(&info, "first_seen", now).ignore();
             pipe.hincr(&info, "requests", 1).ignore();
@@ -648,6 +690,77 @@ impl Ledger {
             .await?)
     }
 
+    /// Events of `root` and its descendant runs (up to `max_runs` runs), oldest first.
+    pub async fn run_timeline(
+        &self,
+        org: &str,
+        root: &str,
+        max_runs: usize,
+    ) -> Result<(Vec<String>, Vec<serde_json::Value>)> {
+        let keys = Keys::new(org);
+        let mut conn = self.conn.clone();
+        let mut runs = vec![root.to_string()];
+        let mut frontier = vec![root.to_string()];
+        for _ in 0..MAX_RUN_DEPTH {
+            if frontier.is_empty() || runs.len() >= max_runs {
+                break;
+            }
+            let mut pipe = redis::pipe();
+            for r in &frontier {
+                pipe.smembers(keys.run_children(r));
+            }
+            let kids: Vec<Vec<String>> = pipe.query_async(&mut conn).await?;
+            frontier = Vec::new();
+            for k in kids.into_iter().flatten() {
+                if runs.len() >= max_runs {
+                    break;
+                }
+                if !runs.contains(&k) {
+                    runs.push(k.clone());
+                    frontier.push(k);
+                }
+            }
+        }
+        let mut pipe = redis::pipe();
+        for r in &runs {
+            pipe.lrange(keys.run_events(r), 0, -1);
+        }
+        let lists: Vec<Vec<String>> = pipe.query_async(&mut conn).await?;
+        let mut events: Vec<serde_json::Value> = lists
+            .into_iter()
+            .flatten()
+            .filter_map(|e| serde_json::from_str(&e).ok())
+            .collect();
+        events.sort_by(|a, b| {
+            let ts = |v: &serde_json::Value| {
+                v.get("ts")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_string()
+            };
+            ts(a).cmp(&ts(b))
+        });
+        Ok((runs, events))
+    }
+
+    /// Spend hashes for the given UTC days (`YYYYMMDD`).
+    pub async fn spend_days(
+        &self,
+        org: &str,
+        days: &[String],
+    ) -> Result<Vec<HashMap<String, i64>>> {
+        let keys: Vec<String> = days.iter().map(|d| Keys::new(org).spend_day(d)).collect();
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut pipe = redis::pipe();
+        for k in &keys {
+            pipe.hgetall(k);
+        }
+        let mut conn = self.conn.clone();
+        Ok(pipe.query_async(&mut conn).await?)
+    }
+
     /// Newest request events first.
     pub async fn recent_events(&self, org: &str, limit: usize) -> Result<Vec<serde_json::Value>> {
         let mut conn = self.conn.clone();
@@ -678,6 +791,7 @@ pub struct RunDetail {
 const CONTROL_ORGS: &str = "tl:control:orgs";
 const CONTROL_VERSION: &str = "tl:control:version";
 const EVENTS_MAX: usize = 5000;
+const RUN_EVENTS_MAX: usize = 500;
 
 // KEYS: doc, version; ARGV: expected version, new doc. Returns the new version or -1.
 const CONTROL_CAS_LUA: &str = r#"

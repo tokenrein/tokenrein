@@ -163,6 +163,19 @@ describe('run headers', () => {
     expect(proxy.requests.map((r) => r.headers['x-tl-agent'])).toEqual(['client-agent', 'run-agent', undefined]);
   });
 
+  it('sends the user from the client or the run, inherited by child runs', async () => {
+    const named = openaiClient({ user: 'alice' });
+    const unnamed = openaiClient();
+    await guard.run({ runId: 'u1', user: 'bob' }, async () => {
+      await chat(named);
+      await chat(unnamed);
+      await guard.run('u2', () => chat(unnamed));
+    });
+    await chat(unnamed);
+    expect(proxy.requests.map((r) => r.headers['x-tl-user'])).toEqual(['alice', 'bob', 'bob', undefined]);
+    expect(() => guard.run({ user: 'not valid' }, () => 0)).toThrow(TypeError);
+  });
+
   it('explicit request headers win', async () => {
     const c = openaiClient({ agent: 'bot' });
     await guard.run('r', () => chat(c, {}, { 'x-tl-run-id': 'manual', 'x-tl-agent': 'manual-agent' }));

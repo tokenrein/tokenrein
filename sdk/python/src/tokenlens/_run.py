@@ -42,6 +42,7 @@ class Run:
         agent: Optional[str] = None,
         max_calls: Optional[int] = None,
         parent: Optional["Run"] = None,
+        user: Optional[str] = None,
     ) -> None:
         self.run_id = validate_id(run_id, "run_id") if run_id is not None else new_run_id()
         if budget_usd is not None:
@@ -51,6 +52,11 @@ class Run:
                 raise ValueError("budget_usd must be a positive number of US dollars")
         self.budget_usd = budget_usd
         self.agent = validate_id(agent, "agent") if agent is not None else None
+        # The person or service the run works for; child runs inherit it.
+        if user is not None:
+            self.user: Optional[str] = validate_id(user, "user")
+        else:
+            self.user = parent.user if parent is not None else None
         if max_calls is not None and (isinstance(max_calls, bool) or not isinstance(max_calls, int) or max_calls < 1):
             raise ValueError("max_calls must be a positive integer")
         self.max_calls = max_calls
@@ -110,17 +116,18 @@ class RunScope:
         budget_usd: Optional[float],
         agent: Optional[str],
         max_calls: Optional[int],
+        user: Optional[str] = None,
     ) -> None:
         # Validate eagerly so a bad argument fails at the call site.
-        Run(run_id, budget_usd, agent=agent, max_calls=max_calls)
-        self._args = (run_id, budget_usd, agent, max_calls)
+        Run(run_id, budget_usd, agent=agent, max_calls=max_calls, user=user)
+        self._args = (run_id, budget_usd, agent, max_calls, user)
         self._token: Optional[contextvars.Token[Optional[Run]]] = None
 
     def __enter__(self) -> Run:
         if self._token is not None:
             raise RuntimeError("this guard.run() scope is already active; create a new one")
-        run_id, budget_usd, agent, max_calls = self._args
-        run = Run(run_id, budget_usd, agent=agent, max_calls=max_calls, parent=_current.get())
+        run_id, budget_usd, agent, max_calls, user = self._args
+        run = Run(run_id, budget_usd, agent=agent, max_calls=max_calls, parent=_current.get(), user=user)
         self._token = _current.set(run)
         return run
 

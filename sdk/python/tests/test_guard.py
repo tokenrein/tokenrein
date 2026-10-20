@@ -342,3 +342,17 @@ def test_sdk_retries_do_not_count_against_cap(proxy):
             chat(client)
     assert len(proxy.requests) == 3
     assert run.calls == 1
+
+
+def test_user_header_from_client_or_run_and_inherited_by_child_runs(proxy):
+    named = openai_client(user="alice")
+    unnamed = openai_client()
+    with guard.run("u1", user="bob"):
+        chat(named)
+        chat(unnamed)
+        with guard.run("u2"):
+            chat(unnamed)
+    chat(unnamed)
+    assert [r["headers"].get("x-tl-user") for r in proxy.requests] == ["alice", "bob", "bob", None]
+    with pytest.raises(ValueError):
+        guard.run(user="not valid")

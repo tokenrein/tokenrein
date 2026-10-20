@@ -61,6 +61,9 @@ async fn main() -> Result<()> {
     control::init(&state)
         .await
         .context("loading managed orgs, keys and budgets from Redis")?;
+    for missing in &state.rt().missing_provider_keys {
+        tracing::warn!("no provider API key: {missing}; calls to it fail until one is set");
+    }
     control::spawn_sync(state.clone());
     spawn_sweeper(state.clone());
 

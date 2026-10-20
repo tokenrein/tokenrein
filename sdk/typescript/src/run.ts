@@ -29,6 +29,11 @@ export interface RunOptions {
   /** Agent name for clients wrapped without `agent`. Not inherited by child runs. */
   agent?: string;
   /**
+   * Person or service the run works for (`x-tl-user`), for spend reports by user. Inherited by
+   * child runs; a client's own `user` takes precedence.
+   */
+  user?: string;
+  /**
    * Local fallback cap: at most this many requests in this run (including its child runs),
    * counted in this process and enforced even if the proxy is unreachable. Exceeding it
    * throws {@link LocalCapExceeded} before the request is sent. SDK retries are not counted.
@@ -41,6 +46,7 @@ export class Run {
   readonly runId: string;
   readonly budgetUsd: number | undefined;
   readonly agent: string | undefined;
+  readonly user: string | undefined;
   readonly maxCalls: number | undefined;
   readonly parent: Run | undefined;
   #calls = 0;
@@ -56,6 +62,7 @@ export class Run {
     }
     this.budgetUsd = budgetUsd;
     this.agent = options.agent !== undefined ? validateId(options.agent, 'agent') : undefined;
+    this.user = options.user !== undefined ? validateId(options.user, 'user') : parent?.user;
     this.maxCalls = maxCalls;
     this.parent = parent;
     if (parent && parent.runId === this.runId) {

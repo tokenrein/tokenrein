@@ -39,14 +39,17 @@ def resolve_api_key(api_key: Optional[str]) -> str:
     return key
 
 
-def _tl_headers(agent: Optional[str]) -> Dict[str, str]:
+def _tl_headers(agent: Optional[str], user: Optional[str]) -> Dict[str, str]:
     run = _current.get()
     h: Dict[str, str] = {}
     if run is not None:
         h.update(run.headers())
         agent = agent or run.agent
+        user = user or run.user
     if agent:
         h["x-tl-agent"] = agent
+    if user:
+        h["x-tl-user"] = user
     return h
 
 
@@ -59,7 +62,7 @@ def _guarded_class(base: type, *, strip_bearer: bool) -> type:
 
     def _build_request(self: Any, options: Any, *args: Any, **kwargs: Any) -> Any:
         request = super(cls, self)._build_request(options, *args, **kwargs)  # type: ignore[misc]
-        for name, value in _tl_headers(self._tl_agent).items():
+        for name, value in _tl_headers(self._tl_agent, self._tl_user).items():
             # Headers the caller set explicitly (extra_headers / default_headers) win.
             if name not in request.headers:
                 request.headers[name] = value
@@ -80,12 +83,14 @@ def _guarded_class(base: type, *, strip_bearer: bool) -> type:
     def copy(self: Any, *args: Any, **kwargs: Any) -> Any:
         client = super(cls, self).copy(*args, **kwargs)  # type: ignore[misc]
         client._tl_agent = self._tl_agent
+        client._tl_user = self._tl_user
         client._tl_source = self._tl_source
         return client
 
     namespace: Dict[str, Any] = {
         "_tl_guarded": True,
         "_tl_agent": None,
+        "_tl_user": None,
         "_tl_source": None,
         "_build_request": _build_request,
         "_make_status_error": _make_status_error,
@@ -102,12 +107,23 @@ def _guarded_class(base: type, *, strip_bearer: bool) -> type:
     return cls
 
 
-def wrap(client: Any, *, base_url: str, api_key: str, agent: Optional[str], strip_bearer: bool) -> Any:
+def wrap(
+    client: Any,
+    *,
+    base_url: str,
+    api_key: str,
+    agent: Optional[str],
+    strip_bearer: bool,
+    user: Optional[str] = None,
+) -> Any:
     if agent is not None:
         validate_id(agent, "agent")
+    if user is not None:
+        validate_id(user, "user")
     guarded = client.with_options(api_key=api_key, base_url=base_url)
     guarded.__class__ = _guarded_class(type(client), strip_bearer=strip_bearer)
     guarded._tl_agent = agent
+    guarded._tl_user = user
     # Copies share the original's HTTP client, and older SDKs (e.g. openai 1.0) close it when
     # the original client is garbage-collected; keep the original alive with the copy.
     guarded._tl_source = getattr(client, "_tl_source", None) or client

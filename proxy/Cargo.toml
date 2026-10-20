@@ -13,6 +13,7 @@ name = "tokenlens-proxy"
 path = "src/main.rs"
 
 [dependencies]
+aes-gcm = "0.10"
 anyhow = "1"
 axum = "0.8"
 bytes = "1"

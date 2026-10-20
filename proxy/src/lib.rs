@@ -2,9 +2,11 @@ pub mod admin;
 pub mod config;
 pub mod control;
 pub mod ledger;
+pub mod packs;
 pub mod pricing;
 pub mod providers;
 pub mod proxy;
+pub mod secrets;
 
 use std::sync::Arc;
 use std::time::Duration;

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::providers::Provider;
+use crate::secrets::SecretBox;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -79,6 +80,9 @@ pub struct ServerConfig {
     pub admin_listen: String,
     #[serde(default = "default_admin_token_env")]
     pub admin_token_env: String,
+    /// Env var holding the 32-byte hex key that encrypts provider API keys saved from the dashboard.
+    #[serde(default = "default_secrets_key_env")]
+    pub secrets_key_env: String,
     #[serde(default = "default_upstream_timeout")]
     pub upstream_timeout_secs: u64,
     #[serde(default = "default_max_output")]
@@ -92,6 +96,9 @@ fn default_admin_listen() -> String {
 }
 fn default_admin_token_env() -> String {
     "TL_ADMIN_TOKEN".into()
+}
+fn default_secrets_key_env() -> String {
+    "TL_SECRETS_KEY".into()
 }
 fn default_upstream_timeout() -> u64 {
     600
@@ -146,6 +153,9 @@ pub struct ProjectConfig {
     pub keys: Vec<VirtualKey>,
     #[serde(default)]
     pub budgets: Budgets,
+    /// The guardrail pack last applied to this project, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -179,8 +189,41 @@ pub struct OrgConfig {
     pub budgets: Budgets,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub provider_key_env: HashMap<String, String>,
+    /// Provider API keys saved from the dashboard, encrypted; they take precedence over the
+    /// environment. Keyed by provider name.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub provider_secrets: HashMap<String, ProviderSecret>,
     #[serde(default)]
     pub projects: Vec<ProjectConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderSecret {
+    /// See [`crate::secrets::SecretBox::seal`].
+    pub sealed: String,
+    /// The key's last four characters, to tell keys apart.
+    pub last4: String,
+    pub updated_at: String,
+}
+
+/// Where an org's key for one provider comes from, for the dashboard. Never holds the key.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderKeyStatus {
+    /// The provider has a `[providers.*]` section in the config file.
+    pub configured: bool,
+    /// "dashboard", "environment", or None when there is no key.
+    pub source: Option<&'static str>,
+    pub env_var: Option<String>,
+    pub last4: Option<String>,
+    pub updated_at: Option<String>,
+    /// Why a saved key cannot be used (e.g. the secrets key is missing or changed).
+    pub error: Option<String>,
+}
+
+/// Provider API keys go into HTTP headers: printable ASCII, no spaces.
+pub fn valid_provider_key(s: &str) -> bool {
+    (8..=512).contains(&s.len()) && s.bytes().all(|b| (0x21..=0x7e).contains(&b))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -203,7 +246,11 @@ pub struct Resolved {
     pub cfg: Config,
     pub keys: HashMap<String, (usize, usize)>,
     provider_keys: HashMap<(usize, Provider), String>,
+    provider_status: HashMap<(usize, Provider), ProviderKeyStatus>,
+    /// Human-readable list of org/provider pairs with no usable key.
+    pub missing_provider_keys: Vec<String>,
     pub admin_token: Option<String>,
+    secrets: Option<Arc<SecretBox>>,
     env: EnvFn,
 }
 
@@ -278,35 +325,79 @@ impl Resolved {
             }
         }
 
+        let secrets = match env(&cfg.server.secrets_key_env) {
+            Some(k) if !k.trim().is_empty() => {
+                Some(Arc::new(SecretBox::from_hex(&k).with_context(|| {
+                    format!("invalid {}", cfg.server.secrets_key_env)
+                })?))
+            }
+            _ => None,
+        };
+
         let mut provider_keys = HashMap::new();
+        let mut provider_status = HashMap::new();
         let mut missing = Vec::new();
         for (provider, pc) in [
             (Provider::OpenAI, &cfg.providers.openai),
             (Provider::Anthropic, &cfg.providers.anthropic),
         ] {
-            let Some(pc) = pc else { continue };
             for (oi, org) in cfg.orgs.iter().enumerate() {
-                let var = org
-                    .provider_key_env
-                    .get(provider.name())
-                    .unwrap_or(&pc.api_key_env);
-                match env(var) {
-                    Some(v) if !v.is_empty() => {
+                let mut status = ProviderKeyStatus {
+                    configured: pc.is_some(),
+                    source: None,
+                    env_var: None,
+                    last4: None,
+                    updated_at: None,
+                    error: None,
+                };
+                if let Some(pc) = pc {
+                    let var = org
+                        .provider_key_env
+                        .get(provider.name())
+                        .unwrap_or(&pc.api_key_env);
+                    status.env_var = Some(var.clone());
+                    if let Some(v) = env(var).filter(|v| !v.is_empty()) {
                         provider_keys.insert((oi, provider), v);
+                        status.source = Some("environment");
                     }
-                    _ => missing.push(format!(
-                        "{var} ({} key for org {})",
-                        provider.name(),
-                        org.id
-                    )),
+                    if let Some(saved) = org.provider_secrets.get(provider.name()) {
+                        let opened = match &secrets {
+                            None => Err(format!(
+                                "saved key cannot be decrypted: {} is not set",
+                                cfg.server.secrets_key_env
+                            )),
+                            Some(b) => b
+                                .open(
+                                    &crate::secrets::context(&org.id, provider.name()),
+                                    &saved.sealed,
+                                )
+                                .map_err(|e| format!("saved key cannot be used: {e}")),
+                        };
+                        status.last4 = Some(saved.last4.clone());
+                        status.updated_at = Some(saved.updated_at.clone());
+                        match opened {
+                            Ok(key) => {
+                                provider_keys.insert((oi, provider), key);
+                                status.source = Some("dashboard");
+                            }
+                            Err(e) => status.error = Some(e),
+                        }
+                    }
+                    if status.source.is_none() {
+                        missing.push(format!(
+                            "{} key for org {} (set {var} or save one in the dashboard)",
+                            provider.name(),
+                            org.id
+                        ));
+                    }
+                }
+                provider_status.insert((oi, provider), status);
+            }
+            for name in cfg.orgs.iter().flat_map(|o| o.provider_secrets.keys()) {
+                if Provider::from_name(name).is_none() {
+                    bail!("unknown provider {name:?} in provider_secrets");
                 }
             }
-        }
-        if !missing.is_empty() {
-            bail!(
-                "missing provider API keys in the environment: {}",
-                missing.join(", ")
-            );
         }
 
         let admin_token = env(&cfg.server.admin_token_env).filter(|t| t.len() >= 16);
@@ -314,7 +405,10 @@ impl Resolved {
             cfg,
             keys,
             provider_keys,
+            provider_status,
+            missing_provider_keys: missing,
             admin_token,
+            secrets,
             env,
         })
     }
@@ -323,6 +417,19 @@ impl Resolved {
         self.provider_keys
             .get(&(org_idx, provider))
             .map(String::as_str)
+    }
+
+    pub fn provider_status(
+        &self,
+        org_idx: usize,
+        provider: Provider,
+    ) -> Option<&ProviderKeyStatus> {
+        self.provider_status.get(&(org_idx, provider))
+    }
+
+    /// Encrypts provider keys saved from the dashboard; None when the secrets key is not set.
+    pub fn secrets(&self) -> Option<&SecretBox> {
+        self.secrets.as_deref()
     }
 
     pub fn upstream_base(&self, provider: Provider) -> Option<&str> {
@@ -435,12 +542,64 @@ mod tests {
     }
 
     #[test]
-    fn missing_provider_key_fails_fast() {
-        let err = Resolved::from_toml(BASE, |_| None)
-            .err()
+    fn missing_provider_key_is_reported_not_fatal() {
+        // The proxy must start without provider keys so they can be added from the dashboard.
+        let rt = Resolved::from_toml(BASE, |_| None).unwrap();
+        assert_eq!(rt.provider_key(0, Provider::OpenAI), None);
+        assert!(rt.missing_provider_keys[0].contains("OPENAI_API_KEY"));
+        assert_eq!(
+            rt.provider_status(0, Provider::OpenAI).unwrap().source,
+            None
+        );
+    }
+
+    #[test]
+    fn saved_provider_keys_override_the_environment() {
+        const SK: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+        let with_secret = |name: &str| match name {
+            "OPENAI_API_KEY" => Some("sk-env".to_string()),
+            "TL_SECRETS_KEY" => Some(SK.to_string()),
+            _ => None,
+        };
+        let rt = Resolved::from_toml(BASE, with_secret).unwrap();
+        let mut orgs = rt.cfg.orgs.clone();
+        let sealed = rt
+            .secrets()
             .unwrap()
-            .to_string();
-        assert!(err.contains("OPENAI_API_KEY"), "{err}");
+            .seal(&crate::secrets::context("acme", "openai"), "sk-dashboard")
+            .unwrap();
+        orgs[0].provider_secrets.insert(
+            "openai".into(),
+            ProviderSecret {
+                sealed,
+                last4: "oard".into(),
+                updated_at: "now".into(),
+            },
+        );
+        let rt = rt.with_orgs(orgs.clone()).unwrap();
+        assert_eq!(rt.provider_key(0, Provider::OpenAI), Some("sk-dashboard"));
+        assert_eq!(
+            rt.provider_status(0, Provider::OpenAI).unwrap().source,
+            Some("dashboard")
+        );
+
+        // Without the secrets key the saved key is unusable; the environment key is used.
+        let no_secret = Resolved::from_toml(BASE, env)
+            .unwrap()
+            .with_orgs(orgs)
+            .unwrap();
+        assert_eq!(no_secret.provider_key(0, Provider::OpenAI), Some("sk-test"));
+        let st = no_secret.provider_status(0, Provider::OpenAI).unwrap();
+        assert_eq!(st.source, Some("environment"));
+        assert!(st.error.as_deref().unwrap().contains("TL_SECRETS_KEY"));
+    }
+
+    #[test]
+    fn provider_keys_must_be_header_safe() {
+        assert!(valid_provider_key("sk-ant-api03-abcdefgh"));
+        assert!(!valid_provider_key("short"));
+        assert!(!valid_provider_key("sk-ant-abc def"));
+        assert!(!valid_provider_key("sk-ant-abc\r\nX-Evil: 1"));
     }
 
     #[test]

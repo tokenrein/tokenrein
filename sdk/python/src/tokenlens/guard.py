@@ -26,12 +26,14 @@ def openai(
     agent: Optional[str] = None,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
+    user: Optional[str] = None,
 ) -> Any:
     """Return a copy of an ``openai.OpenAI`` / ``openai.AsyncOpenAI`` client that talks to TokenLens.
 
     Args:
         client: The client to copy. ``None`` creates an ``openai.OpenAI()``.
         agent: Agent name sent as ``x-tl-agent`` (per-agent daily budget).
+        user: Person or service the agent works for, sent as ``x-tl-user`` (spend reports).
         api_key: TokenLens virtual key; defaults to ``$TOKENLENS_API_KEY``.
         base_url: Proxy URL; defaults to ``$TOKENLENS_BASE_URL`` or ``http://127.0.0.1:8787``.
     """
@@ -41,7 +43,7 @@ def openai(
         import openai as openai_sdk
 
         client = openai_sdk.OpenAI(api_key=key, base_url=url)
-    return _clients.wrap(client, base_url=url, api_key=key, agent=agent, strip_bearer=False)
+    return _clients.wrap(client, base_url=url, api_key=key, agent=agent, strip_bearer=False, user=user)
 
 
 def anthropic(
@@ -50,6 +52,7 @@ def anthropic(
     agent: Optional[str] = None,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
+    user: Optional[str] = None,
 ) -> Any:
     """Return a copy of an ``anthropic.Anthropic`` / ``anthropic.AsyncAnthropic`` client that talks
     to TokenLens. Arguments are the same as :func:`openai`."""
@@ -59,7 +62,7 @@ def anthropic(
         import anthropic as anthropic_sdk
 
         client = anthropic_sdk.Anthropic(api_key=key, base_url=url)
-    return _clients.wrap(client, base_url=url, api_key=key, agent=agent, strip_bearer=True)
+    return _clients.wrap(client, base_url=url, api_key=key, agent=agent, strip_bearer=True, user=user)
 
 
 def run(
@@ -68,6 +71,7 @@ def run(
     *,
     agent: Optional[str] = None,
     max_calls: Optional[int] = None,
+    user: Optional[str] = None,
 ) -> RunScope:
     """Scope every request made inside it to one run.
 
@@ -83,5 +87,7 @@ def run(
         max_calls: Local fallback cap: at most this many requests in this run (including its
             child runs), counted in this process, enforced even if the proxy is unreachable.
             Exceeding it raises :class:`tokenlens.LocalCapExceeded` before the request is sent.
+        user: Person or service the run works for (``x-tl-user``), for spend reports by user.
+            Inherited by child runs; a client's own ``user`` takes precedence.
     """
-    return RunScope(run_id, budget_usd, agent, max_calls)
+    return RunScope(run_id, budget_usd, agent, max_calls, user)
