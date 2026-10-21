@@ -14,11 +14,19 @@ from .errors import LOCAL_CAP_EXCEEDED, LocalCapExceeded
 
 # Same rule the proxy applies to run ids and agent names.
 _ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+# Users may be emails.
+_USER_RE = re.compile(r"^[A-Za-z0-9._@+-]{1,128}$")
 
 # Guards call counters; runs may be shared across threads (asyncio.to_thread copies the context).
 _calls_lock = threading.Lock()
 
 _current: contextvars.ContextVar[Optional["Run"]] = contextvars.ContextVar("tokenlens_run", default=None)
+
+
+def validate_user(value: str) -> str:
+    if not isinstance(value, str) or not _USER_RE.match(value):
+        raise ValueError(f"user must be 1-128 letters, digits, '.', '_', '-', '@' or '+' (got {value!r})")
+    return value
 
 
 def validate_id(value: str, what: str) -> str:
@@ -54,7 +62,7 @@ class Run:
         self.agent = validate_id(agent, "agent") if agent is not None else None
         # The person or service the run works for; child runs inherit it.
         if user is not None:
-            self.user: Optional[str] = validate_id(user, "user")
+            self.user: Optional[str] = validate_user(user)
         else:
             self.user = parent.user if parent is not None else None
         if max_calls is not None and (isinstance(max_calls, bool) or not isinstance(max_calls, int) or max_calls < 1):

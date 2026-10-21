@@ -926,3 +926,68 @@ async fn claude_code_telemetry_and_hooks() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
 }
+
+#[tokio::test]
+async fn models_prices_and_the_connector_script() {
+    let Some(h) = H::start().await else { return };
+    // A call with a model nobody has priced yet.
+    let (s, _) = h
+        .ingest(
+            "/v1/usage",
+            json!({"events": [{"provider": "together", "model": "qwen3-coder-480b", "input_tokens": 1000, "output_tokens": 1000}]}),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let m = h
+        .eventually("/admin/models?org=acme", |b| {
+            !b["unpriced"].as_array().unwrap().is_empty()
+        })
+        .await;
+    assert_eq!(m["unpriced"][0]["model"], "qwen3-coder-480b");
+    assert!(m["rows"].as_array().unwrap().len() > 40);
+
+    let (s, body) = h
+        .admin(
+            Method::PUT,
+            "/admin/pricing",
+            Some(json!({"overrides": [{"provider": "together", "model": "qwen3-coder", "input_per_mtok": 0.9, "output_per_mtok": 1.8}]})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    let m = h.get("/admin/models?org=acme").await;
+    assert!(m["unpriced"].as_array().unwrap().is_empty(), "{m}");
+    assert_eq!(m["rows"][0]["source"], "override");
+    assert_eq!(m["rows"][0]["price"]["output"], 1_800_000);
+    // Survives a restart (stored with the managed config).
+    let other = instance(&h.redis_url, &h.upstream).await;
+    assert!(
+        other
+            .rt()
+            .prices
+            .lookup_any("together", "qwen3-coder-480b")
+            .1
+    );
+    let (s, _) = h
+        .admin(
+            Method::PUT,
+            "/admin/pricing",
+            Some(json!({"overrides": [{"provider": "x", "model": "m", "input_per_mtok": -1.0, "output_per_mtok": 1.0}]})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+
+    let script = h
+        .http
+        .get(format!("{}/connect/claude-code.py", h.admin))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(script.status(), StatusCode::OK);
+    assert!(
+        script
+            .text()
+            .await
+            .unwrap()
+            .contains("/v1/hooks/claude-code")
+    );
+}

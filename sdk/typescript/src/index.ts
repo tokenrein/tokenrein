@@ -1,4 +1,5 @@
 export * as guard from './guard.js';
+export { flush } from './direct.js';
 export { Run, currentRun, type RunOptions } from './run.js';
 export type { GuardOptions } from './clients.js';
 export {

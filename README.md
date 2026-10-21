@@ -158,6 +158,17 @@ done (or you hide it):
 5. Review and enforce: the Overview lists what Enforce **would have blocked** (requests, their
    cost, the runs) for every limit still in Check mode, with a **Switch to Enforce** button each.
 
+Setup pages:
+
+- **Connect**: pick what to guard. *Claude Code*: choose a project, click **Create key & show
+  command**, and run the one-line command it gives on the machine with Claude Code (it edits
+  `~/.claude/settings.json` with a backup; `--remove` undoes it). *Your app*: the SDK snippet
+  (direct mode). *Any tool with a base URL*: the proxy address for strict mode.
+- **Keys & limits**: provider keys, projects, TokenLens keys, budgets and packs.
+- **Models & prices**: every model TokenLens can price (search, filter by provider), models
+  used recently that have no price, and your own prices or overrides (US dollars per million
+  tokens; stored with the managed config, applied within seconds).
+
 Views:
 
 - **Overview**: this month's org and project spend against their limits, spend today, live agents,
@@ -212,6 +223,9 @@ org's Claude calls. A client that sends its own `anthropic-workspace-id` header 
 | `PUT` / `DELETE` | `/admin/orgs/{org}/provider-keys/{openai\|anthropic}` | Save `{api_key}` (encrypted) / remove it (falls back to the environment) |
 | `POST` | `/admin/orgs/{org}/provider-keys/{provider}/test` | Check the key with the provider's (free) model list |
 | `GET` | `/admin/packs` | Guardrail packs and their budgets |
+| `GET` | `/admin/models?org=` | Priced models (built-in and yours), models seen recently, unpriced ones |
+| `PUT` | `/admin/pricing` | Replace your price overrides `{overrides: [{provider, model, input_per_mtok, output_per_mtok, cached_input_per_mtok?, cache_write_per_mtok?}]}` |
+| `GET` | `/connect/claude-code.py` | The Claude Code connector script (no secrets; run with `--key`) |
 | `POST` | `/admin/orgs/{org}/projects/{project}/pack` | Apply `{pack}`: replaces the project's budgets, all in Check mode |
 | `GET` | `/admin/orgs/{org}/review` | What Enforce would have blocked: per limit, requests / cost / runs, from recent events |
 | `GET` | `/admin/orgs/{org}/spend?days=` | Cost and requests per day, and by model / user / project / agent (up to 40 days) |
@@ -247,7 +261,7 @@ request. Spend reports come from these events; budgets are always enforced from 
 cargo test
 ```
 
-64 tests: unit tests plus integration tests that start a real `redis-server` and a
+65 tests: unit tests plus integration tests that start a real `redis-server` and a
 fake OpenAI/Anthropic upstream. They include a concurrency test (500 parallel
 reservations against a budget that fits exactly 100 — exactly 100 succeed),
 streaming settlement for both providers, child-run spend counting against the

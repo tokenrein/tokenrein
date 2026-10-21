@@ -27,6 +27,8 @@ beforeEach(() => {
   proxy.reset();
   process.env.TOKENLENS_BASE_URL = proxy.url;
   process.env.TOKENLENS_API_KEY = 'tl_test_key';
+  // These tests exercise proxy mode; direct mode has its own tests.
+  process.env.TOKENLENS_MODE = 'proxy';
 });
 
 const openaiClient = (opts: guard.GuardOptions = {}) =>

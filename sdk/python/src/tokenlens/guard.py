@@ -14,10 +14,22 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from . import _clients
+import os
+
+from . import _clients, _direct
 from ._run import Run, RunScope, current_run
 
-__all__ = ["openai", "anthropic", "run", "current_run", "Run"]
+__all__ = ["openai", "anthropic", "run", "current_run", "Run", "flush"]
+
+#: Send every queued usage report now (direct mode). Reports are also flushed at exit.
+flush = _direct.flush
+
+
+def _mode(mode: Optional[str]) -> str:
+    m = (mode or os.environ.get("TOKENLENS_MODE") or "direct").lower()
+    if m not in ("direct", "proxy"):
+        raise ValueError("mode must be 'direct' or 'proxy'")
+    return m
 
 
 def openai(
@@ -27,17 +39,42 @@ def openai(
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
     user: Optional[str] = None,
+    mode: Optional[str] = None,
+    check: bool = True,
 ) -> Any:
-    """Return a copy of an ``openai.OpenAI`` / ``openai.AsyncOpenAI`` client that talks to TokenLens.
+    """Return a copy of an ``openai.OpenAI`` / ``openai.AsyncOpenAI`` client guarded by TokenLens.
+
+    Works with any provider the ``openai`` SDK reaches through ``base_url``: OpenAI, Azure,
+    Gemini, Groq, Mistral, DeepSeek, xAI, OpenRouter, Together, Ollama, vLLM, ...
 
     Args:
         client: The client to copy. ``None`` creates an ``openai.OpenAI()``.
-        agent: Agent name sent as ``x-tl-agent`` (per-agent daily budget).
-        user: Person or service the agent works for, sent as ``x-tl-user`` (spend reports).
-        api_key: TokenLens virtual key; defaults to ``$TOKENLENS_API_KEY``.
-        base_url: Proxy URL; defaults to ``$TOKENLENS_BASE_URL`` or ``http://127.0.0.1:8787``.
+        agent: Agent name (per-agent daily budget).
+        user: Person or service the agent works for, for spend reports by user (emails are fine).
+        api_key: TokenLens key; defaults to ``$TOKENLENS_API_KEY``.
+        base_url: TokenLens URL; defaults to ``$TOKENLENS_BASE_URL`` or ``http://127.0.0.1:8787``.
+        mode: ``"direct"`` (default, or ``$TOKENLENS_MODE``): the client keeps calling its
+            provider; TokenLens checks each call first and receives token usage afterwards,
+            never prompts. ``"proxy"``: calls go through the TokenLens proxy, which checks every
+            call before forwarding it (strict).
+        check: Direct mode only. Ask TokenLens before each call (default). ``False`` skips the
+            round trip and only stops runs that previous usage reports showed are over a limit.
     """
     key = _clients.resolve_api_key(api_key)
+    if _mode(mode) == "direct":
+        if client is None:
+            import openai as openai_sdk
+
+            client = openai_sdk.OpenAI()
+        return _clients.wrap_direct(
+            client,
+            tokenlens_url=_clients.resolve_base_url(base_url),
+            api_key=key,
+            agent=agent,
+            user=user,
+            default_provider="openai",
+            check=check,
+        )
     url = _clients.resolve_base_url(base_url) + "/v1"
     if client is None:
         import openai as openai_sdk
@@ -53,10 +90,26 @@ def anthropic(
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
     user: Optional[str] = None,
+    mode: Optional[str] = None,
+    check: bool = True,
 ) -> Any:
-    """Return a copy of an ``anthropic.Anthropic`` / ``anthropic.AsyncAnthropic`` client that talks
-    to TokenLens. Arguments are the same as :func:`openai`."""
+    """Return a copy of an ``anthropic.Anthropic`` / ``anthropic.AsyncAnthropic`` client guarded
+    by TokenLens. Arguments are the same as :func:`openai`."""
     key = _clients.resolve_api_key(api_key)
+    if _mode(mode) == "direct":
+        if client is None:
+            import anthropic as anthropic_sdk
+
+            client = anthropic_sdk.Anthropic()
+        return _clients.wrap_direct(
+            client,
+            tokenlens_url=_clients.resolve_base_url(base_url),
+            api_key=key,
+            agent=agent,
+            user=user,
+            default_provider="anthropic",
+            check=check,
+        )
     url = _clients.resolve_base_url(base_url)
     if client is None:
         import anthropic as anthropic_sdk

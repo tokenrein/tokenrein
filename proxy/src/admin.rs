@@ -22,10 +22,14 @@ use crate::providers::Provider;
 use crate::proxy::AppState;
 
 const DASHBOARD_HTML: &str = include_str!("dashboard.html");
+const CONNECT_CLAUDE_CODE: &str = include_str!("connect_claude_code.py");
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(dashboard))
+        .route("/connect/claude-code.py", get(connect_claude_code))
+        .route("/admin/models", get(list_models))
+        .route("/admin/pricing", put(set_pricing))
         .route("/healthz", get(|| async { "ok" }))
         .route("/readyz", get(readyz))
         .route("/admin/overview", get(overview))
@@ -83,6 +87,109 @@ async fn dashboard() -> Response {
     );
     h.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     resp
+}
+
+/// The Claude Code connector script. Holds no secrets; the key is passed as an argument.
+async fn connect_claude_code() -> Response {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            HeaderValue::from_static("text/x-python; charset=utf-8"),
+        )],
+        CONNECT_CLAUDE_CODE,
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct ModelsQuery {
+    org: Option<String>,
+}
+
+/// Every priced model, plus models seen recently that have no price (charged at the most
+/// expensive rate until one is added).
+async fn list_models(
+    State(st): State<Arc<AppState>>,
+    Query(q): Query<ModelsQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(r) = check_token(&st, &headers) {
+        return r;
+    }
+    let rt = st.rt();
+    let mut unpriced: Vec<Value> = Vec::new();
+    let mut seen_models: Vec<Value> = Vec::new();
+    if let Some(org) = q
+        .org
+        .as_deref()
+        .filter(|o| rt.cfg.orgs.iter().any(|x| x.id == *o))
+    {
+        let events = match st.ledger.recent_events(org, 2000).await {
+            Ok(e) => e,
+            Err(e) => return unavailable(e),
+        };
+        let mut seen: HashMap<(String, String), (bool, i64)> = HashMap::new();
+        for e in &events {
+            let s = |k: &str| e.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let model = s("model");
+            if model.is_empty() || model == "-" {
+                continue;
+            }
+            // Calls that reported their own cost (Claude Code) don't need a price.
+            let self_priced = e.get("source").and_then(|v| v.as_str()) == Some("claude-code");
+            let provider = s("provider");
+            let known = self_priced || rt.prices.lookup_any(&provider, &model).1;
+            let entry = seen.entry((provider, model)).or_insert((true, 0));
+            entry.0 &= known;
+            entry.1 += 1;
+        }
+        for ((provider, model), (known, n)) in seen {
+            let row =
+                json!({ "provider": provider, "model": model, "requests": n, "priced": known });
+            if !known {
+                unpriced.push(row.clone());
+            }
+            seen_models.push(row);
+        }
+    }
+    Json(json!({
+        "verified_as_of": crate::pricing::BUILTIN_VERIFIED_AS_OF,
+        "overrides": rt.cfg.pricing,
+        "rows": rt.prices.rows(),
+        "seen": seen_models,
+        "unpriced": unpriced,
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PricingBody {
+    overrides: Vec<crate::config::PriceOverride>,
+}
+
+/// Replace the price overrides (USD per million tokens).
+async fn set_pricing(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<PricingBody>,
+) -> Response {
+    if let Err(r) = check_token(&st, &headers) {
+        return r;
+    }
+    if body.overrides.len() > 500 {
+        return err(StatusCode::BAD_REQUEST, "at most 500 price overrides");
+    }
+    let n = body.overrides.len();
+    match control::edit_pricing(&st, |p| {
+        *p = body.overrides;
+        Ok(())
+    })
+    .await
+    {
+        Ok(()) => Json(json!({ "overrides": n })).into_response(),
+        Err(e) => edit_error(e),
+    }
 }
 
 async fn readyz(State(st): State<Arc<AppState>>) -> Response {

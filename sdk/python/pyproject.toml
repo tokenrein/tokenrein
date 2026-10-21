@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "tokenlens"
 version = "0.1.0"
-description = "Thin client for the TokenLens proxy: per-run budgets for OpenAI and Anthropic agents"
+description = "Budgets, run tracing and spend reports for AI agents: wrap your OpenAI or Anthropic client in one line"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]

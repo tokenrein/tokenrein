@@ -1,6 +1,7 @@
 """TokenLens: runtime spend guardrails for AI agents."""
 
 from . import guard
+from .guard import flush
 from ._run import Run, current_run
 from .errors import (
     BudgetExceeded,
@@ -15,6 +16,7 @@ __version__ = "0.1.0"
 
 __all__ = [
     "guard",
+    "flush",
     "Run",
     "current_run",
     "TokenLensError",

@@ -1,7 +1,14 @@
 /**
- * Point OpenAI / Anthropic SDK clients at the TokenLens proxy.
+ * Wrap OpenAI / Anthropic SDK clients for TokenLens.
  *
- * The guarded client is a `withOptions()` copy of the caller's client whose prototype is
+ * Two modes:
+ *  - **direct** (default): the client keeps calling its provider. Before each call it asks
+ *    TokenLens whether the run may continue; after each response it reports token usage in the
+ *    background. Works with any provider the `openai` SDK reaches (Gemini, Groq, Mistral,
+ *    DeepSeek, OpenRouter, Ollama, ...). See `direct.ts`.
+ *  - **proxy**: the client calls the TokenLens proxy, which checks every call before sending it.
+ *
+ * In proxy mode the guarded client is a `withOptions()` copy of the caller's client whose prototype is
  * swapped for a subclass that:
  *  - adds the `x-tl-*` headers of the current run to every request it builds, and counts
  *    the call against any local `maxCalls` cap;
@@ -9,8 +16,17 @@
  * Later `withOptions()` copies construct the same subclass, so they stay guarded.
  */
 
-import { relabel } from './errors.js';
-import { currentRun, validateId } from './run.js';
+import {
+  type TokenUsage,
+  type Verdict,
+  StreamUsage,
+  providerFor,
+  reporterFor,
+  usageFrom,
+  verdictError,
+} from './direct.js';
+import { BUDGET_EXCEEDED, RUN_KILLED, RUN_PAUSED, relabel } from './errors.js';
+import { currentRun, validateId, validateUser } from './run.js';
 
 export const DEFAULT_BASE_URL = 'http://127.0.0.1:8787';
 
@@ -21,8 +37,19 @@ export interface GuardOptions {
   user?: string;
   /** TokenLens virtual key; defaults to `process.env.TOKENLENS_API_KEY`. */
   apiKey?: string;
-  /** Proxy URL; defaults to `process.env.TOKENLENS_BASE_URL` or `http://127.0.0.1:8787`. */
+  /** TokenLens URL; defaults to `process.env.TOKENLENS_BASE_URL` or `http://127.0.0.1:8787`. */
   baseURL?: string;
+  /**
+   * `'direct'` (default, or `process.env.TOKENLENS_MODE`): the client keeps calling its provider;
+   * TokenLens checks each call first and receives token usage afterwards, never prompts.
+   * `'proxy'`: calls go through the TokenLens proxy, which checks every call before sending it.
+   */
+  mode?: 'direct' | 'proxy';
+  /**
+   * Direct mode only. Ask TokenLens before each call (default). `false` skips the round trip
+   * and only stops runs that previous usage reports showed are over an enforced limit.
+   */
+  check?: boolean;
 }
 
 /** The parts of a Stainless-generated SDK client (openai, @anthropic-ai/sdk) this module uses. */
@@ -155,7 +182,7 @@ export function wrap<T>(client: T, opts: GuardOptions, provider: 'openai' | 'ant
     throw new TypeError(`guard.${provider}() needs an ${provider === 'openai' ? 'OpenAI' : 'Anthropic'} client instance`);
   }
   if (opts.agent !== undefined) validateId(opts.agent, 'agent');
-  if (opts.user !== undefined) validateId(opts.user, 'user');
+  if (opts.user !== undefined) validateUser(opts.user);
   const stripBearer = provider === 'anthropic';
   const root = resolveBaseURL(opts.baseURL);
   const overrides = {
@@ -170,5 +197,208 @@ export function wrap<T>(client: T, opts: GuardOptions, provider: 'openai' | 'ant
   }
   const copy = c.withOptions(overrides);
   Object.setPrototypeOf(copy, Guarded.prototype);
+  return copy as unknown as T;
+}
+
+// --- Direct mode ---------------------------------------------------------------------------
+
+const MAX_OUTPUT_FIELDS = ['max_tokens', 'max_completion_tokens', 'max_output_tokens'];
+
+interface DirectConfig {
+  agent: string | undefined;
+  user: string | undefined;
+  provider: string;
+  check: boolean;
+  reporter: ReturnType<typeof reporterFor>;
+}
+
+function who(cfg: DirectConfig): Record<string, unknown> {
+  const run = currentRun();
+  const out: Record<string, unknown> = { source: 'typescript-sdk' };
+  if (run) {
+    out.run_id = run.runId;
+    if (run.parent) out.parent_run_id = run.parent.runId;
+    if (run.budgetUsd !== undefined) out.run_budget_usd = run.budgetUsd;
+  }
+  const agent = cfg.agent ?? run?.agent;
+  const user = cfg.user ?? run?.user;
+  if (agent) out.agent = agent;
+  if (user) out.user = user;
+  return out;
+}
+
+function denyIfOver(cfg: DirectConfig): void {
+  const run = currentRun();
+  const agent = cfg.agent ?? run?.agent;
+  for (const label of cfg.reporter.over.keys()) {
+    const [kind, rest = ''] = label.split(/:(.*)/s);
+    const hit =
+      (kind === 'run' && rest === run?.runId) ||
+      (kind === 'agent_daily' && agent !== undefined && rest.endsWith(`/${agent}`)) ||
+      kind === 'project_monthly' ||
+      kind === 'org_monthly';
+    if (hit) throw verdictError({ allowed: false, reason: `TokenLens: the ${label} budget is used up` }, run?.runId);
+  }
+}
+
+function report(cfg: DirectConfig, w: Record<string, unknown>, model: string | undefined, usage: TokenUsage | undefined, started: number, stream: boolean): void {
+  if (!usage) return;
+  cfg.reporter.report({ ...w, ...usage, model: model ?? 'unknown', provider: cfg.provider, duration_ms: Date.now() - started, stream });
+}
+
+/** Read a response body (web ReadableStream or Node stream) chunk by chunk. */
+async function* bodyChunks(body: any): AsyncGenerator<Uint8Array> {
+  if (body && typeof body.getReader === 'function') {
+    const reader = body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      yield value;
+    }
+  } else if (body && typeof body[Symbol.asyncIterator] === 'function') {
+    for await (const chunk of body) yield typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk;
+  }
+}
+
+/** A provider-shaped error response; the SDK raises it and `makeStatusError` relabels it. */
+function refusal(v: Verdict, kind: 'openai' | 'anthropic'): Response {
+  const type = v.run_state === 'killed' ? RUN_KILLED : v.run_state === 'paused' ? RUN_PAUSED : BUDGET_EXCEEDED;
+  const error = { type, message: v.reason ?? 'TokenLens refused the call' };
+  const body = kind === 'anthropic' ? { type: 'error', error } : { error: { ...error, code: type, param: null } };
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (v.run_id) headers['x-tl-run-id'] = v.run_id;
+  return new Response(JSON.stringify(body), { status: v.run_state ? 403 : 402, headers });
+}
+
+function overVerdict(cfg: DirectConfig): Verdict | undefined {
+  try {
+    denyIfOver(cfg);
+    return undefined;
+  } catch (e) {
+    return { allowed: false, reason: (e as Error).message, run_id: currentRun()?.runId };
+  }
+}
+
+/**
+ * Wraps the client's fetch, which every SDK version supports: checks the budget before the call
+ * (refusing with a provider-shaped 402/403 without calling the provider), asks OpenAI-style
+ * streams for usage, and reads usage from JSON bodies and event streams.
+ */
+function observingFetch(inner: typeof fetch, cfg: DirectConfig, kind: 'openai' | 'anthropic'): typeof fetch {
+  return async (input: any, init?: any) => {
+    const w = who(cfg);
+    const url = String(typeof input === 'string' ? input : (input?.url ?? input));
+    let body: any;
+    if (typeof init?.body === 'string') {
+      try {
+        body = JSON.parse(init.body);
+      } catch {
+        body = undefined;
+      }
+    }
+    if (
+      cfg.provider !== 'anthropic' &&
+      body && body.stream === true && body.stream_options === undefined &&
+      new URL(url, 'http://x').pathname.endsWith('/chat/completions')
+    ) {
+      body.stream_options = { include_usage: true };
+      init = { ...init, body: JSON.stringify(body) };
+    }
+    if (body && typeof body.model === 'string') {
+      let v: Verdict | undefined;
+      if (cfg.check) {
+        const req: Record<string, unknown> = { ...w, model: body.model, provider: cfg.provider };
+        const max = MAX_OUTPUT_FIELDS.map((f) => body[f]).find((x) => typeof x === 'number');
+        if (max !== undefined) req.max_output_tokens = max;
+        v = await cfg.reporter.check(req);
+      } else {
+        v = overVerdict(cfg);
+      }
+      if (v && !v.allowed) return refusal({ ...v, run_id: v.run_id ?? (w.run_id as string | undefined) }, kind);
+    }
+    const started = Date.now();
+    const res: any = await inner(input, init);
+    if (!res.ok || !res.body) return res;
+    const ctype: string = res.headers.get('content-type') ?? '';
+    if (ctype.includes('text/event-stream')) {
+      const copy = res.clone();
+      const parser = new StreamUsage();
+      void (async () => {
+        const decoder = new TextDecoder();
+        try {
+          for await (const chunk of bodyChunks(copy.body)) parser.feed(decoder.decode(chunk, { stream: true }));
+        } catch {
+          // stream aborted; report what was seen
+        }
+        report(cfg, w, parser.model, parser.usage, started, true);
+      })();
+    } else if (ctype.includes('json')) {
+      res
+        .clone()
+        .json()
+        .then((b: any) => report(cfg, w, b?.model, usageFrom(b), started, false))
+        .catch(() => {});
+    }
+    return res;
+  };
+}
+
+function directClass(Base: ClientClass): ClientClass {
+  return class Direct extends Base {
+    static [UNGUARDED] = Base;
+
+    static override get name(): string {
+      return Base.name;
+    }
+
+    buildRequest(options: unknown, opts: { retryCount?: number } = {}): BuiltRequest | Promise<BuiltRequest> {
+      const built: BuiltRequest | Promise<BuiltRequest> = super.buildRequest(options, opts);
+      const count = (b: BuiltRequest) => {
+        if (!opts.retryCount) currentRun()?.recordCall();
+        return b;
+      };
+      return built instanceof Promise ? built.then(count) : count(built);
+    }
+
+    makeStatusError(status: number, error: unknown, message: string | undefined, headers: HeaderBag): Error {
+      const err: Error = super.makeStatusError(status, error, message, headers);
+      const runId = getHeader(headers, 'x-tl-run-id') ?? currentRun()?.runId;
+      return relabel(err, status, error, runId);
+    }
+  };
+}
+
+interface DirectWrapOptions {
+  tokenlensURL: string;
+  apiKey: string;
+  agent: string | undefined;
+  user: string | undefined;
+  defaultProvider: string;
+  check: boolean;
+}
+
+export function wrapDirect<T>(client: T, o: DirectWrapOptions, kind: 'openai' | 'anthropic'): T {
+  const c = client as unknown as SdkClient & { baseURL?: string; fetch?: typeof fetch };
+  if (!c || typeof c.buildRequest !== 'function') {
+    throw new TypeError(`guard.${kind}() needs an ${kind === 'openai' ? 'OpenAI' : 'Anthropic'} client instance`);
+  }
+  if (o.agent !== undefined) validateId(o.agent, 'agent');
+  if (o.user !== undefined) validateUser(o.user);
+  const cfg: DirectConfig = {
+    agent: o.agent,
+    user: o.user,
+    provider: providerFor(String(c.baseURL ?? ''), o.defaultProvider),
+    check: o.check,
+    reporter: reporterFor(o.tokenlensURL, o.apiKey),
+  };
+  const inner: typeof fetch = (c.fetch ?? globalThis.fetch).bind(globalThis);
+  const fetchOverride = { fetch: observingFetch(inner, cfg, kind) };
+  const Base = (c.constructor as ClientClass)[UNGUARDED] ?? (c.constructor as ClientClass);
+  const Direct = directClass(Base);
+  if (typeof c.withOptions !== 'function') {
+    return new Direct({ ...c._options, ...fetchOverride }) as T;
+  }
+  const copy = c.withOptions(fetchOverride);
+  Object.setPrototypeOf(copy, Direct.prototype);
   return copy as unknown as T;
 }

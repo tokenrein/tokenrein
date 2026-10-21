@@ -1,17 +1,36 @@
 # TokenLens SDKs
 
-Thin clients for the TokenLens proxy (`proxy/`). They point your existing OpenAI or
-Anthropic client at the proxy with your TokenLens virtual key, attach the run headers from
-the [README's "Request headers" table](../README.md#request-headers) to every call, and turn
-the proxy's 402/403 answers into typed errors. Apache-2.0.
+Wrap your existing OpenAI or Anthropic client in one line and every call is budgeted, traced
+per run and agent, and shown in the TokenLens dashboard. Apache-2.0.
+
+Two modes:
+
+- **Direct (default):** the client keeps calling its provider with your provider key. Before
+  each call the SDK asks TokenLens whether the run may continue; after each response it reads
+  the token usage (streams too) and reports it in the background. Prompts and responses never
+  leave your process, and if TokenLens is unreachable calls still go through.
+- **Proxy (`mode="proxy"`):** calls go through the TokenLens proxy, which checks every call
+  before sending it and is exact under heavy concurrency. Use it when you need hard guarantees.
+
+Direct mode works with any provider the `openai` SDK can reach through `base_url`: OpenAI, Azure
+OpenAI, Google Gemini, Groq, Mistral, DeepSeek, xAI, OpenRouter, Together, Fireworks, and local
+Ollama / vLLM / LM Studio (priced at $0). The provider is recognised from the base URL.
 
 | Package | Path | Wraps |
 |---|---|---|
 | `tokenlens` (Python ≥ 3.9) | [`python/`](python) | `openai` ≥ 1.0, `anthropic` ≥ 0.30 (sync and async clients) |
 | `@tokenlens/sdk` (Node ≥ 18) | [`typescript/`](typescript) | `openai` ≥ 4.0, `@anthropic-ai/sdk` ≥ 0.30 |
 
-Configuration: `TOKENLENS_API_KEY` (virtual key, `tl_…`) and `TOKENLENS_BASE_URL` (default
-`http://127.0.0.1:8787`), or pass `api_key` / `base_url` (`apiKey` / `baseURL`).
+Configuration: `TOKENLENS_API_KEY` (a TokenLens key, `tl_…`), `TOKENLENS_BASE_URL` (default
+`http://127.0.0.1:8787`) and optionally `TOKENLENS_MODE` (`direct` or `proxy`); or pass
+`api_key` / `base_url` / `mode` (`apiKey` / `baseURL` / `mode`). In direct mode your provider
+key stays with your client as usual.
+
+Options: `agent`, `user` (a person or service, emails allowed; inherited by sub-agent runs),
+`mode`, and `check` (direct mode: `False` skips the per-call check and only stops runs that
+recent reports showed are over an enforced limit). Short-lived scripts can call
+`tokenlens.flush()` / `await flush()` to send queued usage before exiting (Python also flushes at
+exit).
 
 ## Quickstart
 
@@ -31,9 +50,19 @@ const client = guard.openai(new OpenAI(), { agent: 'support-bot' });  // or guar
 await guard.run({ runId: 'ticket-4812', budgetUsd: 5 }, () => client.chat.completions.create(...));
 ```
 
+## Using other providers
+
+```python
+gemini = guard.openai(OpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                             api_key=os.environ["GEMINI_API_KEY"]), agent="researcher")
+local = guard.openai(OpenAI(base_url="http://localhost:11434/v1", api_key="ollama"), agent="drafts")
+```
+
 ## What a run sends
 
-Inside `guard.run(...)` every request from a guarded client carries:
+Inside `guard.run(...)` every call from a guarded client is attributed to the run. In proxy mode
+these travel as headers; in direct mode the same fields go to TokenLens's check and usage
+reports instead, and nothing extra is sent to your provider:
 
 | Header | Value |
 |---|---|

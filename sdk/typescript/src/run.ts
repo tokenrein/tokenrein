@@ -17,6 +17,16 @@ export function validateId(value: string, what: string): string {
   return value;
 }
 
+const USER_RE = /^[A-Za-z0-9._@+-]{1,128}$/;
+
+/** Users may be emails. */
+export function validateUser(value: string): string {
+  if (typeof value !== 'string' || !USER_RE.test(value)) {
+    throw new TypeError(`user must be 1-128 letters, digits, '.', '_', '-', '@' or '+' (got ${JSON.stringify(value)})`);
+  }
+  return value;
+}
+
 export function newRunId(): string {
   return `run_${randomUUID().replaceAll('-', '')}`;
 }
@@ -62,7 +72,7 @@ export class Run {
     }
     this.budgetUsd = budgetUsd;
     this.agent = options.agent !== undefined ? validateId(options.agent, 'agent') : undefined;
-    this.user = options.user !== undefined ? validateId(options.user, 'user') : parent?.user;
+    this.user = options.user !== undefined ? validateUser(options.user) : parent?.user;
     this.maxCalls = maxCalls;
     this.parent = parent;
     if (parent && parent.runId === this.runId) {

@@ -93,6 +93,8 @@ def proxy(monkeypatch: pytest.MonkeyPatch):
     fake = FakeProxy()
     monkeypatch.setenv("TOKENLENS_BASE_URL", fake.url)
     monkeypatch.setenv("TOKENLENS_API_KEY", "tl_test_key")
+    # These tests exercise proxy mode; direct mode has its own tests.
+    monkeypatch.setenv("TOKENLENS_MODE", "proxy")
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     yield fake
     fake.close()

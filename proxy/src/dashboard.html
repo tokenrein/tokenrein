@@ -9,7 +9,7 @@
   --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f1f3f6; --text: #14171c; --muted: #5d6673;
   --line: #e2e6ec; --accent: #2f5bea; --accent-ink: #ffffff; --ok: #1f8a4c; --warn: #b76e00;
   --bad: #c62f2f; --ok-bg: #e5f5ec; --warn-bg: #fff3dc; --bad-bg: #fde8e8; --info-bg: #e8eefe;
-  --meter: #dfe4ec; --shadow: 0 1px 2px rgba(16, 24, 40, .06);
+  --meter: #dfe4ec; --shadow: 0 1px 2px rgba(16, 24, 40, .06); --accent-soft: #eaefff;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
@@ -17,7 +17,7 @@
     --bg: #0f1216; --panel: #171b21; --panel-2: #1e232b; --text: #e7eaee; --muted: #9aa4b2;
     --line: #2a313b; --accent: #6d8dff; --accent-ink: #0f1216; --ok: #4cc98a; --warn: #f0b04a;
     --bad: #ff7676; --ok-bg: #16301f; --warn-bg: #33270f; --bad-bg: #3a1717; --info-bg: #1b2547;
-    --meter: #2a313b; --shadow: none;
+    --meter: #2a313b; --shadow: none; --accent-soft: #1c2546;
   }
 }
 * { box-sizing: border-box; }
@@ -32,20 +32,30 @@ a { color: var(--accent); }
 .muted { color: var(--muted); }
 .wrap { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
 
-header.top { background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
-header.top .wrap { display: flex; align-items: center; gap: 16px; height: 56px; }
-.brand { font-weight: 700; letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; }
-.brand .dot { width: 10px; height: 10px; border-radius: 3px; background: var(--accent); }
+.brand { font-weight: 700; letter-spacing: -.01em; display: flex; align-items: center; gap: 9px; font-size: 15px; }
+.brand .dot { width: 22px; height: 22px; border-radius: 7px; background: var(--accent); display: grid; place-items: center; color: var(--accent-ink); }
+.brand .dot svg { width: 14px; height: 14px; }
 .spacer { flex: 1; }
-nav.tabs { display: flex; gap: 2px; overflow-x: auto; }
-nav.tabs button {
-  background: none; border: 0; padding: 8px 12px; border-radius: 8px; cursor: pointer; color: var(--muted); white-space: nowrap;
-}
-nav.tabs button[aria-selected="true"] { background: var(--panel-2); color: var(--text); font-weight: 600; }
 .status { font-size: 12px; color: var(--muted); white-space: nowrap; }
 
-main { padding: 20px 0 48px; }
-h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -.01em; }
+.shell { display: grid; grid-template-columns: 236px minmax(0, 1fr); min-height: 100vh; }
+.side { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 14px; padding: 18px 12px; background: var(--panel); border-right: 1px solid var(--line); z-index: 5; }
+.side-top { display: grid; gap: 14px; padding: 0 6px; }
+.org-pick { display: grid; gap: 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.org-pick select { width: 100%; text-transform: none; letter-spacing: 0; font-size: 13.5px; color: var(--text); }
+nav.tabs { display: flex; flex-direction: column; gap: 1px; overflow-y: auto; flex: 1; }
+.nav-group { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 14px 10px 6px; }
+nav.tabs button {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: 0;
+  padding: 8px 10px; border-radius: 8px; cursor: pointer; color: var(--muted); white-space: nowrap; font-weight: 500;
+}
+nav.tabs button svg { width: 16px; height: 16px; flex: none; }
+nav.tabs button:hover { background: var(--panel-2); color: var(--text); }
+nav.tabs button[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.side-foot { display: grid; gap: 8px; padding: 10px 6px 0; border-top: 1px solid var(--line); }
+.side-foot .btn { justify-content: center; }
+main.content { padding: 28px 32px 56px; max-width: 1260px; width: 100%; }
+h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -.015em; }
 h2 { font-size: 15px; margin: 0; }
 .sub { color: var(--muted); margin: 0 0 16px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
@@ -168,6 +178,26 @@ pre.snip { margin: 0; font-family: var(--mono); font-size: 12px; background: var
 a.runlink { color: inherit; text-decoration: none; border-bottom: 1px dashed var(--muted); }
 a.runlink:hover { color: var(--accent); border-color: var(--accent); }
 .back { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0; margin-bottom: 8px; font: inherit; }
+.connect-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; align-items: start; }
+.connect-grid .card + .card { margin-top: 0; }
+.connect-card .card-b { display: grid; gap: 14px; }
+.tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; background: var(--accent-soft); color: var(--accent); }
+.tag.muted { background: var(--panel-2); color: var(--muted); }
+.checks { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
+.checks li { display: flex; gap: 8px; }
+.checks li::before { content: "✓"; color: var(--ok); font-weight: 700; }
+.step-h { font-weight: 600; font-size: 13px; display: flex; gap: 8px; align-items: center; }
+.step-h .n { width: 20px; height: 20px; border-radius: 50%; background: var(--panel-2); border: 1px solid var(--line); display: grid; place-items: center; font-size: 11px; color: var(--muted); }
+.cmd { position: relative; }
+.cmd pre.snip { padding-right: 76px; white-space: pre-wrap; word-break: break-all; }
+.cmd .btn { position: absolute; top: 8px; right: 8px; }
+details.more summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+details.more[open] summary { margin-bottom: 8px; }
+.seen { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.soon { display: flex; gap: 6px; flex-wrap: wrap; }
+.price { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.alert { border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line)); background: var(--warn-bg); border-radius: 12px; padding: 12px 14px; margin-bottom: 16px; }
+.alert b { color: var(--warn); }
 .prov { border: 1px solid var(--line); border-radius: 10px; }
 .prov-row { display: grid; grid-template-columns: 170px minmax(0, 1fr) auto; gap: 8px 16px; align-items: center; padding: 12px 14px; }
 .prov-row + .prov-row { border-top: 1px solid var(--line); }
@@ -183,9 +213,16 @@ a.runlink:hover { color: var(--accent); border-color: var(--accent); }
   .prov-row .ws { grid-column: 1 / -1; }
 }
 .hide { display: none !important; }
-@media (max-width: 640px) {
-  header.top .wrap { height: auto; flex-wrap: wrap; padding-top: 8px; padding-bottom: 8px; gap: 8px; }
-  nav.tabs { order: 3; width: 100%; }
+@media (max-width: 860px) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
+  .side { height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; padding: 10px 12px; gap: 8px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .side-top { grid-auto-flow: column; align-items: center; padding: 0; flex: 1; }
+  .org-pick { grid-auto-flow: column; align-items: center; justify-content: end; }
+  nav.tabs { order: 3; flex-direction: row; width: 100%; overflow-x: auto; flex: none; }
+  nav.tabs button { width: auto; }
+  .nav-group { display: none; }
+  .side-foot { border-top: 0; padding: 0; grid-auto-flow: column; align-items: center; }
+  main.content { padding: 18px 16px 48px; }
   .kpi .value { font-size: 20px; }
 }
 </style>
@@ -193,7 +230,7 @@ a.runlink:hover { color: var(--accent); border-color: var(--accent); }
 <body>
 
 <section id="login" class="card login hide" aria-labelledby="login-title">
-  <div class="brand"><span class="dot"></span>TokenLens</div>
+  <div class="brand"><span class="dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></span>TokenLens</div>
   <h1 id="login-title">Sign in to the dashboard</h1>
   <p class="sub">Enter the proxy's admin token (the value of <span class="mono">TL_ADMIN_TOKEN</span>). It stays in this browser tab only.</p>
   <form id="login-form">
@@ -205,28 +242,33 @@ a.runlink:hover { color: var(--accent); border-color: var(--accent); }
   </form>
 </section>
 
-<div id="app" class="hide">
-  <header class="top">
-    <div class="wrap">
-      <div class="brand"><span class="dot"></span>TokenLens</div>
-      <nav class="tabs" role="tablist" aria-label="Sections">
-        <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
-        <button role="tab" data-tab="runs">Runs</button>
-        <button role="tab" data-tab="agents">Agents</button>
-        <button role="tab" data-tab="spend">Spend</button>
-        <button role="tab" data-tab="activity">Activity</button>
-        <button role="tab" data-tab="settings">Keys &amp; limits</button>
-      </nav>
-      <div class="spacer"></div>
-      <label class="inline status">Org
+<div id="app" class="hide shell">
+  <aside class="side">
+    <div class="side-top">
+      <div class="brand"><span class="dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></span>TokenLens</div>
+      <label class="org-pick">Org
         <select id="org" aria-label="Organisation"></select>
       </label>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <div class="nav-group">Monitor</div>
+      <button role="tab" data-tab="overview" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>Overview</button>
+      <button role="tab" data-tab="runs" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="12" r="2"/><path d="M6 7v10M6 12h6a4 4 0 0 0 4-4V7"/></svg>Runs</button>
+      <button role="tab" data-tab="agents" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6"/></svg>Agents</button>
+      <button role="tab" data-tab="spend" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Spend</button>
+      <button role="tab" data-tab="activity" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Activity</button>
+      <div class="nav-group">Set up</div>
+      <button role="tab" data-tab="connect" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0V7zM12 16v5"/></svg>Connect</button>
+      <button role="tab" data-tab="settings" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M14 9l2 2"/></svg>Keys &amp; limits</button>
+      <button role="tab" data-tab="models" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9-9-9z"/><circle cx="8" cy="8" r="1.5"/></svg>Models &amp; prices</button>
+    </nav>
+    <div class="side-foot">
       <span class="status" id="updated"></span>
       <button class="btn sm" id="signout" type="button">Sign out</button>
     </div>
-  </header>
+  </aside>
 
-  <main class="wrap">
+  <main class="content">
     <section data-view="overview">
       <h1>Overview</h1>
       <p class="sub" id="ov-sub"></p>
@@ -281,6 +323,18 @@ a.runlink:hover { color: var(--accent); border-color: var(--accent); }
       <div class="split" id="spend-split"></div>
     </section>
 
+    <section data-view="connect" class="hide">
+      <h1>Connect an agent</h1>
+      <p class="sub">Pick what you want to guard. Usage shows up within seconds, and nothing is blocked until you switch a limit to Enforce.</p>
+      <div id="connect"></div>
+    </section>
+
+    <section data-view="models" class="hide">
+      <h1>Models &amp; prices</h1>
+      <p class="sub" id="models-sub">Prices TokenLens uses to turn tokens into dollars, per million tokens.</p>
+      <div id="models"></div>
+    </section>
+
     <section data-view="run" class="hide">
       <button class="back" data-goto="runs" type="button">← All runs</button>
       <div id="run-view"></div>
@@ -310,6 +364,25 @@ a.runlink:hover { color: var(--accent); border-color: var(--accent); }
   </main>
 </div>
 
+<dialog id="price-dialog" aria-labelledby="price-dialog-title">
+  <div class="card-h"><h2 id="price-dialog-title">Model price</h2></div>
+  <form class="card-b" id="price-form">
+    <p class="help" style="margin:0">US dollars per million tokens. Applies to the model and any version or date suffix of it (for example <span class="mono">claude-sonnet-5</span> also covers <span class="mono">claude-sonnet-5-20261001</span>).</p>
+    <div class="budgets">
+      <label class="field">Provider <input type="text" name="provider" required placeholder="openai, anthropic, google, groq…"></label>
+      <label class="field">Model <input type="text" name="model" required placeholder="gpt-4o-mini"></label>
+      <label class="field">Input <input type="number" name="input" min="0" step="any" required></label>
+      <label class="field">Output <input type="number" name="output" min="0" step="any" required></label>
+      <label class="field">Cached input <span class="muted">(optional)</span><input type="number" name="cached" min="0" step="any"></label>
+      <label class="field">Cache write <span class="muted">(optional)</span><input type="number" name="write" min="0" step="any"></label>
+    </div>
+    <div class="inline" style="justify-content:flex-end">
+      <button class="btn" type="button" id="price-cancel">Cancel</button>
+      <button class="btn primary" type="submit">Save price</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="key-dialog" aria-labelledby="key-dialog-title">
   <div class="card-h"><h2 id="key-dialog-title">New virtual key</h2></div>
   <div class="card-b">
@@ -337,7 +410,8 @@ const POLICIES = [
 ];
 
 const S = { token: null, org: null, overview: null, runs: [], agents: [], events: [], tab: "overview", timer: null, editing: false,
-  packs: [], review: null, spend: null, runId: null, run: null, snip: "python" };
+  packs: [], review: null, spend: null, runId: null, run: null, snip: "python",
+  models: null, modelFilter: "", modelProvider: "", connectProject: null, connectKey: null, sdkSnip: "python" };
 const LIVE_SECS = 60, IDLE_SECS = 15 * 60;
 function liveness(ts) {
   if (!ts) return `<span class="live off"><span class="dot"></span>Never</span>`;
@@ -462,7 +536,7 @@ function showTab(tab) {
   $$("nav.tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
   $$("[data-view]").forEach(v => v.classList.toggle("hide", v.dataset.view !== tab));
   render();
-  if (changed && ["spend", "run", "overview"].includes(tab) && S.token) refresh();
+  if (changed && ["spend", "run", "overview", "models", "connect"].includes(tab) && S.token) refresh();
 }
 function openRun(id) {
   S.runId = id; S.run = null;
@@ -502,6 +576,7 @@ async function refresh() {
       S.runs = runs.runs; S.agents = agents.agents; S.events = events.events; S.review = review;
       if (!S.packs.length) S.packs = (await api("/admin/packs")).packs;
       if (S.tab === "spend") S.spend = await api(`/admin/orgs/${o}/spend?days=${$("#spend-days").value}`);
+      if (S.tab === "models") S.models = await api(`/admin/models?org=${o}`);
       if (S.tab === "run" && S.runId) S.run = await api(`/admin/orgs/${o}/runs/${encodeURIComponent(S.runId)}/timeline`);
     } else {
       S.runs = []; S.agents = []; S.events = []; S.review = null;
@@ -521,6 +596,8 @@ function render() {
   if (S.tab === "runs") renderRuns();
   if (S.tab === "agents") renderAgents();
   if (S.tab === "spend") renderSpend();
+  if (S.tab === "connect") renderConnect();
+  if (S.tab === "models") renderModels();
   if (S.tab === "run") renderRun();
   if (S.tab === "activity") renderEvents();
   if (S.tab === "settings" && !S.editing) renderSettings();
@@ -689,10 +766,8 @@ function gsSteps(org) {
         <div><button class="btn primary sm" data-goto-settings="keys">Create a key</button></div>` },
     { done: traffic, title: "Connect your agent",
       doneText: first ? `First request received from <b>${esc(first.agent)}</b> (${esc(first.model)}).` : "Requests are arriving.",
-      body: `<p class="help" style="margin:0">Point your agent at TokenLens: change the base URL and use your TokenLens key. Nothing else changes.</p>
-        <div class="snip-tabs" role="tablist">${[["python", "Python"], ["typescript", "TypeScript"], ["any", "Any SDK"], ["curl", "curl"]].map(([k, l]) => `<button role="tab" data-snip="${k}" aria-selected="${S.snip === k}">${l}</button>`).join("")}</div>
-        <pre class="snip">${esc(snippet(S.snip, keyProject?.id || "your project"))}</pre>
-        <div class="inline"><button class="btn sm" data-copy-snip>Copy</button><span class="waiting"><span class="live on"><span class="dot"></span></span>Waiting for your first request…</span></div>` },
+      body: `<p class="help" style="margin:0">Connect Claude Code with one command, or wrap your app's OpenAI or Anthropic client in one line. Calls keep going straight to the provider.</p>
+        <div class="inline"><button class="btn primary sm" data-goto="connect">Open Connect</button><span class="waiting"><span class="live on"><span class="dot"></span></span>Waiting for your first request…</span></div>` },
     { done: !!packed, title: "Pick a guardrail pack",
       doneText: packed ? `<b>${esc(packed.id)}</b> uses the ${esc(packed.pack)} pack.` : "",
       body: `<p class="help" style="margin:0">A pack sets sensible limits for a kind of agent, all in <b>Check</b> mode: nothing is blocked yet, you see what would be.</p>
@@ -749,6 +824,220 @@ async function applyPack(project, pack) {
   if (!confirm(`Apply the "${title}" pack to ${project}? It replaces this project's limits with the pack's, all in Check mode (nothing is blocked).`)) return;
   await mutate(() => api(`/admin/orgs/${encodeURIComponent(S.org)}/projects/${encodeURIComponent(project)}/pack`, { method: "POST", body: { pack } }), `${title} applied to ${project} in Check mode`);
 }
+
+// --- Connect ---
+function adminUrl() { return location.origin; }
+function claudeCodeCommand(key) {
+  return `curl -fsSL ${adminUrl()}/connect/claude-code.py | python3 - --key ${key} --url ${proxyUrl()}`;
+}
+function claudeCodeSettings(key) {
+  const hook = { type: "http", url: `${proxyUrl()}/v1/hooks/claude-code`, timeout: 5,
+    headers: { Authorization: "Bearer $TOKENLENS_API_KEY", "x-tl-agent": "claude-code" }, allowedEnvVars: ["TOKENLENS_API_KEY"] };
+  return JSON.stringify({
+    env: {
+      CLAUDE_CODE_ENABLE_TELEMETRY: "1", OTEL_LOGS_EXPORTER: "otlp", OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: "http/json",
+      OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: `${proxyUrl()}/v1/otel/v1/logs`,
+      OTEL_EXPORTER_OTLP_LOGS_HEADERS: `Authorization=Bearer ${key},x-tl-agent=claude-code`,
+      OTEL_LOGS_EXPORT_INTERVAL: "2000", TOKENLENS_API_KEY: key,
+    },
+    hooks: Object.fromEntries(["UserPromptSubmit", "PreToolUse", "SubagentStart", "Stop", "SessionEnd"].map(e =>
+      [e, [e === "PreToolUse" ? { matcher: "*", hooks: [hook] } : { hooks: [hook] }]])),
+  }, null, 2);
+}
+function sdkSnippet(kind) {
+  if (kind === "python") return `pip install "tokenlens[anthropic]"
+export TOKENLENS_API_KEY=tl_…        # a key for your project
+export TOKENLENS_BASE_URL=${proxyUrl()}
+
+from anthropic import Anthropic
+from tokenlens import guard
+
+client = guard.anthropic(Anthropic(), agent="support-bot")   # still calls Anthropic directly
+with guard.run("ticket-4812", budget_usd=5):                 # one task = one run
+    client.messages.create(model="claude-sonnet-5-5", max_tokens=1024, messages=[...])`;
+  return `npm install @tokenlens/sdk @anthropic-ai/sdk
+export TOKENLENS_API_KEY=tl_…        # a key for your project
+export TOKENLENS_BASE_URL=${proxyUrl()}
+
+import Anthropic from '@anthropic-ai/sdk';
+import { guard } from '@tokenlens/sdk';
+
+const client = guard.anthropic(new Anthropic(), { agent: 'support-bot' });  // calls Anthropic directly
+await guard.run({ runId: 'ticket-4812', budgetUsd: 5 }, () =>
+  client.messages.create({ model: 'claude-sonnet-5-5', max_tokens: 1024, messages: [...] }));`;
+}
+function cmdBlock(text, label = "Copy") {
+  return `<div class="cmd"><pre class="snip">${esc(text)}</pre><button class="btn sm" data-copy="${esc(text)}">${label}</button></div>`;
+}
+function renderConnect() {
+  const org = currentOrg();
+  if (!org) { $("#connect").innerHTML = `<div class="card"><div class="card-b">Create an org under Keys &amp; limits first.</div></div>`; return; }
+  const projects = org.projects.map(p => p.id);
+  if (!S.connectProject || !projects.includes(S.connectProject)) S.connectProject = projects.includes("claude-code") ? "claude-code" : projects[0] || null;
+  const now = Date.now() / 1000;
+  const sessions = S.runs.filter(r => r.run_id.startsWith("cc-") && !r.parent_run_id);
+  const live = sessions.filter(r => now - r.last_seen <= LIVE_SECS).length;
+  const seen = sessions.length
+    ? `<div class="seen">${live ? liveness(sessions[0].last_seen) : `<span class="live idle"><span class="dot"></span>Connected</span>`}
+        <span>${sessions.length} session${sessions.length === 1 ? "" : "s"} in the last 7 days · last ${ago(sessions[0].last_seen)}</span>
+        <a href="#" data-goto="runs">View runs</a></div>`
+    : `<div class="seen"><span class="live off"><span class="dot"></span>Not connected yet</span></div>`;
+  const keyStep = S.connectKey
+    ? `<div class="step-h"><span class="n">2</span>Run this once in a terminal on the machine that runs Claude Code</div>
+       ${cmdBlock(claudeCodeCommand(S.connectKey))}
+       <p class="help" style="margin:0">It contains your new key, shown only now. It edits <span class="mono">~/.claude/settings.json</span> (with a backup) and checks the key first. Then start a new Claude Code session.</p>
+       <details class="more"><summary>Prefer to edit the settings yourself?</summary>
+         <p class="help">Merge this into <span class="mono">~/.claude/settings.json</span>, keeping your existing hooks:</p>${cmdBlock(claudeCodeSettings(S.connectKey))}</details>`
+    : `<div class="step-h"><span class="n">2</span>Create a key and get the command</div>
+       <div><button class="btn primary" data-cc-key ${S.connectProject ? "" : "disabled"}>Create key &amp; show command</button></div>`;
+  $("#connect").innerHTML = `<div class="connect-grid">
+    <div class="card connect-card">
+      <div class="card-h"><h2>Claude Code</h2><span class="tag">Recommended · no code</span></div>
+      <div class="card-b">
+        ${seen}
+        <ul class="checks">
+          <li>Every model call: model, tokens, cost, user, sub-agents</li>
+          <li>Stops the next prompt or tool call when a run is paused or an enforced limit is used up</li>
+          <li>Works with API keys and Claude subscriptions; nothing to install</li>
+        </ul>
+        <div class="step-h"><span class="n">1</span>Choose the project its spend counts against</div>
+        <div class="inline">
+          <select data-cc-project aria-label="Project for Claude Code">${projects.map(p => `<option ${p === S.connectProject ? "selected" : ""}>${esc(p)}</option>`).join("")}</select>
+          ${projects.includes("claude-code") ? "" : `<button class="btn sm" data-cc-newproject>New project “claude-code”</button>`}
+        </div>
+        ${keyStep}
+        <details class="more"><summary>Disconnect later</summary>${cmdBlock(`curl -fsSL ${adminUrl()}/connect/claude-code.py | python3 - --remove`)}</details>
+      </div>
+    </div>
+
+    <div class="card connect-card">
+      <div class="card-h"><h2>Your app or agent</h2><span class="tag">Python · TypeScript</span></div>
+      <div class="card-b">
+        <ul class="checks">
+          <li>Wrap your existing OpenAI or Anthropic client in one line</li>
+          <li>Calls go straight to the provider; TokenLens only receives usage, never prompts</li>
+          <li>Works with any OpenAI-compatible provider: Gemini, Mistral, Groq, DeepSeek, OpenRouter, Ollama…</li>
+        </ul>
+        <div class="snip-tabs" role="tablist">${[["python", "Python"], ["typescript", "TypeScript"]].map(([k, l]) => `<button role="tab" data-sdk-snip="${k}" aria-selected="${S.sdkSnip === k}">${l}</button>`).join("")}</div>
+        ${cmdBlock(sdkSnippet(S.sdkSnip))}
+        <p class="help" style="margin:0">Need a key? Create one for your project under <a href="#" data-goto="settings">Keys &amp; limits</a>.</p>
+      </div>
+    </div>
+
+    <div class="card connect-card">
+      <div class="card-h"><h2>Any tool with a base URL</h2><span class="tag muted">Strict mode</span></div>
+      <div class="card-b">
+        <ul class="checks">
+          <li>Cline, Aider, Continue, OpenCode, LibreChat, n8n, or your own HTTP calls</li>
+          <li>Every call is checked against budgets <b>before</b> it is sent, exact even under bursts</li>
+        </ul>
+        ${cmdBlock(`Base URL:  ${proxyUrl()}      (OpenAI-style tools: ${proxyUrl()}/v1)\nAPI key:   tl_…  (a TokenLens key, not your provider key)`)}
+        <p class="help" style="margin:0">TokenLens forwards to OpenAI or Anthropic with the provider keys saved under Keys &amp; limits.</p>
+      </div>
+    </div>
+
+    <div class="card connect-card">
+      <div class="card-h"><h2>More coding agents</h2><span class="tag muted">Coming soon</span></div>
+      <div class="card-b">
+        <div class="soon"><span class="badge b-muted">OpenAI Codex CLI</span><span class="badge b-muted">Gemini CLI</span><span class="badge b-muted">Cursor</span><span class="badge b-muted">GitHub Copilot</span></div>
+        <p class="help" style="margin:0">Same idea as Claude Code: their own telemetry and hooks, no proxy. Until then, tools that let you set a base URL work through strict mode.</p>
+      </div>
+    </div>
+  </div>`;
+}
+document.addEventListener("change", e => {
+  if (e.target.matches("[data-cc-project]")) { S.connectProject = e.target.value; S.connectKey = null; renderConnect(); }
+});
+document.addEventListener("click", async e => {
+  const t = e.target;
+  if (t.closest("[data-copy]")) {
+    try { await navigator.clipboard.writeText(t.closest("[data-copy]").dataset.copy); toast("Copied"); }
+    catch (_) { toast("Copy failed: select the text and copy it", true); }
+  } else if (t.closest("[data-sdk-snip]")) {
+    S.sdkSnip = t.closest("[data-sdk-snip]").dataset.sdkSnip; renderConnect();
+  } else if (t.closest("[data-cc-newproject]")) {
+    const r = await mutate(() => api(`/admin/orgs/${encodeURIComponent(S.org)}/projects`, { method: "POST", body: { id: "claude-code" } }), "Project claude-code created");
+    if (r) { S.connectProject = "claude-code"; renderConnect(); }
+  } else if (t.closest("[data-cc-key]")) {
+    const name = `Claude Code (${new Date().toLocaleDateString()})`;
+    const r = await mutate(() => api(`/admin/orgs/${encodeURIComponent(S.org)}/projects/${encodeURIComponent(S.connectProject)}/keys`, { method: "POST", body: { name } }), "Key created");
+    if (r?.key) { S.connectKey = r.key; renderConnect(); }
+  }
+});
+
+// --- Models & prices ---
+const perM = micros => "$" + (micros / 1e6).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+function renderModels() {
+  const m = S.models;
+  if (!m) { $("#models").innerHTML = '<p class="muted">Loading…</p>'; return; }
+  $("#models-sub").textContent = `Prices TokenLens uses to turn tokens into dollars, per million tokens. Built-in prices were last checked ${m.verified_as_of}; check them against your provider's price page before relying on them for billing.`;
+  const providers = [...new Set(m.rows.map(r => r.provider))].sort();
+  const q = S.modelFilter.toLowerCase();
+  const rows = m.rows.filter(r => (!S.modelProvider || r.provider === S.modelProvider) && (!q || r.model.includes(q) || r.provider.includes(q)));
+  const unpriced = m.unpriced.length ? `<div class="alert"><b>${m.unpriced.length} model${m.unpriced.length === 1 ? "" : "s"} without a price</b> used recently. They're charged at the provider's most expensive rate until you add one.
+    <div class="inline" style="margin-top:8px">${m.unpriced.map(u => `<button class="btn sm" data-price-new data-provider="${esc(u.provider || "")}" data-model="${esc(u.model)}">Set price: ${esc(u.provider ? u.provider + "/" : "")}${esc(u.model)}</button>`).join("")}</div></div>` : "";
+  const body = rows.map(r => `<tr>
+    <td>${esc(r.provider)}</td><td class="mono">${esc(r.model)}</td>
+    <td class="price">${perM(r.price.input)}</td><td class="price">${perM(r.price.output)}</td>
+    <td class="price">${perM(r.price.cached_input)}</td><td class="price">${perM(r.price.cache_write)}</td>
+    <td>${r.source === "override" ? '<span class="badge b-info">your price</span>' : '<span class="badge b-muted">built-in</span>'}</td>
+    <td><div class="row-actions">
+      <button class="btn sm" data-price-edit data-provider="${esc(r.provider)}" data-model="${esc(r.model)}">${r.source === "override" ? "Edit" : "Override"}</button>
+      ${r.source === "override" ? `<button class="btn sm danger" data-price-remove data-provider="${esc(r.provider)}" data-model="${esc(r.model)}">Remove</button>` : ""}
+    </div></td></tr>`).join("");
+  $("#models").innerHTML = `${unpriced}<div class="card">
+    <div class="card-h">
+      <input type="search" data-model-filter placeholder="Search models" aria-label="Search models" value="${esc(S.modelFilter)}" style="min-width:220px">
+      <select data-model-provider aria-label="Provider"><option value="">All providers</option>${providers.map(p => `<option ${p === S.modelProvider ? "selected" : ""}>${esc(p)}</option>`).join("")}</select>
+      <div class="toolbar"><button class="btn primary sm" data-price-new>Add a model price</button></div>
+    </div>
+    <div class="table-wrap"><table class="wide"><thead><tr><th>Provider</th><th>Model</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cached input</th><th class="num">Cache write</th><th>Source</th><th></th></tr></thead>
+    <tbody>${body || '<tr><td colspan="8" class="empty">No models match.</td></tr>'}</tbody></table></div></div>
+    <p class="help" style="margin-top:12px">Local providers (ollama, vllm, lmstudio, llamacpp, local) are free. Models from resellers such as Bedrock or OpenRouter match by model name.</p>`;
+}
+document.addEventListener("input", e => {
+  if (e.target.matches("[data-model-filter]")) { S.modelFilter = e.target.value; const pos = e.target.selectionStart; renderModels(); const f = $("[data-model-filter]"); f.focus(); f.setSelectionRange(pos, pos); }
+  if (e.target.matches("[data-model-provider]")) { S.modelProvider = e.target.value; renderModels(); }
+});
+function openPriceDialog(provider = "", model = "") {
+  const f = $("#price-form");
+  f.reset();
+  f.provider.value = provider; f.model.value = model;
+  const row = S.models?.rows.find(r => r.provider === provider && r.model === model);
+  if (row) {
+    f.input.value = row.price.input / 1e6; f.output.value = row.price.output / 1e6;
+    f.cached.value = row.price.cached_input / 1e6; f.write.value = row.price.cache_write / 1e6;
+  }
+  $("#price-dialog").showModal();
+}
+async function savePricing(overrides, ok) {
+  const r = await mutate(() => api("/admin/pricing", { method: "PUT", body: { overrides } }), ok);
+  if (r !== undefined) { S.models = await api(`/admin/models?org=${encodeURIComponent(S.org)}`); renderModels(); }
+  return r;
+}
+document.addEventListener("click", async e => {
+  const t = e.target;
+  const b = t.closest("[data-price-new],[data-price-edit],[data-price-remove]");
+  if (!b) return;
+  const { provider = "", model = "" } = b.dataset;
+  if (b.matches("[data-price-remove]")) {
+    if (!confirm(`Remove your price for ${provider}/${model}? The built-in price (if any) applies again.`)) return;
+    await savePricing(S.models.overrides.filter(o => !(o.provider === provider && o.model.toLowerCase() === model)), "Price removed");
+  } else openPriceDialog(provider, model);
+});
+$("#price-cancel").addEventListener("click", () => $("#price-dialog").close());
+$("#price-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const f = e.target;
+  const num = el => el.value.trim() === "" ? undefined : Number(el.value);
+  const o = { provider: f.provider.value.trim().toLowerCase(), model: f.model.value.trim().toLowerCase(),
+    input_per_mtok: Number(f.input.value), output_per_mtok: Number(f.output.value) };
+  if (num(f.cached) !== undefined) o.cached_input_per_mtok = num(f.cached);
+  if (num(f.write) !== undefined) o.cache_write_per_mtok = num(f.write);
+  const rest = (S.models?.overrides || []).filter(x => !(x.provider === o.provider && x.model.toLowerCase() === o.model));
+  const r = await savePricing([o, ...rest], `Price saved for ${o.provider}/${o.model}`);
+  if (r !== undefined) $("#price-dialog").close();
+});
 
 // --- Check-mode review ---
 const POLICY_NAMES = { run: "Run budget", agent_daily: "Agent per day", project_monthly: "Project per month", org_monthly: "Org per month" };
@@ -1209,7 +1498,7 @@ function start() {
   clearInterval(S.timer);
   S.timer = setInterval(() => {
     if (document.hidden) return;
-    if (S.tab === "settings" || !$("#autorefresh").checked && S.tab === "runs") return;
+    if (["settings", "connect", "models"].includes(S.tab) || !$("#autorefresh").checked && S.tab === "runs") return;
     refresh();
   }, 5000);
 }

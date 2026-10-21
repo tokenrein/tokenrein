@@ -1,8 +1,10 @@
 # tokenlens (Python)
 
-Thin client for the [TokenLens](../README.md) proxy. Wraps your existing `openai` or
-`anthropic` client so every call carries the run, parent run, agent and run budget headers,
-and turns the proxy's 402/403 responses into `BudgetExceeded`, `RunPaused` and `RunKilled`.
+Budgets, run tracing and spend reports for AI agents, in one line around your existing OpenAI
+or Anthropic client. By default (direct mode) the client keeps calling its provider and only
+token usage goes to [TokenLens](../README.md); `mode="proxy"` sends calls through the TokenLens
+proxy instead. Errors: `BudgetExceeded`, `RunPaused`, `RunKilled`. Works with any
+OpenAI-compatible provider (Gemini, Groq, Mistral, DeepSeek, OpenRouter, Ollama, ...).
 
 ```bash
 pip install "tokenlens[openai]"   # or tokenlens[anthropic]
