@@ -1,11 +1,14 @@
 //! Orgs, projects, virtual keys, budgets and model prices managed at runtime (admin API /
 //! dashboard).
 //!
-//! The managed copy lives in Redis as one JSON document with a version number. On first start
-//! it is seeded from the config file's `[[orgs]]` and `[[pricing]]`; after that Redis is the
-//! source of truth and the config file only supplies server and provider settings. Every proxy instance
-//! polls the version and swaps in the new config when it changes; edits are compare-and-set,
-//! so two admins (or two instances) cannot overwrite each other's changes.
+//! The managed copy is one JSON document with a version number, kept in Postgres (every version,
+//! with who saved it) or, without a database, in Redis (the current version only). On first
+//! start it is seeded from the config file's `[[orgs]]` and `[[pricing]]` (or, when a database is
+//! added later, from the copy already in Redis); after that the store is the source of truth and
+//! the config file only supplies server and provider settings. Every proxy instance polls the
+//! version and swaps in the new config when it changes; edits are compare-and-set, so two admins
+//! (or two instances) cannot overwrite each other's changes. Each edit is written to the audit
+//! log with the fields it changed.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -15,6 +18,7 @@ use anyhow::{Context, Result};
 
 use serde::{Deserialize, Serialize};
 
+use crate::audit::{self, Change, Entry};
 use crate::config::{OrgConfig, PriceOverride};
 use crate::proxy::AppState;
 
@@ -38,24 +42,63 @@ fn parse(doc: &str) -> Result<Managed> {
 
 const SYNC_EVERY: Duration = Duration::from_secs(2);
 
-/// Load the managed config from Redis, seeding it from the config file if it is not there yet.
-pub async fn init(state: &AppState) -> Result<()> {
-    if let Some((version, doc)) = state.ledger.control_load().await? {
-        return apply(state, version, &doc).context("managed config in Redis is invalid");
+async fn load(state: &AppState) -> Result<Option<(u64, String)>> {
+    match &state.db {
+        Some(db) => db.control_load().await,
+        None => state.ledger.control_load().await,
     }
-    let rt = state.rt();
-    let doc = serde_json::to_string(&Managed {
-        orgs: rt.cfg.orgs.clone(),
-        pricing: rt.cfg.pricing.clone(),
-    })?;
-    match state.ledger.control_store(0, &doc).await? {
+}
+
+async fn stored_version(state: &AppState) -> Result<u64> {
+    match &state.db {
+        Some(db) => db.control_version().await,
+        None => state.ledger.control_version().await,
+    }
+}
+
+async fn store(
+    state: &AppState,
+    expected: u64,
+    doc: &str,
+    actor: &str,
+    entry: Option<&Entry>,
+) -> Result<Option<u64>> {
+    let version = match &state.db {
+        Some(db) => return db.control_store(expected, doc, actor, entry).await,
+        None => state.ledger.control_store(expected, doc).await?,
+    };
+    if let (Some(v), Some(e)) = (version, entry)
+        && let Err(err) = state.ledger.audit_append(e, Some(v)).await
+    {
+        tracing::error!(error = %err, action = %e.action, "could not write the audit log");
+    }
+    Ok(version)
+}
+
+/// Load the managed config, seeding it if it is not there yet.
+pub async fn init(state: &AppState) -> Result<()> {
+    if let Some((version, doc)) = load(state).await? {
+        return apply(state, version, &doc).context("stored managed config is invalid");
+    }
+    // A database added to an existing install takes over the config kept in Redis.
+    let (doc, from) = match (&state.db, state.ledger.control_load().await?) {
+        (Some(_), Some((_, doc))) => {
+            parse(&doc).context("managed config in Redis is invalid")?;
+            (doc, "Redis")
+        }
+        _ => {
+            let rt = state.rt();
+            let doc = serde_json::to_string(&Managed {
+                orgs: rt.cfg.orgs.clone(),
+                pricing: rt.cfg.pricing.clone(),
+            })?;
+            (doc, "the config file")
+        }
+    };
+    match store(state, 0, &doc, "system", None).await? {
         Some(version) => {
-            tracing::info!(
-                version,
-                "seeded managed orgs/keys/budgets from the config file"
-            );
-            state.control_version.store(version, Ordering::SeqCst);
-            Ok(())
+            tracing::info!(version, from, "seeded managed orgs/keys/budgets");
+            apply(state, version, &doc)
         }
         // Another instance seeded it first.
         None => sync(state).await,
@@ -65,10 +108,10 @@ pub async fn init(state: &AppState) -> Result<()> {
 /// Pick up changes written by any instance.
 pub async fn sync(state: &AppState) -> Result<()> {
     let current = state.control_version.load(Ordering::SeqCst);
-    if state.ledger.control_version().await? == current {
+    if stored_version(state).await? == current {
         return Ok(());
     }
-    if let Some((version, doc)) = state.ledger.control_load().await? {
+    if let Some((version, doc)) = load(state).await? {
         apply(state, version, &doc)?;
         tracing::info!(version, "reloaded managed orgs/keys/budgets");
     }
@@ -106,24 +149,28 @@ pub enum EditError {
     Unavailable(anyhow::Error),
 }
 
-/// Apply `edit` to the current orgs, validate the result, store it and switch to it.
+/// Apply `edit` to the current orgs, validate the result, store it and switch to it. `change`
+/// says who is making the edit, for the audit log.
 pub async fn edit<T>(
     state: &AppState,
+    change: Change,
     edit: impl FnOnce(&mut Vec<OrgConfig>) -> Result<T, EditError>,
 ) -> Result<T, EditError> {
-    edit_managed(state, |m| edit(&mut m.orgs)).await
+    edit_managed(state, change, |m| edit(&mut m.orgs)).await
 }
 
 /// Like [`edit`] for the model price overrides.
 pub async fn edit_pricing<T>(
     state: &AppState,
+    change: Change,
     edit: impl FnOnce(&mut Vec<PriceOverride>) -> Result<T, EditError>,
 ) -> Result<T, EditError> {
-    edit_managed(state, |m| edit(&mut m.pricing)).await
+    edit_managed(state, change, |m| edit(&mut m.pricing)).await
 }
 
 async fn edit_managed<T>(
     state: &AppState,
+    change: Change,
     edit: impl FnOnce(&mut Managed) -> Result<T, EditError>,
 ) -> Result<T, EditError> {
     let _guard = state.control_edit.lock().await;
@@ -137,17 +184,32 @@ async fn edit_managed<T>(
         orgs: rt.cfg.orgs.clone(),
         pricing: rt.cfg.pricing.clone(),
     };
+    let before = serde_json::to_value(&m).map_err(|e| EditError::Unavailable(e.into()))?;
     let out = edit(&mut m)?;
     let next = rt
         .with_managed(m.orgs, m.pricing)
         .map_err(|e| EditError::Invalid(format!("{e:#}")))?;
-    let doc = serde_json::to_string(&Managed {
+    let after = serde_json::to_value(Managed {
         orgs: next.cfg.orgs.clone(),
         pricing: next.cfg.pricing.clone(),
     })
     .map_err(|e| EditError::Unavailable(e.into()))?;
-    match state.ledger.control_store(version, &doc).await {
+    let changes = audit::diff(&before, &after);
+    if changes.is_empty() {
+        return Ok(out);
+    }
+    let entry = change.entry(serde_json::json!({ "changes": changes }));
+    match store(
+        state,
+        version,
+        &after.to_string(),
+        &change.actor,
+        Some(&entry),
+    )
+    .await
+    {
         Ok(Some(v)) => {
+            audit::logged(&entry, v);
             state.replace_rt(next, v);
             Ok(out)
         }

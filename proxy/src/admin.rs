@@ -2,16 +2,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
-use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_SECURITY_POLICY};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::header::{CACHE_CONTROL, CONTENT_SECURITY_POLICY};
+use axum::http::{HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
+use crate::audit;
+use crate::auth::Admin;
 use crate::config::{
     Budgets, FailMode, OrgConfig, ProjectConfig, ProviderSecret, VirtualKey, generate_virtual_key,
     valid_id, valid_provider_key,
@@ -21,18 +22,40 @@ use crate::ledger::Keys;
 use crate::providers::Provider;
 use crate::proxy::AppState;
 
-const DASHBOARD_HTML: &str = include_str!("dashboard.html");
+const DASHBOARD_HTML: &str = include_str!("web/index.html");
+
+/// The dashboard's stylesheet and scripts, built into the binary.
+const ASSETS: &[(&str, &str, &str)] = &[
+    (
+        "app.css",
+        "text/css; charset=utf-8",
+        include_str!("web/app.css"),
+    ),
+    ("js/core.js", JS, include_str!("web/js/core.js")),
+    ("js/overview.js", JS, include_str!("web/js/overview.js")),
+    ("js/runs.js", JS, include_str!("web/js/runs.js")),
+    ("js/connect.js", JS, include_str!("web/js/connect.js")),
+    ("js/models.js", JS, include_str!("web/js/models.js")),
+    ("js/spend.js", JS, include_str!("web/js/spend.js")),
+    ("js/activity.js", JS, include_str!("web/js/activity.js")),
+    ("js/settings.js", JS, include_str!("web/js/settings.js")),
+    ("js/audit.js", JS, include_str!("web/js/audit.js")),
+    ("js/app.js", JS, include_str!("web/js/app.js")),
+];
+const JS: &str = "text/javascript; charset=utf-8";
 const CONNECT_CLAUDE_CODE: &str = include_str!("connect_claude_code.py");
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(dashboard))
+        .route("/assets/{*path}", get(asset))
         .route("/connect/claude-code.py", get(connect_claude_code))
         .route("/admin/models", get(list_models))
         .route("/admin/pricing", put(set_pricing))
         .route("/healthz", get(|| async { "ok" }))
         .route("/readyz", get(readyz))
         .route("/admin/overview", get(overview))
+        .route("/admin/audit", get(list_audit))
         .route("/admin/packs", get(list_packs))
         .route(
             "/admin/orgs/{org}/projects/{project}/pack",
@@ -81,12 +104,43 @@ async fn dashboard() -> Response {
     h.insert(
         CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
-            "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
+            "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
              connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
         ),
     );
     h.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    page_headers(h);
     resp
+}
+
+async fn asset(Path(path): Path<String>) -> Response {
+    let Some((_, content_type, body)) = ASSETS.iter().find(|(p, _, _)| *p == path) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let mut resp = (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            HeaderValue::from_static(content_type),
+        )],
+        *body,
+    )
+        .into_response();
+    let h = resp.headers_mut();
+    // Assets change with the binary; revalidate rather than cache across upgrades.
+    h.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    page_headers(h);
+    resp
+}
+
+fn page_headers(h: &mut axum::http::HeaderMap) {
+    h.insert(
+        axum::http::header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert(
+        axum::http::header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
 }
 
 /// The Claude Code connector script. Holds no secrets; the key is passed as an argument.
@@ -111,11 +165,8 @@ struct ModelsQuery {
 async fn list_models(
     State(st): State<Arc<AppState>>,
     Query(q): Query<ModelsQuery>,
-    headers: HeaderMap,
+    _admin: Admin,
 ) -> Response {
-    if let Err(r) = check_token(&st, &headers) {
-        return r;
-    }
     let rt = st.rt();
     let mut unpriced: Vec<Value> = Vec::new();
     let mut seen_models: Vec<Value> = Vec::new();
@@ -171,20 +222,21 @@ struct PricingBody {
 /// Replace the price overrides (USD per million tokens).
 async fn set_pricing(
     State(st): State<Arc<AppState>>,
-    headers: HeaderMap,
+    admin: Admin,
     Json(body): Json<PricingBody>,
 ) -> Response {
-    if let Err(r) = check_token(&st, &headers) {
-        return r;
-    }
     if body.overrides.len() > 500 {
         return err(StatusCode::BAD_REQUEST, "at most 500 price overrides");
     }
     let n = body.overrides.len();
-    match control::edit_pricing(&st, |p| {
-        *p = body.overrides;
-        Ok(())
-    })
+    match control::edit_pricing(
+        &st,
+        admin.change("pricing.update", None, "model prices"),
+        |p| {
+            *p = body.overrides;
+            Ok(())
+        },
+    )
     .await
     {
         Ok(()) => Json(json!({ "overrides": n })).into_response(),
@@ -193,61 +245,19 @@ async fn set_pricing(
 }
 
 async fn readyz(State(st): State<Arc<AppState>>) -> Response {
-    match st.ledger.ping().await {
-        Ok(()) => (StatusCode::OK, "ready").into_response(),
-        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "redis unavailable").into_response(),
+    if st.ledger.ping().await.is_err() {
+        return (StatusCode::SERVICE_UNAVAILABLE, "redis unavailable").into_response();
     }
-}
-
-fn err(status: StatusCode, message: &str) -> Response {
-    (status, Json(json!({ "error": message }))).into_response()
-}
-
-#[allow(clippy::result_large_err)]
-fn check_token(st: &AppState, headers: &HeaderMap) -> Result<(), Response> {
-    let rt = st.rt();
-    let Some(expected) = rt.admin_token.as_deref() else {
-        return Err(err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "admin API is disabled: set the admin token environment variable",
-        ));
-    };
-    let given = headers
-        .get(AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .unwrap_or("");
-    // Compare digests so the check takes the same time regardless of where the strings differ.
-    let (a, b) = (
-        Sha256::digest(given.as_bytes()),
-        Sha256::digest(expected.as_bytes()),
-    );
-    if a.iter()
-        .zip(b.iter())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        != 0
+    if let Some(db) = &st.db
+        && db.ping().await.is_err()
     {
-        return Err(err(StatusCode::UNAUTHORIZED, "invalid admin token"));
+        return (StatusCode::SERVICE_UNAVAILABLE, "database unavailable").into_response();
     }
-    Ok(())
+    (StatusCode::OK, "ready").into_response()
 }
 
-#[allow(clippy::result_large_err)]
-fn authorize_org(st: &AppState, headers: &HeaderMap, org: &str) -> Result<(), Response> {
-    check_token(st, headers)?;
-    if !st.rt().cfg.orgs.iter().any(|o| o.id == org) {
-        return Err(err(StatusCode::NOT_FOUND, "unknown org"));
-    }
-    Ok(())
-}
-
-#[allow(clippy::result_large_err)]
-fn authorize(st: &AppState, headers: &HeaderMap, org: &str, run: &str) -> Result<(), Response> {
-    authorize_org(st, headers, org)?;
-    if !valid_id(run) {
-        return Err(err(StatusCode::BAD_REQUEST, "invalid run id"));
-    }
-    Ok(())
+pub(crate) fn err(status: StatusCode, message: &str) -> Response {
+    (status, Json(json!({ "error": message }))).into_response()
 }
 
 fn unavailable(e: anyhow::Error) -> Response {
@@ -296,10 +306,7 @@ fn key_id(hash: &str) -> String {
 
 // --- Overview: orgs, projects, keys, budgets and this month's spend ---
 
-async fn overview(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Err(r) = check_token(&st, &headers) {
-        return r;
-    }
+async fn overview(State(st): State<Arc<AppState>>, _admin: Admin) -> Response {
     let rt = st.rt();
     let now = Utc::now();
     let ym = now.format("%Y%m").to_string();
@@ -438,28 +445,30 @@ fn new_id(id: Option<String>, kind: &str) -> Result<String, EditError> {
 
 async fn create_org(
     State(st): State<Arc<AppState>>,
-    headers: HeaderMap,
+    admin: Admin,
     Json(body): Json<OrgBody>,
 ) -> Response {
-    if let Err(r) = check_token(&st, &headers) {
-        return r;
-    }
-    let result = control::edit(&st, |orgs| {
-        let id = new_id(body.id, "org")?;
-        if orgs.iter().any(|o| o.id == id) {
-            return Err(EditError::Invalid(format!("org {id:?} already exists")));
-        }
-        orgs.push(OrgConfig {
-            id: id.clone(),
-            fail_mode: body.fail_mode.unwrap_or_default(),
-            budgets: body.budgets.unwrap_or_default(),
-            provider_key_env: HashMap::new(),
-            provider_secrets: HashMap::new(),
-            anthropic_workspace_id: None,
-            projects: Vec::new(),
-        });
-        Ok(id)
-    })
+    let target = body.id.clone().unwrap_or_default();
+    let result = control::edit(
+        &st,
+        admin.change("org.create", Some(&target), &target),
+        |orgs| {
+            let id = new_id(body.id, "org")?;
+            if orgs.iter().any(|o| o.id == id) {
+                return Err(EditError::Invalid(format!("org {id:?} already exists")));
+            }
+            orgs.push(OrgConfig {
+                id: id.clone(),
+                fail_mode: body.fail_mode.unwrap_or_default(),
+                budgets: body.budgets.unwrap_or_default(),
+                provider_key_env: HashMap::new(),
+                provider_secrets: HashMap::new(),
+                anthropic_workspace_id: None,
+                projects: Vec::new(),
+            });
+            Ok(id)
+        },
+    )
     .await;
     match result {
         Ok(id) => (StatusCode::CREATED, Json(json!({ "id": id }))).into_response(),
@@ -470,13 +479,13 @@ async fn create_org(
 async fn update_org(
     State(st): State<Arc<AppState>>,
     Path(org): Path<String>,
-    headers: HeaderMap,
+    admin: Admin,
     Json(body): Json<OrgBody>,
 ) -> Response {
-    if let Err(r) = authorize_org(&st, &headers, &org) {
+    if let Err(r) = admin.org(&st, &org) {
         return r;
     }
-    let result = control::edit(&st, |orgs| {
+    let result = control::edit(&st, admin.change("org.update", Some(&org), &org), |orgs| {
         if body.id.as_deref().is_some_and(|id| id != org) {
             return Err(EditError::Invalid("org ids cannot be changed".into()));
         }
@@ -503,12 +512,12 @@ async fn update_org(
 async fn delete_org(
     State(st): State<Arc<AppState>>,
     Path(org): Path<String>,
-    headers: HeaderMap,
+    admin: Admin,
 ) -> Response {
-    if let Err(r) = authorize_org(&st, &headers, &org) {
+    if let Err(r) = admin.org(&st, &org) {
         return r;
     }
-    let result = control::edit(&st, |orgs| {
+    let result = control::edit(&st, admin.change("org.delete", Some(&org), &org), |orgs| {
         orgs.retain(|o| o.id != org);
         Ok(())
     })
@@ -522,27 +531,32 @@ async fn delete_org(
 async fn create_project(
     State(st): State<Arc<AppState>>,
     Path(org): Path<String>,
-    headers: HeaderMap,
+    admin: Admin,
     Json(body): Json<ProjectBody>,
 ) -> Response {
-    if let Err(r) = authorize_org(&st, &headers, &org) {
+    if let Err(r) = admin.org(&st, &org) {
         return r;
     }
-    let result = control::edit(&st, |orgs| {
-        let id = new_id(body.id, "project")?;
-        let o = find_org(orgs, &org)?;
-        if o.projects.iter().any(|p| p.id == id) {
-            return Err(EditError::Invalid(format!("project {id:?} already exists")));
-        }
-        o.projects.push(ProjectConfig {
-            id: id.clone(),
-            virtual_key_hashes: Vec::new(),
-            keys: Vec::new(),
-            budgets: body.budgets.unwrap_or_default(),
-            pack: None,
-        });
-        Ok(id)
-    })
+    let target = body.id.clone().unwrap_or_default();
+    let result = control::edit(
+        &st,
+        admin.change("project.create", Some(&org), &target),
+        |orgs| {
+            let id = new_id(body.id, "project")?;
+            let o = find_org(orgs, &org)?;
+            if o.projects.iter().any(|p| p.id == id) {
+                return Err(EditError::Invalid(format!("project {id:?} already exists")));
+            }
+            o.projects.push(ProjectConfig {
+                id: id.clone(),
+                virtual_key_hashes: Vec::new(),
+                keys: Vec::new(),
+                budgets: body.budgets.unwrap_or_default(),
+                pack: None,
+            });
+            Ok(id)
+        },
+    )
     .await;
     match result {
         Ok(id) => (StatusCode::CREATED, Json(json!({ "id": id }))).into_response(),
@@ -553,24 +567,28 @@ async fn create_project(
 async fn update_project(
     State(st): State<Arc<AppState>>,
     Path((org, project)): Path<(String, String)>,
-    headers: HeaderMap,
+    admin: Admin,
     Json(body): Json<ProjectBody>,
 ) -> Response {
-    if let Err(r) = authorize_org(&st, &headers, &org) {
+    if let Err(r) = admin.org(&st, &org) {
         return r;
     }
-    let result = control::edit(&st, |orgs| {
-        if body.id.as_deref().is_some_and(|id| id != project) {
-            return Err(EditError::Invalid("project ids cannot be changed".into()));
-        }
-        let p = find_project(orgs, &org, &project)?;
-        if let Some(mut b) = body.budgets {
-            // Only the org can set an org-wide budget.
-            b.org_monthly = None;
-            p.budgets = b;
-        }
-        Ok(())
-    })
+    let result = control::edit(
+        &st,
+        admin.change("project.update", Some(&org), &project),
+        |orgs| {
+            if body.id.as_deref().is_some_and(|id| id != project) {
+                return Err(EditError::Invalid("project ids cannot be changed".into()));
+            }
+            let p = find_project(orgs, &org, &project)?;
+            if let Some(mut b) = body.budgets {
+                // Only the org can set an org-wide budget.
+                b.org_monthly = None;
+                p.budgets = b;
+            }
+            Ok(())
+        },
+    )
     .await;
     match result {
         Ok(()) => Json(json!({ "id": project })).into_response(),
@@ -581,22 +599,26 @@ async fn update_project(
 async fn delete_project(
     State(st): State<Arc<AppState>>,
     Path((org, project)): Path<(String, String)>,
-    headers: HeaderMap,
+    admin: Admin,
 ) -> Response {
-    if let Err(r) = authorize_org(&st, &headers, &org) {
+    if let Err(r) = admin.org(&st, &org) {
         return r;
     }
-    let result = control::edit(&st, |orgs| {
-        let o = find_org(orgs, &org)?;
-        let before = o.projects.len();
-        o.projects.retain(|p| p.id != project);
-        if o.projects.len() == before {
-            return Err(EditError::NotFound(format!(
-                "unknown project {org}/{project}"
-            )));
-        }
-        Ok(())
-    })
+    let result = control::edit(
+        &st,
+        admin.change("project.delete", Some(&org), &project),
+        |orgs| {
+            let o = find_org(orgs, &org)?;
+            let before = o.projects.len();
+            o.projects.retain(|p| p.id != project);
+            if o.projects.len() == before {
+                return Err(EditError::NotFound(format!(
+                    "unknown project {org}/{project}"
+                )));
+            }
+            Ok(())
+        },
+    )
     .await;
     match result {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -607,10 +629,10 @@ async fn delete_project(
 async fn create_key(
     State(st): State<Arc<AppState>>,
     Path((org, project)): Path<(String, String)>,
-    headers: HeaderMap,
+    admin: Admin,
     Json(body): Json<KeyBody>,
 ) -> Response {
-    if let Err(r) = authorize_org(&st, &headers, &org) {
+    if let Err(r) = admin.org(&st, &org) {
         return r;
     }
     let name = body.name.trim().to_string();
@@ -630,10 +652,18 @@ async fn create_key(
         "prefix": vk.prefix,
         "created_at": vk.created_at,
     });
-    let result = control::edit(&st, |orgs| {
-        find_project(orgs, &org, &project)?.keys.push(vk);
-        Ok(())
-    })
+    let result = control::edit(
+        &st,
+        admin.change(
+            "key.create",
+            Some(&org),
+            &format!("{project}/{}", key_id(&hash)),
+        ),
+        |orgs| {
+            find_project(orgs, &org, &project)?.keys.push(vk);
+            Ok(())
+        },
+    )
     .await;
     match result {
         // The key itself is returned once and never stored.
@@ -649,21 +679,25 @@ async fn create_key(
 async fn revoke_key(
     State(st): State<Arc<AppState>>,
     Path((org, project, key)): Path<(String, String, String)>,
-    headers: HeaderMap,
+    admin: Admin,
 ) -> Response {
-    if let Err(r) = authorize_org(&st, &headers, &org) {
+    if let Err(r) = admin.org(&st, &org) {
         return r;
     }
-    let result = control::edit(&st, |orgs| {
-        let p = find_project(orgs, &org, &project)?;
-        let before = p.keys.len() + p.virtual_key_hashes.len();
-        p.keys.retain(|k| key_id(&k.hash) != key);
-        p.virtual_key_hashes.retain(|h| key_id(h) != key);
-        if p.keys.len() + p.virtual_key_hashes.len() == before {
-            return Err(EditError::NotFound("unknown key".into()));
-        }
-        Ok(())
-    })
+    let result = control::edit(
+        &st,
+        admin.change("key.revoke", Some(&org), &format!("{project}/{key}")),
+        |orgs| {
+            let p = find_project(orgs, &org, &project)?;
+            let before = p.keys.len() + p.virtual_key_hashes.len();
+            p.keys.retain(|k| key_id(&k.hash) != key);
+            p.virtual_key_hashes.retain(|h| key_id(h) != key);
+            if p.keys.len() + p.virtual_key_hashes.len() == before {
+                return Err(EditError::NotFound("unknown key".into()));
+            }
+            Ok(())
+        },
+    )
     .await;
     match result {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -682,10 +716,10 @@ struct ProviderKeyBody {
 async fn set_provider_key(
     State(st): State<Arc<AppState>>,
     Path((org, provider)): Path<(String, String)>,
-    headers: HeaderMap,
+    admin: Admin,
     Json(body): Json<ProviderKeyBody>,
 ) -> Response {
-    if let Err(r) = authorize_org(&st, &headers, &org) {
+    if let Err(r) = admin.org(&st, &org) {
         return r;
     }
     let Some(p) = Provider::from_name(&provider) else {
@@ -731,12 +765,16 @@ async fn set_provider_key(
         updated_at: Utc::now().to_rfc3339(),
     };
     let last4 = saved.last4.clone();
-    let result = control::edit(&st, |orgs| {
-        find_org(orgs, &org)?
-            .provider_secrets
-            .insert(p.name().to_string(), saved);
-        Ok(())
-    })
+    let result = control::edit(
+        &st,
+        admin.change("provider_key.set", Some(&org), p.name()),
+        |orgs| {
+            find_org(orgs, &org)?
+                .provider_secrets
+                .insert(p.name().to_string(), saved);
+            Ok(())
+        },
+    )
     .await;
     match result {
         Ok(()) => Json(json!({ "provider": p.name(), "source": "dashboard", "last4": last4 }))
@@ -748,20 +786,22 @@ async fn set_provider_key(
 async fn remove_provider_key(
     State(st): State<Arc<AppState>>,
     Path((org, provider)): Path<(String, String)>,
-    headers: HeaderMap,
+    admin: Admin,
 ) -> Response {
-    if let Err(r) = authorize_org(&st, &headers, &org) {
+    if let Err(r) = admin.org(&st, &org) {
         return r;
     }
     let Some(p) = Provider::from_name(&provider) else {
         return err(StatusCode::NOT_FOUND, "unknown provider");
     };
-    let result = control::edit(&st, |orgs| {
-        match find_org(orgs, &org)?.provider_secrets.remove(p.name()) {
+    let result = control::edit(
+        &st,
+        admin.change("provider_key.remove", Some(&org), p.name()),
+        |orgs| match find_org(orgs, &org)?.provider_secrets.remove(p.name()) {
             Some(_) => Ok(()),
             None => Err(EditError::NotFound("no key saved for this provider".into())),
-        }
-    })
+        },
+    )
     .await;
     match result {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -771,10 +811,7 @@ async fn remove_provider_key(
 
 // --- Guardrail packs ---
 
-async fn list_packs(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if let Err(r) = check_token(&st, &headers) {
-        return r;
-    }
+async fn list_packs(_admin: Admin) -> Response {
     Json(json!({ "packs": crate::packs::all() })).into_response()
 }
 
@@ -788,21 +825,25 @@ struct PackBody {
 async fn apply_pack(
     State(st): State<Arc<AppState>>,
     Path((org, project)): Path<(String, String)>,
-    headers: HeaderMap,
+    admin: Admin,
     Json(body): Json<PackBody>,
 ) -> Response {
-    if let Err(r) = authorize_org(&st, &headers, &org) {
+    if let Err(r) = admin.org(&st, &org) {
         return r;
     }
     let Some(pack) = crate::packs::find(&body.pack) else {
         return err(StatusCode::NOT_FOUND, "unknown pack");
     };
-    let result = control::edit(&st, |orgs| {
-        let p = find_project(orgs, &org, &project)?;
-        p.budgets = pack.budgets.clone();
-        p.pack = Some(pack.id.to_string());
-        Ok(())
-    })
+    let result = control::edit(
+        &st,
+        admin.change("pack.apply", Some(&org), &project),
+        |orgs| {
+            let p = find_project(orgs, &org, &project)?;
+            p.budgets = pack.budgets.clone();
+            p.pack = Some(pack.id.to_string());
+            Ok(())
+        },
+    )
     .await;
     match result {
         Ok(()) => Json(json!({ "project": project, "pack": pack.id, "budgets": pack.budgets }))
@@ -817,9 +858,9 @@ async fn apply_pack(
 async fn test_provider_key(
     State(st): State<Arc<AppState>>,
     Path((org, provider)): Path<(String, String)>,
-    headers: HeaderMap,
+    admin: Admin,
 ) -> Response {
-    if let Err(r) = authorize_org(&st, &headers, &org) {
+    if let Err(r) = admin.org(&st, &org) {
         return r;
     }
     let Some(p) = Provider::from_name(&provider) else {
@@ -870,6 +911,12 @@ async fn test_provider_key(
         ),
         Err(_) => (false, None, "could not reach the provider".into()),
     };
+    let detail = json!({ "ok": ok, "status": status });
+    audit::record(
+        &st,
+        admin.entry("provider_key.test", &org, p.name(), detail),
+    )
+    .await;
     Json(json!({ "ok": ok, "status": status, "message": message })).into_response()
 }
 
@@ -889,9 +936,9 @@ async fn review(
     State(st): State<Arc<AppState>>,
     Path(org): Path<String>,
     Query(q): Query<ListQuery>,
-    headers: HeaderMap,
+    admin: Admin,
 ) -> Response {
-    if let Err(r) = authorize_org(&st, &headers, &org) {
+    if let Err(r) = admin.org(&st, &org) {
         return r;
     }
     let events = match st
@@ -1020,9 +1067,9 @@ async fn spend(
     State(st): State<Arc<AppState>>,
     Path(org): Path<String>,
     Query(q): Query<SpendQuery>,
-    headers: HeaderMap,
+    admin: Admin,
 ) -> Response {
-    if let Err(r) = authorize_org(&st, &headers, &org) {
+    if let Err(r) = admin.org(&st, &org) {
         return r;
     }
     let n = q.days.unwrap_or(30).clamp(1, 40) as i64;
@@ -1101,9 +1148,9 @@ async fn list_runs(
     State(st): State<Arc<AppState>>,
     Path(org): Path<String>,
     Query(q): Query<ListQuery>,
-    headers: HeaderMap,
+    admin: Admin,
 ) -> Response {
-    if let Err(r) = authorize_org(&st, &headers, &org) {
+    if let Err(r) = admin.org(&st, &org) {
         return r;
     }
     let recent = match st.ledger.recent_runs(&org, q.limit(200)).await {
@@ -1143,9 +1190,9 @@ async fn list_agents(
     State(st): State<Arc<AppState>>,
     Path(org): Path<String>,
     Query(q): Query<ListQuery>,
-    headers: HeaderMap,
+    admin: Admin,
 ) -> Response {
-    if let Err(r) = authorize_org(&st, &headers, &org) {
+    if let Err(r) = admin.org(&st, &org) {
         return r;
     }
     let recent = match st.ledger.recent_agents(&org, q.limit(200)).await {
@@ -1183,9 +1230,9 @@ async fn list_events(
     State(st): State<Arc<AppState>>,
     Path(org): Path<String>,
     Query(q): Query<ListQuery>,
-    headers: HeaderMap,
+    admin: Admin,
 ) -> Response {
-    if let Err(r) = authorize_org(&st, &headers, &org) {
+    if let Err(r) = admin.org(&st, &org) {
         return r;
     }
     match st.ledger.recent_events(&org, q.limit(100)).await {
@@ -1197,9 +1244,9 @@ async fn list_events(
 async fn run_timeline(
     State(st): State<Arc<AppState>>,
     Path((org, run)): Path<(String, String)>,
-    headers: HeaderMap,
+    admin: Admin,
 ) -> Response {
-    if let Err(r) = authorize(&st, &headers, &org, &run) {
+    if let Err(r) = admin.run(&st, &org, &run) {
         return r;
     }
     let (runs, events) = match st.ledger.run_timeline(&org, &run, 200).await {
@@ -1232,14 +1279,109 @@ async fn run_timeline(
     Json(json!({ "run_id": run, "runs": runs, "events": events })).into_response()
 }
 
+// --- Audit log ---
+
+#[derive(Deserialize)]
+struct AuditQuery {
+    org: Option<String>,
+    before: Option<String>,
+    limit: Option<usize>,
+    format: Option<String>,
+}
+
+/// Most entries in one CSV download.
+const AUDIT_CSV_MAX: usize = 10_000;
+
+/// The audit log, newest first, one page at a time (`next` is the cursor for the next page);
+/// `format=csv` downloads the newest entries as a spreadsheet.
+async fn list_audit(
+    State(st): State<Arc<AppState>>,
+    Query(q): Query<AuditQuery>,
+    _admin: Admin,
+) -> Response {
+    let org = q.org.as_deref().filter(|o| !o.is_empty());
+    if q.format.as_deref() != Some("csv") {
+        return match audit::list(&st, org, q.before.as_deref(), q.limit.unwrap_or(100)).await {
+            Ok((entries, next)) => Json(json!({ "entries": entries, "next": next,
+                "durable": st.db.is_some() }))
+            .into_response(),
+            Err(e) => unavailable(e),
+        };
+    }
+    let mut rows = Vec::new();
+    let mut before = q.before.clone();
+    while rows.len() < AUDIT_CSV_MAX {
+        match audit::list(&st, org, before.as_deref(), 500).await {
+            Ok((page, next)) => {
+                rows.extend(page);
+                match next {
+                    Some(n) => before = Some(n),
+                    None => break,
+                }
+            }
+            Err(e) => return unavailable(e),
+        }
+    }
+    let mut out = String::from("id,time,org,actor,action,target,ip,config_version,changes\n");
+    for r in &rows {
+        let s = |k: &str| match &r[k] {
+            Value::Null => String::new(),
+            Value::String(v) => v.clone(),
+            v => v.to_string(),
+        };
+        let fields = [
+            s("id"),
+            s("at"),
+            s("org"),
+            s("actor"),
+            s("action"),
+            s("target"),
+            s("ip"),
+            s("config_version"),
+            r["detail"]["changes"].to_string(),
+        ];
+        let line: Vec<String> = fields.iter().map(|f| csv_field(f)).collect();
+        out.push_str(&line.join(","));
+        out.push('\n');
+    }
+    (
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("text/csv; charset=utf-8"),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                HeaderValue::from_static("attachment; filename=\"tokenlens-audit.csv\""),
+            ),
+        ],
+        out,
+    )
+        .into_response()
+}
+
+/// Quote a CSV field, and keep spreadsheets from reading it as a formula.
+fn csv_field(v: &str) -> String {
+    let v = if v.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("'{v}")
+    } else {
+        v.to_string()
+    };
+    if v.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", v.replace('"', "\"\""))
+    } else {
+        v
+    }
+}
+
 // --- Single runs: state, pause / resume / kill ---
 
 async fn pause(
     State(st): State<Arc<AppState>>,
     Path((org, run)): Path<(String, String)>,
-    headers: HeaderMap,
+    admin: Admin,
 ) -> Response {
-    if let Err(r) = authorize(&st, &headers, &org, &run) {
+    if let Err(r) = admin.run(&st, &org, &run) {
         return r;
     }
     match st.ledger.run_state(&org, &run).await {
@@ -1248,7 +1390,10 @@ async fn pause(
         _ => {}
     }
     match st.ledger.set_run_state(&org, &run, "paused").await {
-        Ok(()) => state_json(&org, &run, "paused"),
+        Ok(()) => {
+            audit::record(&st, admin.entry("run.pause", &org, &run, json!({}))).await;
+            state_json(&org, &run, "paused")
+        }
         Err(e) => unavailable(e),
     }
 }
@@ -1256,9 +1401,9 @@ async fn pause(
 async fn resume(
     State(st): State<Arc<AppState>>,
     Path((org, run)): Path<(String, String)>,
-    headers: HeaderMap,
+    admin: Admin,
 ) -> Response {
-    if let Err(r) = authorize(&st, &headers, &org, &run) {
+    if let Err(r) = admin.run(&st, &org, &run) {
         return r;
     }
     match st.ledger.run_state(&org, &run).await {
@@ -1269,7 +1414,10 @@ async fn resume(
         _ => {}
     }
     match st.ledger.clear_run_state(&org, &run).await {
-        Ok(()) => state_json(&org, &run, "running"),
+        Ok(()) => {
+            audit::record(&st, admin.entry("run.resume", &org, &run, json!({}))).await;
+            state_json(&org, &run, "running")
+        }
         Err(e) => unavailable(e),
     }
 }
@@ -1277,13 +1425,16 @@ async fn resume(
 async fn kill(
     State(st): State<Arc<AppState>>,
     Path((org, run)): Path<(String, String)>,
-    headers: HeaderMap,
+    admin: Admin,
 ) -> Response {
-    if let Err(r) = authorize(&st, &headers, &org, &run) {
+    if let Err(r) = admin.run(&st, &org, &run) {
         return r;
     }
     match st.ledger.set_run_state(&org, &run, "killed").await {
-        Ok(()) => state_json(&org, &run, "killed"),
+        Ok(()) => {
+            audit::record(&st, admin.entry("run.kill", &org, &run, json!({}))).await;
+            state_json(&org, &run, "killed")
+        }
         Err(e) => unavailable(e),
     }
 }
@@ -1291,9 +1442,9 @@ async fn kill(
 async fn get_run(
     State(st): State<Arc<AppState>>,
     Path((org, run)): Path<(String, String)>,
-    headers: HeaderMap,
+    admin: Admin,
 ) -> Response {
-    if let Err(r) = authorize(&st, &headers, &org, &run) {
+    if let Err(r) = admin.run(&st, &org, &run) {
         return r;
     }
     let state = match st.ledger.run_state(&org, &run).await {

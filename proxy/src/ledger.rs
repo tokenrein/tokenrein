@@ -975,6 +975,83 @@ impl Ledger {
             .filter_map(|e| serde_json::from_str(&e).ok())
             .collect())
     }
+
+    // --- Audit log when there is no database (capped; Postgres keeps everything) ---
+
+    pub async fn audit_append(
+        &self,
+        e: &crate::audit::Entry,
+        config_version: Option<u64>,
+    ) -> Result<()> {
+        let mut conn = self.conn.clone();
+        let at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let mut doc = serde_json::to_value(e)?;
+        doc["at"] = serde_json::json!(at);
+        doc["config_version"] = serde_json::json!(config_version);
+        let _: String = redis::cmd("XADD")
+            .arg(AUDIT_STREAM)
+            .arg("MAXLEN")
+            .arg("~")
+            .arg(AUDIT_MAX)
+            .arg("*")
+            .arg("e")
+            .arg(doc.to_string())
+            .query_async(&mut conn)
+            .await?;
+        Ok(())
+    }
+
+    /// Newest first, optionally only one org's entries; `before` is an entry id (exclusive).
+    pub async fn audit_list(
+        &self,
+        org: Option<&str>,
+        before: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<serde_json::Value>> {
+        let mut conn = self.conn.clone();
+        let mut out = Vec::new();
+        let mut end = match before {
+            Some(id) if valid_stream_id(id) => format!("({id}"),
+            _ => "+".to_string(),
+        };
+        // Filtering by org happens here, so scan a bounded number of pages.
+        for _ in 0..20 {
+            let reply: redis::streams::StreamRangeReply = redis::cmd("XREVRANGE")
+                .arg(AUDIT_STREAM)
+                .arg(&end)
+                .arg("-")
+                .arg("COUNT")
+                .arg(limit.max(100))
+                .query_async(&mut conn)
+                .await?;
+            let Some(last) = reply.ids.last() else { break };
+            end = format!("({}", last.id);
+            for item in &reply.ids {
+                let Some(mut e) = item
+                    .get::<String>("e")
+                    .and_then(|e| serde_json::from_str::<serde_json::Value>(&e).ok())
+                else {
+                    continue;
+                };
+                if org.is_some_and(|o| e["org"].as_str() != Some(o)) {
+                    continue;
+                }
+                e["id"] = serde_json::json!(item.id);
+                out.push(e);
+                if out.len() == limit {
+                    return Ok(out);
+                }
+            }
+        }
+        Ok(out)
+    }
+}
+
+fn valid_stream_id(id: &str) -> bool {
+    let mut parts = id.split('-');
+    let ok =
+        |p: Option<&str>| p.is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    ok(parts.next()) && ok(parts.next()) && parts.next().is_none()
 }
 
 pub struct RunDetail {
@@ -987,6 +1064,8 @@ pub struct RunDetail {
 const CONTROL_ORGS: &str = "tl:control:orgs";
 const CONTROL_VERSION: &str = "tl:control:version";
 const EVENTS_MAX: usize = 5000;
+const AUDIT_STREAM: &str = "tl:audit";
+const AUDIT_MAX: usize = 10_000;
 const RUN_EVENTS_MAX: usize = 500;
 
 // KEYS: doc, version; ARGV: expected version, new doc. Returns the new version or -1.

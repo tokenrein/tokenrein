@@ -9,14 +9,16 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TL_REQUIRE_REDIS: "1"
+      TL_REQUIRE_POSTGRES: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Install redis-server
-        run: sudo apt-get update && sudo apt-get install -y redis-server
+      # Tests start their own throwaway redis-server and Postgres (initdb) on free ports.
+      - name: Install redis-server and Postgres
+        run: sudo apt-get update && sudo apt-get install -y redis-server postgresql
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all

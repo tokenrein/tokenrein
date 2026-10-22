@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TokenLens Dashboard</title>
+<link rel="stylesheet" href="/assets/app.css">
+<script src="/assets/js/core.js" defer></script>
+<script src="/assets/js/overview.js" defer></script>
+<script src="/assets/js/runs.js" defer></script>
+<script src="/assets/js/connect.js" defer></script>
+<script src="/assets/js/models.js" defer></script>
+<script src="/assets/js/spend.js" defer></script>
+<script src="/assets/js/activity.js" defer></script>
+<script src="/assets/js/settings.js" defer></script>
+<script src="/assets/js/audit.js" defer></script>
+<script src="/assets/js/app.js" defer></script>
+</head>
+<body>
+
+<section id="login" class="card login hide" aria-labelledby="login-title">
+  <div class="brand"><span class="dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></span>TokenLens</div>
+  <h1 id="login-title">Sign in to the dashboard</h1>
+  <p class="sub">Enter the proxy's admin token (the value of <span class="mono">TL_ADMIN_TOKEN</span>). It stays in this browser tab only.</p>
+  <form id="login-form">
+    <label class="field">Admin token
+      <input id="token" type="password" autocomplete="current-password" required>
+    </label>
+    <div class="err" id="login-err" role="alert"></div>
+    <button class="btn primary" type="submit">Sign in</button>
+  </form>
+</section>
+
+<div id="app" class="hide shell">
+  <aside class="side">
+    <div class="side-top">
+      <div class="brand"><span class="dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></span>TokenLens</div>
+      <label class="org-pick">Org
+        <select id="org" aria-label="Organisation"></select>
+      </label>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <div class="nav-group">Monitor</div>
+      <button role="tab" data-tab="overview" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>Overview</button>
+      <button role="tab" data-tab="runs" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="12" r="2"/><path d="M6 7v10M6 12h6a4 4 0 0 0 4-4V7"/></svg>Runs</button>
+      <button role="tab" data-tab="agents" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6"/></svg>Agents</button>
+      <button role="tab" data-tab="spend" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Spend</button>
+      <button role="tab" data-tab="activity" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Activity</button>
+      <div class="nav-group">Set up</div>
+      <button role="tab" data-tab="connect" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0V7zM12 16v5"/></svg>Connect</button>
+      <button role="tab" data-tab="settings" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M14 9l2 2"/></svg>Keys &amp; limits</button>
+      <button role="tab" data-tab="models" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9-9-9z"/><circle cx="8" cy="8" r="1.5"/></svg>Models &amp; prices</button>
+      <div class="nav-group">Govern</div>
+      <button role="tab" data-tab="audit" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg>Audit log</button>
+    </nav>
+    <div class="side-foot">
+      <span class="status" id="updated"></span>
+      <button class="btn sm" id="signout" type="button">Sign out</button>
+    </div>
+  </aside>
+
+  <main class="content">
+    <section data-view="overview">
+      <h1>Overview</h1>
+      <p class="sub" id="ov-sub"></p>
+      <div id="get-started"></div>
+      <div class="grid kpis" id="kpis"></div>
+      <div id="review"></div>
+      <div class="card">
+        <div class="card-h"><h2>Projects this month</h2></div>
+        <div class="table-wrap"><table id="projects-table"></table></div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h2>Most recent runs</h2><button class="btn sm" data-goto="runs" style="margin-left:auto">All runs</button></div>
+        <div class="table-wrap"><table id="ov-runs" class="wide"></table></div>
+      </div>
+    </section>
+
+    <section data-view="runs" class="hide">
+      <h1>Runs</h1>
+      <p class="sub">Every agent run seen in the last 7 days. Sub-agent runs are nested under their parent, and their spend also counts against it.</p>
+      <div class="card">
+        <div class="card-h">
+          <input type="search" id="run-filter" placeholder="Filter by run, project or agent" aria-label="Filter runs" style="min-width:240px">
+          <label class="inline status"><input type="checkbox" id="run-flat"> Flat list</label>
+          <div class="toolbar"><label class="inline status"><input type="checkbox" id="autorefresh" checked> Auto-refresh</label></div>
+        </div>
+        <div class="table-wrap"><table id="runs-table" class="wide"></table></div>
+      </div>
+    </section>
+
+    <section data-view="agents" class="hide">
+      <h1>Agents</h1>
+      <p class="sub" id="agents-sub">Spend per agent today, against the agent daily budget.</p>
+      <p class="help"><span class="live on"><span class="dot"></span>Live</span> a request in the last minute · <span class="live idle"><span class="dot"></span>Idle</span> in the last 15 minutes · <span class="live off"><span class="dot"></span>Offline</span> longer ago</p>
+      <div class="card"><div class="table-wrap"><table id="agents-table"></table></div></div>
+    </section>
+
+    <section data-view="spend" class="hide">
+      <h1>Spend</h1>
+      <p class="sub">Cost of requests through the proxy, by day and broken down by model, user, project and agent. Users come from the <span class="mono">x-tl-user</span> header (or the SDKs' <span class="mono">user</span> option).</p>
+      <div class="card">
+        <div class="card-h"><h2 id="spend-title">Cost per day</h2>
+          <div class="toolbar">
+            <select id="spend-days" aria-label="Date range"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option></select>
+            <label class="inline status"><input type="checkbox" id="spend-table-toggle"> Table</label>
+          </div></div>
+        <div class="card-b">
+          <div class="grid kpis" id="spend-kpis" style="margin-bottom:8px"></div>
+          <div class="chart" id="spend-chart"></div>
+          <div class="table-wrap hide" id="spend-daily"></div>
+        </div>
+      </div>
+      <div class="split" id="spend-split"></div>
+    </section>
+
+    <section data-view="connect" class="hide">
+      <h1>Connect an agent</h1>
+      <p class="sub">Pick what you want to guard. Usage shows up within seconds, and nothing is blocked until you switch a limit to Enforce.</p>
+      <div id="connect"></div>
+    </section>
+
+    <section data-view="models" class="hide">
+      <h1>Models &amp; prices</h1>
+      <p class="sub" id="models-sub">Prices TokenLens uses to turn tokens into dollars, per million tokens.</p>
+      <div id="models"></div>
+    </section>
+
+    <section data-view="run" class="hide">
+      <button class="back" data-goto="runs" type="button">← All runs</button>
+      <div id="run-view"></div>
+    </section>
+
+    <section data-view="activity" class="hide">
+      <h1>Activity</h1>
+      <p class="sub">The latest requests through the proxy, newest first.</p>
+      <div class="card">
+        <div class="card-h">
+          <select id="ev-filter" aria-label="Filter by decision">
+            <option value="">All decisions</option>
+            <option value="allowed">Allowed</option>
+            <option value="blocked">Blocked</option>
+            <option value="error">Errors</option>
+          </select>
+        </div>
+        <div class="table-wrap"><table id="events-table" class="wide"></table></div>
+      </div>
+    </section>
+
+    <section data-view="audit" class="hide">
+      <h1>Audit log</h1>
+      <p class="sub">Every change made in this dashboard or through the admin API: who made it, from where, and exactly what changed. Provider keys never appear here.</p>
+      <div id="audit"></div>
+    </section>
+
+    <section data-view="settings" class="hide">
+      <h1>Keys &amp; limits</h1>
+      <p class="sub">Changes apply to every proxy instance within a few seconds; no restart needed.</p>
+      <div id="settings"></div>
+    </section>
+  </main>
+</div>
+
+<dialog id="price-dialog" aria-labelledby="price-dialog-title">
+  <div class="card-h"><h2 id="price-dialog-title">Model price</h2></div>
+  <form class="card-b" id="price-form">
+    <p class="help" style="margin:0">US dollars per million tokens. Applies to the model and any version or date suffix of it (for example <span class="mono">claude-sonnet-5</span> also covers <span class="mono">claude-sonnet-5-20261001</span>).</p>
+    <div class="budgets">
+      <label class="field">Provider <input type="text" name="provider" required placeholder="openai, anthropic, google, groq…"></label>
+      <label class="field">Model <input type="text" name="model" required placeholder="gpt-4o-mini"></label>
+      <label class="field">Input <input type="number" name="input" min="0" step="any" required></label>
+      <label class="field">Output <input type="number" name="output" min="0" step="any" required></label>
+      <label class="field">Cached input <span class="muted">(optional)</span><input type="number" name="cached" min="0" step="any"></label>
+      <label class="field">Cache write <span class="muted">(optional)</span><input type="number" name="write" min="0" step="any"></label>
+    </div>
+    <div class="inline" style="justify-content:flex-end">
+      <button class="btn" type="button" id="price-cancel">Cancel</button>
+      <button class="btn primary" type="submit">Save price</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="key-dialog" aria-labelledby="key-dialog-title">
+  <div class="card-h"><h2 id="key-dialog-title">New virtual key</h2></div>
+  <div class="card-b">
+    <p class="help" style="margin:0">Copy it now. Only its hash is stored, so it cannot be shown again.</p>
+    <div class="keybox" id="key-value"></div>
+    <div class="help mono" id="key-usage" style="margin:0;word-break:break-all"></div>
+    <div class="inline" style="justify-content:flex-end">
+      <button class="btn" id="key-copy" type="button">Copy key</button>
+      <button class="btn primary" id="key-close" type="button">Done</button>
+    </div>
+  </div>
+</dialog>
+</body>
+</html>

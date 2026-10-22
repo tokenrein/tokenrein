@@ -63,3 +63,131 @@ impl Drop for RedisServer {
         let _ = self.child.wait();
     }
 }
+
+/// A throwaway Postgres cluster (initdb + postgres) on a free port, deleted on drop. Binaries come
+/// from TL_PG_BIN, PATH, or the usual Homebrew / Debian locations. Returns None (skip) when they
+/// are not installed, unless TL_REQUIRE_POSTGRES is set (CI), in which case it panics.
+pub struct PostgresServer {
+    child: Child,
+    dir: std::path::PathBuf,
+    pub url: String,
+}
+
+fn pg_bin_dir() -> Option<std::path::PathBuf> {
+    let has_initdb = |d: &std::path::Path| d.join("initdb").is_file();
+    if let Some(d) = std::env::var_os("TL_PG_BIN") {
+        return Some(d.into());
+    }
+    if let Some(path) = std::env::var_os("PATH")
+        && let Some(d) = std::env::split_paths(&path).find(|d| has_initdb(d))
+    {
+        return Some(d);
+    }
+    let mut candidates: Vec<std::path::PathBuf> = ["/opt/homebrew/opt", "/usr/local/opt"]
+        .iter()
+        .flat_map(|root| {
+            (14..=19)
+                .rev()
+                .map(move |v| std::path::Path::new(root).join(format!("postgresql@{v}/bin")))
+        })
+        .collect();
+    if let Ok(entries) = std::fs::read_dir("/usr/lib/postgresql") {
+        let mut versions: Vec<_> = entries.flatten().map(|e| e.path().join("bin")).collect();
+        versions.sort();
+        candidates.extend(versions.into_iter().rev());
+    }
+    candidates.into_iter().find(|d| has_initdb(d))
+}
+
+impl PostgresServer {
+    pub fn start() -> Option<Self> {
+        let Some(bin) = pg_bin_dir() else {
+            if std::env::var_os("TL_REQUIRE_POSTGRES").is_some() {
+                panic!("Postgres binaries (initdb) not found but TL_REQUIRE_POSTGRES is set");
+            }
+            eprintln!("skipping: Postgres (initdb) not found");
+            return None;
+        };
+        let dir = std::env::temp_dir().join(format!("tl-pg-{}", uuid_like()));
+        let ok = Command::new(bin.join("initdb"))
+            .args(["-D", dir.to_str().unwrap(), "-U", "postgres", "-A", "trust"])
+            .args(["-E", "UTF8", "--locale=C", "--no-sync"])
+            .env("LC_ALL", "C")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(ok, "initdb failed in {}", dir.display());
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let child = Command::new(bin.join("postgres"))
+            .args(["-D", dir.to_str().unwrap(), "-p", &port.to_string()])
+            .args([
+                "-c",
+                "listen_addresses=127.0.0.1",
+                "-c",
+                "unix_socket_directories=",
+            ])
+            .args(["-c", "fsync=off", "-c", "synchronous_commit=off"])
+            .args(["-c", "full_page_writes=off"])
+            // Without a valid locale, Postgres on macOS refuses to start.
+            .env("LC_ALL", "C")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("starting postgres");
+        let server = Self {
+            child,
+            dir,
+            url: format!("postgres://postgres@127.0.0.1:{port}/postgres"),
+        };
+        // Accepting TCP connections comes before accepting queries; pg_isready knows the difference.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            let ready = Command::new(bin.join("pg_isready"))
+                .args([
+                    "-h",
+                    "127.0.0.1",
+                    "-p",
+                    &port.to_string(),
+                    "-U",
+                    "postgres",
+                    "-q",
+                ])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if ready {
+                return Some(server);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("postgres did not start on port {port}");
+    }
+}
+
+fn uuid_like() -> String {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    format!(
+        "{}-{nanos}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::SeqCst)
+    )
+}
+
+impl Drop for PostgresServer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}

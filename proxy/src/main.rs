@@ -57,10 +57,17 @@ async fn main() -> Result<()> {
         );
     }
 
+    if rt.database_url.is_none() {
+        tracing::warn!(
+            env = %rt.cfg.database.url_env,
+            "no database: config history and the audit log are kept in Redis only (fine for \
+             trying TokenLens out; set a Postgres URL for production)"
+        );
+    }
     let state = build_state(rt).await?;
     control::init(&state)
         .await
-        .context("loading managed orgs, keys and budgets from Redis")?;
+        .context("loading managed orgs, keys and budgets")?;
     for missing in &state.rt().missing_provider_keys {
         tracing::warn!("no provider API key: {missing}; calls to it fail until one is set");
     }
@@ -77,8 +84,12 @@ async fn main() -> Result<()> {
 
     let proxy_server = axum::serve(proxy_listener, proxy::router(state.clone()))
         .with_graceful_shutdown(shutdown_signal());
-    let admin_server =
-        axum::serve(admin_listener, admin::router(state)).with_graceful_shutdown(shutdown_signal());
+    // Connection info gives the audit log each admin's address.
+    let admin_server = axum::serve(
+        admin_listener,
+        admin::router(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal());
     tokio::try_join!(async { proxy_server.await }, async { admin_server.await })?;
     Ok(())
 }

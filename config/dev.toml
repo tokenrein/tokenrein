@@ -12,6 +12,12 @@ default_max_output_tokens = 4096
 [redis]
 url = "redis://127.0.0.1:6379"
 
+# Optional: Postgres keeps every config version and the audit log (otherwise both stay in Redis).
+# The URL is read from this env var, e.g. TL_DATABASE_URL=postgres://tokenlens:...@localhost/tokenlens
+# [database]
+# url_env = "TL_DATABASE_URL"
+# max_connections = 10
+
 [providers.openai]
 base_url = "https://api.openai.com"
 api_key_env = "OPENAI_API_KEY"

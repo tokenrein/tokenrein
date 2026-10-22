@@ -433,7 +433,41 @@ async fn serves_the_dashboard_page() {
         .unwrap()
         .to_string();
     assert!(csp.contains("default-src 'none'"));
-    assert!(resp.text().await.unwrap().contains("TokenLens Dashboard"));
+    // Scripts load only from the proxy itself: no inline script can run.
+    assert!(csp.contains("script-src 'self';"), "{csp}");
+    let page = resp.text().await.unwrap();
+    assert!(page.contains("TokenLens Dashboard"));
+
+    // Every stylesheet and script the page links to is served, with the right type.
+    let links: Vec<&str> = page
+        .split(['"', '\''])
+        .filter(|s| s.starts_with("/assets/"))
+        .collect();
+    assert!(links.len() >= 10, "{links:?}");
+    for link in links {
+        let resp = h
+            .http
+            .get(format!("{}{link}", h.admin))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{link}");
+        let ctype = resp.headers()["content-type"].to_str().unwrap().to_string();
+        assert!(ctype.starts_with(if link.ends_with(".css") {
+            "text/css"
+        } else {
+            "text/javascript"
+        }));
+        assert_eq!(resp.headers()["x-content-type-options"], "nosniff");
+        assert!(!resp.text().await.unwrap().is_empty());
+    }
+    let missing = h
+        .http
+        .get(format!("{}/assets/../Cargo.toml", h.admin))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

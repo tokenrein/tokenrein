@@ -11,7 +11,7 @@ on the invoice. Product plan, research and go-to-market: [docs/PLAN.md](docs/PLA
 | `proxy/` | Rust data plane: the proxy, Redis budget ledger, admin API |
 | `config/dev.toml` | Local development config |
 | `docs/PLAN.md` | Implementation plan, pricing, marketing calendar |
-| `.github/workflows/ci.yml` | fmt, clippy (warnings as errors), tests against real Redis |
+| `.github/workflows/ci.yml` | fmt, clippy (warnings as errors), tests against real Redis and Postgres |
 | `gateway/`, `docker-compose.yml` | Legacy Langfuse-based scaffold; `gateway/` (Stripe + landing page) moves into the control plane later |
 
 ## How it works
@@ -35,7 +35,8 @@ agent ──▶ proxy (:8787) ──reserve worst-case cost──▶ Redis (one 
 
 ## Run it locally
 
-Prereqs: Rust (stable), `redis-server`.
+Prereqs: Rust (stable), `redis-server`. Postgres is optional for trying it out and recommended
+for real use (see [Config history and audit log](#config-history-and-audit-log)).
 
 ```bash
 redis-server --daemonize yes
@@ -212,12 +213,31 @@ workspaces need an `anthropic-workspace-id` header on every call. Set the org's 
 the dashboard, or as `anthropic_workspace_id` on the org in the config; the proxy adds it to the
 org's Claude calls. A client that sends its own `anthropic-workspace-id` header keeps it.
 
+## Config history and audit log
+
+Set `TL_DATABASE_URL` to a Postgres database (`postgres://user:password@host/db`; the env var
+name and pool size can be changed under `[database]` in the config) and TokenLens keeps:
+
+- **Every version of the managed config** (orgs, projects, keys, budgets, prices), with who saved
+  it. The schema is created and upgraded automatically at start-up. When you add a database to
+  an install that ran without one, it takes over the config already in Redis.
+- **An audit log** of every change made in the dashboard or the admin API: who (and from which
+  address), when, the action, and each field that changed with its old and new value. Provider
+  keys never appear in it (only their last 4 characters). Pausing, resuming and killing runs and
+  testing provider keys are recorded too. Entries are append-only and are also written to the
+  log (`target: "audit"`) for shipping to a SIEM.
+
+The dashboard's **Audit log** page lists, filters and downloads it as CSV. Without a database the
+proxy still works: the current config lives in Redis and the audit log keeps the last 10,000
+entries there. Redis stays the hot path either way; Postgres is never called per request.
+
 ## Admin API (`:8788`, `Authorization: Bearer $TL_ADMIN_TOKEN`)
 
 | Method | Path | Effect |
 |---|---|---|
 | `GET` | `/` | The dashboard page (no data; it calls the API below) |
 | `GET` | `/admin/overview` | Orgs, projects, keys (prefix only), budgets, this month's spend |
+| `GET` | `/admin/audit?org=&limit=&before=&format=csv` | Audit log, newest first; `next` is the cursor for `before`; `format=csv` downloads up to 10,000 entries |
 | `POST` | `/admin/orgs` | Create an org `{id, fail_mode?, budgets?}` |
 | `PUT` / `DELETE` | `/admin/orgs/{org}` | Set `{fail_mode?, budgets?, anthropic_workspace_id?}` (`""` clears it) / delete the org and its keys |
 | `PUT` / `DELETE` | `/admin/orgs/{org}/provider-keys/{openai\|anthropic}` | Save `{api_key}` (encrypted) / remove it (falls back to the environment) |
@@ -241,7 +261,7 @@ org's Claude calls. A client that sends its own `anthropic-workspace-id` header 
 | `POST` | `/admin/orgs/{org}/runs/{run}/pause` | Block the run and its children |
 | `POST` | `/admin/orgs/{org}/runs/{run}/resume` | Unblock (not allowed after kill) |
 | `POST` | `/admin/orgs/{org}/runs/{run}/kill` | Block permanently |
-| `GET` | `/healthz`, `/readyz` | Liveness; Redis reachability |
+| `GET` | `/healthz`, `/readyz` | Liveness; Redis (and database, if configured) reachability |
 
 Budgets use the config file's shape, e.g.
 `{"budgets": {"agent_daily": {"limit_usd": 20, "mode": "enforce"}, "max_run_usd": 10}}`.
@@ -261,16 +281,17 @@ request. Spend reports come from these events; budgets are always enforced from 
 cargo test
 ```
 
-65 tests: unit tests plus integration tests that start a real `redis-server` and a
-fake OpenAI/Anthropic upstream. They include a concurrency test (500 parallel
+72 tests: unit tests plus integration tests that start a real `redis-server` (and, for config
+history and the audit log, a throwaway Postgres cluster) and a fake OpenAI/Anthropic upstream. They include a concurrency test (500 parallel
 reservations against a budget that fits exactly 100 — exactly 100 succeed),
 streaming settlement for both providers, child-run spend counting against the
 parent, shadow mode, pause/resume/kill, and the dashboard API (keys and limits created
 there apply immediately, other instances pick them up, runs / agents / events are
 recorded, provider keys saved there are encrypted, used and never returned, guardrail packs, the
 Check-mode review, run timelines and spend by model and user, and the proxy-free endpoints:
-reported usage, checks, Claude Code telemetry and hooks). Integration tests skip if
-`redis-server` is missing unless `TL_REQUIRE_REDIS=1` (set in CI).
+reported usage, checks, Claude Code telemetry and hooks, and the audit log with and without
+Postgres). Integration tests skip if `redis-server` or Postgres (`initdb`) is missing unless
+`TL_REQUIRE_REDIS=1` / `TL_REQUIRE_POSTGRES=1` (both set in CI).
 
 Local smoke run of the release binary (Apple Silicon laptop, Redis on the same
 machine, sequential requests to a stub upstream): proxy overhead before the

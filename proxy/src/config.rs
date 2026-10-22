@@ -116,6 +116,34 @@ pub struct RedisConfig {
     pub url: String,
 }
 
+/// Postgres keeps every config version and the audit log. Optional: without it they live in
+/// Redis (current config only, last 10,000 audit entries).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DatabaseConfig {
+    /// Env var holding the connection URL (`postgres://user:password@host/db`).
+    #[serde(default = "default_database_url_env")]
+    pub url_env: String,
+    #[serde(default = "default_database_max_connections")]
+    pub max_connections: u32,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            url_env: default_database_url_env(),
+            max_connections: default_database_max_connections(),
+        }
+    }
+}
+
+fn default_database_url_env() -> String {
+    "TL_DATABASE_URL".into()
+}
+fn default_database_max_connections() -> u32 {
+    10
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
@@ -238,6 +266,8 @@ pub struct Config {
     pub server: ServerConfig,
     pub redis: RedisConfig,
     #[serde(default)]
+    pub database: DatabaseConfig,
+    #[serde(default)]
     pub providers: ProvidersConfig,
     #[serde(default)]
     pub pricing: Vec<PriceOverride>,
@@ -256,6 +286,8 @@ pub struct Resolved {
     /// Human-readable list of org/provider pairs with no usable key.
     pub missing_provider_keys: Vec<String>,
     pub admin_token: Option<String>,
+    /// Postgres connection URL, if one is configured.
+    pub database_url: Option<String>,
     /// Model prices: built-in list plus `cfg.pricing` overrides.
     pub prices: crate::pricing::Catalog,
     secrets: Option<Arc<SecretBox>>,
@@ -423,6 +455,7 @@ impl Resolved {
         }
 
         let admin_token = env(&cfg.server.admin_token_env).filter(|t| t.len() >= 16);
+        let database_url = env(&cfg.database.url_env).filter(|u| !u.trim().is_empty());
         let prices = crate::pricing::Catalog::with_overrides(&cfg.pricing)?;
         Ok(Self {
             prices,
@@ -432,6 +465,7 @@ impl Resolved {
             provider_status,
             missing_provider_keys: missing,
             admin_token,
+            database_url,
             secrets,
             env,
         })
