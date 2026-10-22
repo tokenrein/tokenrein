@@ -83,8 +83,9 @@ of these use a TokenLens key (`Authorization: Bearer tl_…`) on the `:8787` lis
 |---|---|---|
 | `POST /v1/usage` | SDK direct mode, any client | Report calls after they happen: `{"events": [{run_id, parent_run_id, agent, user, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd?, duration_ms}]}`. Priced from the model list unless `cost_usd` is given. Returns the enforced limits now used up |
 | `POST /v1/check` | SDK direct mode, agent hooks | "May this run make another call?" (`run_id`, optional `estimate_usd` or `model` + `max_output_tokens`). Answers `allowed` plus a reason; paused or killed runs and used-up enforced budgets are refused |
-| `POST /v1/otel/v1/logs` | Claude Code telemetry | OpenTelemetry logs over HTTP/JSON. Each `claude_code.api_request` becomes a call on run `cc-<session>` (sub-agents on `cc-<session>-sub`), with model, tokens, Claude Code's own cost and the user's email |
-| `POST /v1/hooks/claude-code` | Claude Code HTTP hooks | Blocks the next prompt or tool call when the session's run is paused, killed or over an enforced budget; fails open if the ledger is down |
+| `POST /v1/otel/v1/logs` | Claude Code, Codex CLI, Gemini CLI telemetry | OpenTelemetry logs over HTTP/JSON. Each model call becomes a call on the session's run (`cc-…`, `codex-…`, `gemini-…`; sub-agents on `…-sub`), with model, tokens, cost (Claude Code's own; priced by TokenLens for the others) and the user's email |
+| `POST /v1/otel/v1/traces`, `/v1/otel/v1/metrics` | Gemini CLI telemetry | Accepted and dropped (Gemini CLI sends them next to its logs) |
+| `POST /v1/hooks/{claude-code,codex,gemini,cursor}` | The agents' hooks | Blocks the next prompt or tool call (and, where the agent allows it, sub-agent or model call) when the session's run is paused, killed or over an enforced budget, answering in each agent's own format; fails open if the ledger is down |
 
 Enforcement here happens between calls: the call that crosses a limit has already been made,
 and the next one is refused. Use the proxy when you need every call checked before it is sent.
@@ -113,6 +114,26 @@ the dashboard):
 
 New sessions then report every model call; this works with a Claude subscription login too
 (cost is Claude Code's own estimate).
+
+**OpenAI Codex CLI, Gemini CLI and Cursor** connect the same way, with one command from the
+dashboard's Connect page (pick a project, create a key):
+
+```bash
+curl -fsSL http://127.0.0.1:8788/connect/codex.py | python3 - --key tl_… --url http://127.0.0.1:8787
+curl -fsSL http://127.0.0.1:8788/connect/gemini.py | python3 - --key tl_… --url http://127.0.0.1:8787
+curl -fsSL http://127.0.0.1:8788/connect/cursor.py | python3 - --key tl_… --url http://127.0.0.1:8787
+```
+
+Each script backs up the files it changes and is undone with `--remove`; the Codex and Gemini
+CLI scripts refuse to replace another OpenTelemetry collector. Codex and Gemini CLI turn on their own OpenTelemetry export
+(`~/.codex/config.toml`, `~/.gemini/settings.json`) and get command hooks; Codex runs new hooks
+only after you trust them with `/hooks`. Their hooks run `~/.tokenlens/hook.py`, which forwards
+the hook event to TokenLens and lets everything through if TokenLens can't be reached. Cursor
+gets hooks only (`~/.cursor/hooks.json`): it has no local telemetry, so a team admin can import
+its usage (model, tokens, cost per call) hourly from Cursor's Admin API by saving an Admin API
+key on the Connect page (stored encrypted, like provider keys). Runs are named `codex-<session>`,
+`gemini-<session>` and `cursor-<conversation>`. The fields each connector reads, with links to
+the agents' docs, are in [docs/connectors.md](docs/connectors.md).
 
 **Model prices** cover OpenAI, Anthropic, Google Gemini, Mistral, DeepSeek, xAI, Groq and
 Cohere models; local providers (`ollama`, `vllm`, `lmstudio`, `llamacpp`, `local`) cost $0.
@@ -245,7 +266,9 @@ entries there. Redis stays the hot path either way; Postgres is never called per
 | `GET` | `/admin/packs` | Guardrail packs and their budgets |
 | `GET` | `/admin/models?org=` | Priced models (built-in and yours), models seen recently, unpriced ones |
 | `PUT` | `/admin/pricing` | Replace your price overrides `{overrides: [{provider, model, input_per_mtok, output_per_mtok, cached_input_per_mtok?, cache_write_per_mtok?}]}` |
-| `GET` | `/connect/claude-code.py` | The Claude Code connector script (no secrets; run with `--key`) |
+| `GET` | `/connect/{claude-code,codex,gemini,cursor}.py` | The coding-agent connector scripts (no secrets; run with `--key`, undo with `--remove`) |
+| `GET` / `PUT` / `DELETE` | `/admin/orgs/{org}/connectors/cursor` | Cursor usage import: status (last run, calls imported, error) / save `{project, api_key?}` (encrypted; omit the key to keep it) / remove |
+| `POST` | `/admin/orgs/{org}/connectors/cursor/sync` | Import Cursor usage now (it also runs hourly) |
 | `POST` | `/admin/orgs/{org}/projects/{project}/pack` | Apply `{pack}`: replaces the project's budgets, all in Check mode |
 | `GET` | `/admin/orgs/{org}/review` | What Enforce would have blocked: per limit, requests / cost / runs, from recent events |
 | `GET` | `/admin/orgs/{org}/spend?days=` | Cost and requests per day, and by model / user / project / agent (up to 40 days) |
@@ -281,7 +304,7 @@ request. Spend reports come from these events; budgets are always enforced from 
 cargo test
 ```
 
-72 tests: unit tests plus integration tests that start a real `redis-server` (and, for config
+85 tests: unit tests plus integration tests that start a real `redis-server` (and, for config
 history and the audit log, a throwaway Postgres cluster) and a fake OpenAI/Anthropic upstream. They include a concurrency test (500 parallel
 reservations against a budget that fits exactly 100 — exactly 100 succeed),
 streaming settlement for both providers, child-run spend counting against the
@@ -289,8 +312,9 @@ parent, shadow mode, pause/resume/kill, and the dashboard API (keys and limits c
 there apply immediately, other instances pick them up, runs / agents / events are
 recorded, provider keys saved there are encrypted, used and never returned, guardrail packs, the
 Check-mode review, run timelines and spend by model and user, and the proxy-free endpoints:
-reported usage, checks, Claude Code telemetry and hooks, and the audit log with and without
-Postgres). Integration tests skip if `redis-server` or Postgres (`initdb`) is missing unless
+reported usage, checks, Claude Code, Codex CLI and Gemini CLI telemetry, all four agents'
+hooks, the Cursor usage import against a fake Admin API, the connect scripts run with `python3`
+against a throwaway home directory, and the audit log with and without Postgres). Integration tests skip if `redis-server` or Postgres (`initdb`) is missing unless
 `TL_REQUIRE_REDIS=1` / `TL_REQUIRE_POSTGRES=1` (both set in CI).
 
 Local smoke run of the release binary (Apple Silicon laptop, Redis on the same

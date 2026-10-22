@@ -253,6 +253,14 @@ impl<'a> Keys<'a> {
     pub fn response_tokens(&self, response_id: &str) -> String {
         format!("tl:{{{}}}:resp:{response_id}", self.org)
     }
+    /// Progress of a usage import (e.g. `cursor`).
+    pub fn import_state(&self, source: &str) -> String {
+        format!("tl:{{{}}}:imp:{source}", self.org)
+    }
+    /// An imported usage event, so a re-read window is not charged twice.
+    pub fn import_seen(&self, source: &str, id: &str) -> String {
+        format!("tl:{{{}}}:imp:{source}:seen:{id}", self.org)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -955,6 +963,31 @@ impl Ledger {
         }
         let mut conn = self.conn.clone();
         Ok(pipe.query_async(&mut conn).await?)
+    }
+
+    /// Sets `key` unless it exists; true the first time.
+    pub async fn first_time(&self, key: &str, ttl_secs: u64) -> Result<bool> {
+        let mut conn = self.conn.clone();
+        let set: Option<String> = redis::cmd("SET")
+            .arg(key)
+            .arg("1")
+            .arg("NX")
+            .arg("EX")
+            .arg(ttl_secs)
+            .query_async(&mut conn)
+            .await?;
+        Ok(set.is_some())
+    }
+
+    pub async fn get_value(&self, key: &str) -> Result<Option<String>> {
+        let mut conn = self.conn.clone();
+        Ok(conn.get(key).await?)
+    }
+
+    pub async fn set_value(&self, key: &str, value: &str) -> Result<()> {
+        let mut conn = self.conn.clone();
+        let _: () = conn.set(key, value).await?;
+        Ok(())
     }
 
     /// Newest request events first.
