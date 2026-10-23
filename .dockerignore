@@ -1,0 +1,7 @@
+# Only Cargo.toml, Cargo.lock, proxy/ and deploy/tokenlens.toml are needed to build the image.
+*
+!Cargo.toml
+!Cargo.lock
+!proxy/
+!deploy/tokenlens.toml
+proxy/target

@@ -283,6 +283,7 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
 
     let closed = org.fail_mode == FailMode::Closed;
     let unavailable = || {
+        crate::metrics::decision(crate::metrics::Path::Proxy, "unavailable");
         error_response(
             api,
             StatusCode::SERVICE_UNAVAILABLE,
@@ -306,6 +307,7 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
             Ok(None) => input_est += UNKNOWN_CONTEXT_TOKENS,
             Err(e) => {
                 tracing::error!(request_id, error = %e, "response context lookup failed");
+                crate::metrics::ledger_error();
                 if closed {
                     return unavailable();
                 }
@@ -326,6 +328,7 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
             Ok(chain) => chain.as_ref().clone(),
             Err(e) => {
                 tracing::error!(request_id, error = %e, "run ancestry lookup failed");
+                crate::metrics::ledger_error();
                 if closed {
                     return unavailable();
                 }
@@ -438,6 +441,7 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         }
         Err(e) => {
             tracing::error!(request_id, error = %e, "budget reservation failed");
+            crate::metrics::ledger_error();
             if closed {
                 return unavailable();
             }
@@ -787,6 +791,7 @@ async fn settle(st: &AppState, ctx: &Ctx, actual: u64) {
         actual_micros = actual,
         "could not settle spend; the sweeper will release the reservation but this spend is unrecorded"
     );
+    crate::metrics::ledger_error();
 }
 
 fn emit(st: &AppState, ctx: &Ctx, o: &Outcome) {
@@ -818,8 +823,12 @@ fn emit(st: &AppState, ctx: &Ctx, o: &Outcome) {
         "client_disconnected": o.client_disconnected,
     });
     println!("{event}");
+    if o.blocked_scope.is_none() {
+        crate::metrics::pre_upstream(ctx.pre_upstream_us);
+        crate::metrics::upstream(ctx.api.provider().name(), o.upstream_ms);
+    }
     // Dashboard activity is best effort: never block or fail a request for it.
-    let _ = st.activity.try_send(event);
+    crate::metrics::publish(&st.activity, crate::metrics::Path::Proxy, event);
 }
 
 fn usd(micros: i64) -> String {

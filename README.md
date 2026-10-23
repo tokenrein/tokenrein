@@ -11,8 +11,11 @@ on the invoice. Product plan, research and go-to-market: [docs/PLAN.md](docs/PLA
 | `proxy/` | Rust data plane: the proxy, Redis budget ledger, admin API |
 | `config/dev.toml` | Local development config |
 | `docs/PLAN.md` | Implementation plan, pricing, marketing calendar |
-| `.github/workflows/ci.yml` | fmt, clippy (warnings as errors), tests against real Redis and Postgres |
-| `gateway/`, `docker-compose.yml` | Legacy Langfuse-based scaffold; `gateway/` (Stripe + landing page) moves into the control plane later |
+| `Dockerfile`, `deploy/` | Container image, Docker Compose stack (TokenLens + Redis + Postgres 17), Helm chart |
+| `docs/install.md`, `docs/operations.md` | Installing, upgrading and backing up; runbooks, metrics and alerts |
+| `.github/workflows/ci.yml` | fmt, clippy (warnings as errors), tests against real Redis and Postgres, SDK tests, dependency audits, SBOM |
+| `.github/workflows/release.yml` | On a `v*` tag: multi-arch image to GHCR, SDKs to PyPI and npm |
+| `gateway/` | Legacy scaffold (Stripe + landing page); moves into the control plane later |
 
 ## How it works
 
@@ -32,6 +35,12 @@ agent ──▶ proxy (:8787) ──reserve worst-case cost──▶ Redis (one 
    (shadow mode). Paused or killed run (or ancestor) → `403`.
 4. After the response (or the end of the stream), the reservation is replaced by the
    actual cost. A sweeper releases reservations whose request died.
+
+## Deploy it
+
+For a team install, run the container image with Redis and Postgres: Docker Compose
+(`deploy/docker-compose.yml`) or Kubernetes (`deploy/helm/tokenlens`). See
+[docs/install.md](docs/install.md) and, for running it, [docs/operations.md](docs/operations.md).
 
 ## Run it locally
 
@@ -261,7 +270,8 @@ entries there. Redis stays the hot path either way; Postgres is never called per
 | `POST` | `/admin/orgs/{org}/runs/{run}/pause` | Block the run and its children |
 | `POST` | `/admin/orgs/{org}/runs/{run}/resume` | Unblock (not allowed after kill) |
 | `POST` | `/admin/orgs/{org}/runs/{run}/kill` | Block permanently |
-| `GET` | `/healthz`, `/readyz` | Liveness; Redis (and database, if configured) reachability |
+| `GET` | `/healthz`, `/readyz` | Liveness; Redis (and database, if configured) reachability (no token) |
+| `GET` | `/metrics` | Prometheus metrics (no token; counts only, no org or user ids) |
 
 Budgets use the config file's shape, e.g.
 `{"budgets": {"agent_daily": {"limit_usd": 20, "mode": "enforce"}, "max_run_usd": 10}}`.
@@ -281,7 +291,7 @@ request. Spend reports come from these events; budgets are always enforced from 
 cargo test
 ```
 
-72 tests: unit tests plus integration tests that start a real `redis-server` (and, for config
+81 tests: unit tests plus integration tests that start a real `redis-server` (and, for config
 history and the audit log, a throwaway Postgres cluster) and a fake OpenAI/Anthropic upstream. They include a concurrency test (500 parallel
 reservations against a budget that fits exactly 100 — exactly 100 succeed),
 streaming settlement for both providers, child-run spend counting against the
@@ -290,7 +300,8 @@ there apply immediately, other instances pick them up, runs / agents / events ar
 recorded, provider keys saved there are encrypted, used and never returned, guardrail packs, the
 Check-mode review, run timelines and spend by model and user, and the proxy-free endpoints:
 reported usage, checks, Claude Code telemetry and hooks, and the audit log with and without
-Postgres). Integration tests skip if `redis-server` or Postgres (`initdb`) is missing unless
+Postgres), plus operations: Prometheus metrics, admin security headers, secrets key rotation, and
+what keeps working while Redis or Postgres is down. Integration tests skip if `redis-server` or Postgres (`initdb`) is missing unless
 `TL_REQUIRE_REDIS=1` / `TL_REQUIRE_POSTGRES=1` (both set in CI).
 
 Local smoke run of the release binary (Apple Silicon laptop, Redis on the same

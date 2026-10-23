@@ -147,6 +147,7 @@ async fn scopes_for(
 
 fn unavailable(e: anyhow::Error) -> Response {
     tracing::error!(error = %e, "budget ledger call failed");
+    crate::metrics::ledger_error();
     error(
         StatusCode::SERVICE_UNAVAILABLE,
         "tokenlens_unavailable",
@@ -303,7 +304,7 @@ async fn record_usage(
         "source": who.source,
     });
     println!("{event}");
-    let _ = st.activity.try_send(event);
+    crate::metrics::publish(&st.activity, crate::metrics::Path::Ingest, event);
     Ok(Recorded { over: enforced })
 }
 
@@ -522,9 +523,11 @@ pub async fn check(
         return unavailable(e);
     }
     if !v.allowed {
-        let _ = st
-            .activity
-            .try_send(blocked_event(&c, &who, &v, body.model.as_deref()));
+        crate::metrics::publish(
+            &st.activity,
+            crate::metrics::Path::Ingest,
+            blocked_event(&c, &who, &v, body.model.as_deref()),
+        );
     }
     Json(json!({
         "allowed": v.allowed,
@@ -785,13 +788,18 @@ pub async fn claude_code_hook(
         // Never break someone's agent because the ledger is down; fail open.
         Err(e) => {
             tracing::error!(error = %e, "hook budget check failed; allowing");
+            crate::metrics::ledger_error();
             return Json(json!({})).into_response();
         }
     };
     if v.allowed {
         return Json(json!({})).into_response();
     }
-    let _ = st.activity.try_send(blocked_event(&c, &who, &v, None));
+    crate::metrics::publish(
+        &st.activity,
+        crate::metrics::Path::Ingest,
+        blocked_event(&c, &who, &v, None),
+    );
     let reason = v
         .reason
         .unwrap_or_else(|| "TokenLens: budget used up".into());

@@ -1,0 +1,80 @@
+# TokenLens with Redis (budget ledger) and Postgres 17 (config history, audit log).
+#
+#   cd deploy
+#   cp .env.example .env        # then fill in the secrets
+#   docker compose up -d        # or: podman compose up -d
+#
+# Agents call the proxy on :8787; the dashboard and admin API are on 127.0.0.1:8788.
+# See docs/install.md.
+
+name: tokenlens
+
+services:
+  tokenlens:
+    image: ${TOKENLENS_IMAGE:-ghcr.io/geektuhin123/tokenlens:latest}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    # TL_ADMIN_TOKEN, TL_SECRETS_KEY, TL_DATABASE_URL (and optional provider keys).
+    env_file: .env
+    environment:
+      TL_REDIS_URL: redis://redis:6379
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "${TL_PROXY_PORT:-8787}:8787"
+      # The admin listener carries the dashboard and admin API: keep it off public interfaces.
+      - "127.0.0.1:${TL_ADMIN_PORT:-8788}:8788"
+    healthcheck:
+      # The image has no shell or curl; the binary probes itself. Both listeners must answer,
+      # and /readyz needs Redis and Postgres.
+      test:
+        - CMD
+        - /usr/local/bin/tokenlens-proxy
+        - probe
+        - http://127.0.0.1:8787/healthz
+        - http://127.0.0.1:8788/readyz
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  redis:
+    image: docker.io/library/redis:7.4-alpine
+    restart: unless-stopped
+    # Budgets and run state live here: persist them and never evict keys.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  postgres:
+    image: docker.io/library/postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tokenlens
+      POSTGRES_DB: tokenlens
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tokenlens -d tokenlens"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  redis_data:
+  postgres_data:

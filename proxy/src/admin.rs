@@ -54,6 +54,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/admin/pricing", put(set_pricing))
         .route("/healthz", get(|| async { "ok" }))
         .route("/readyz", get(readyz))
+        .route("/metrics", get(crate::metrics::handler))
         .route("/admin/overview", get(overview))
         .route("/admin/audit", get(list_audit))
         .route("/admin/packs", get(list_packs))
@@ -94,7 +95,19 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/admin/orgs/{org}/runs/{run}/pause", post(pause))
         .route("/admin/orgs/{org}/runs/{run}/resume", post(resume))
         .route("/admin/orgs/{org}/runs/{run}/kill", post(kill))
+        .layer(axum::middleware::map_response(security_headers))
         .with_state(state)
+}
+
+/// On every admin response, API and dashboard alike. The dashboard page sets a fuller CSP.
+async fn security_headers(mut resp: Response) -> Response {
+    let h = resp.headers_mut();
+    page_headers(h);
+    h.entry(CONTENT_SECURITY_POLICY)
+        .or_insert(HeaderValue::from_static("frame-ancestors 'none'"));
+    h.entry(axum::http::header::X_FRAME_OPTIONS)
+        .or_insert(HeaderValue::from_static("DENY"));
+    resp
 }
 
 /// The dashboard page. It holds no data; it calls the admin API with the token the user enters.
@@ -262,6 +275,7 @@ pub(crate) fn err(status: StatusCode, message: &str) -> Response {
 
 fn unavailable(e: anyhow::Error) -> Response {
     tracing::error!(error = %e, "admin ledger call failed");
+    crate::metrics::ledger_error();
     err(StatusCode::SERVICE_UNAVAILABLE, "budget ledger unavailable")
 }
 
