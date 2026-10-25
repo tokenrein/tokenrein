@@ -21,7 +21,7 @@ bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 futures-util = "0.3"
 hex = "0.4"
-jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 redis = { version = "0.32", features = ["tokio-comp", "connection-manager", "streams"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2", "json"] }
 serde = { version = "1", features = ["derive"] }

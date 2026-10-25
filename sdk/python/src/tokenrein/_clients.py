@@ -117,6 +117,11 @@ def _guarded_class(base: type, *, strip_bearer: bool) -> type:
     if strip_bearer:
         # Anthropic credential providers mint a Bearer token through httpx auth.
         namespace["custom_auth"] = property(lambda self: None)
+        # Send the Tokenrein key as x-api-key on every SDK version (2.x would send it as a
+        # Bearer token) and nothing else.
+        namespace["auth_headers"] = property(
+            lambda self: {"X-Api-Key": self.api_key} if self.api_key else {}
+        )
     cls = type(base.__name__, (base,), namespace)
     _GUARDED[base] = cls
     return cls
