@@ -935,6 +935,7 @@ async fn add_member(
 }
 
 /// Refuse to leave an org that has owners without any.
+#[allow(clippy::result_large_err)]
 async fn last_owner_guard(
     pool: &sqlx::PgPool,
     org: &str,
@@ -961,6 +962,7 @@ struct RoleBody {
 }
 
 /// The member's email, current role in `org` and whether they are an instance admin.
+#[allow(clippy::result_large_err)]
 async fn member(
     pool: &sqlx::PgPool,
     org: &str,
