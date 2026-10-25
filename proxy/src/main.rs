@@ -10,7 +10,13 @@ const USAGE: &str = "usage:
   tokenlens-proxy hash-key KEY  print the sha256 hash of an existing virtual key
   tokenlens-proxy create-owner EMAIL
                                 make EMAIL an instance admin and print a one-time link to set
-                                their password (needs the database URL; same config as the proxy)";
+                                their password (needs the database URL; same config as the proxy)
+  tokenlens-proxy rotate-secrets-key
+                                re-encrypt provider keys saved from the dashboard from
+                                TL_SECRETS_KEY_PREVIOUS (old) to TL_SECRETS_KEY (new)
+  tokenlens-proxy probe URL...  exit 0 if every URL answers 2xx (container healthchecks)
+
+Any environment variable can also be read from a file named by <NAME>_FILE.";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -31,6 +37,20 @@ async fn main() -> Result<()> {
             let email = args.get(2).context(USAGE)?;
             return create_owner(email).await;
         }
+        Some("rotate-secrets-key") => {
+            let rt = config::Resolved::load(&config_path(), config::process_env)?;
+            let resealed = tokenlens_proxy::rotate_secrets_key(rt).await?;
+            if resealed.is_empty() {
+                println!("nothing to do: every saved provider key already uses the current key");
+            } else {
+                println!("re-encrypted {} saved provider keys:", resealed.len());
+                for k in resealed {
+                    println!("  {k}");
+                }
+            }
+            return Ok(());
+        }
+        Some("probe") => return tokenlens_proxy::probe(&args[2..]).await,
         Some("help" | "--help" | "-h") => {
             println!("{USAGE}");
             return Ok(());
@@ -48,8 +68,8 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let path = std::env::var("TL_CONFIG").unwrap_or_else(|_| "config/dev.toml".into());
-    let rt = config::Resolved::load(&path, |name| std::env::var(name).ok())?;
+    let path = config_path();
+    let rt = config::Resolved::load(&path, config::process_env)?;
     let listen: SocketAddr = rt.cfg.server.listen.parse().context("server.listen")?;
     let admin_listen: SocketAddr = rt
         .cfg
@@ -109,8 +129,7 @@ async fn create_owner(email: &str) -> Result<()> {
         email.contains('@') && !email.contains(char::is_whitespace),
         "{email:?} is not an email address"
     );
-    let path = std::env::var("TL_CONFIG").unwrap_or_else(|_| "config/dev.toml".into());
-    let rt = config::Resolved::load(&path, |name| std::env::var(name).ok())?;
+    let rt = config::Resolved::load(&config_path(), config::process_env)?;
     let url = rt.database_url.clone().with_context(|| {
         format!(
             "set {} to the Postgres URL: people and sign-in need a database",
@@ -136,6 +155,10 @@ async fn create_owner(email: &str) -> Result<()> {
     println!("Open this link within 72 hours to set the password (it works once):");
     println!("  {}/#setup={token}", base.trim_end_matches('/'));
     Ok(())
+}
+
+fn config_path() -> String {
+    std::env::var("TL_CONFIG").unwrap_or_else(|_| "config/dev.toml".into())
 }
 
 async fn shutdown_signal() {

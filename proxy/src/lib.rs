@@ -7,6 +7,7 @@ pub mod control;
 pub mod db;
 pub mod ingest;
 pub mod ledger;
+pub mod metrics;
 pub mod packs;
 pub mod pricing;
 pub mod providers;
@@ -21,7 +22,8 @@ use anyhow::{Context, Result};
 pub use proxy::AppState;
 
 pub async fn build_state(rt: config::Resolved) -> Result<Arc<AppState>> {
-    let ledger = ledger::Ledger::connect(&rt.cfg.redis.url)
+    let timeout = Duration::from_millis(rt.cfg.redis.timeout_ms.max(1));
+    let ledger = ledger::Ledger::connect_with_timeout(&rt.cfg.redis.url, timeout)
         .await
         .context("connecting to Redis")?;
     let db = match &rt.database_url {
@@ -38,6 +40,39 @@ pub async fn build_state(rt: config::Resolved) -> Result<Arc<AppState>> {
     let state = Arc::new(AppState::new(rt, ledger, db, http, activity));
     spawn_activity_writer(state.clone(), events);
     Ok(state)
+}
+
+/// `tokenlens-proxy rotate-secrets-key`: connect to the stores in `rt` and re-encrypt saved
+/// provider keys under the current secrets key (see [`control::rotate_secrets_key`]).
+pub async fn rotate_secrets_key(rt: config::Resolved) -> Result<Vec<String>> {
+    let state = build_state(rt).await?;
+    control::init(&state)
+        .await
+        .context("loading the managed config")?;
+    let mut resealed = control::rotate_secrets_key(&state, "system:rotate-secrets-key").await?;
+    if auth::oidc::SsoConfig::rotate_secret(&state).await? {
+        resealed.push("single sign-on client secret".into());
+    }
+    Ok(resealed)
+}
+
+/// `tokenlens-proxy probe URL...`: a healthcheck for images without curl. Fails unless every
+/// URL answers 2xx within 3 seconds.
+pub async fn probe(urls: &[String]) -> Result<()> {
+    anyhow::ensure!(!urls.is_empty(), "usage: tokenlens-proxy probe URL...");
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()?;
+    for url in urls {
+        let status = http
+            .get(url)
+            .send()
+            .await
+            .with_context(|| format!("GET {url}"))?
+            .status();
+        anyhow::ensure!(status.is_success(), "GET {url}: {status}");
+    }
+    Ok(())
 }
 
 /// Request events waiting to be written for the dashboard; more are dropped.
@@ -57,6 +92,7 @@ fn spawn_activity_writer(
             let Some(state) = weak.upgrade() else { return };
             if let Err(e) = state.ledger.record_activity(&batch).await {
                 tracing::warn!(error = %e, dropped = batch.len(), "could not record dashboard activity");
+                metrics::activity_write_failed(batch.len());
             }
             batch.clear();
         }
@@ -85,7 +121,8 @@ pub fn spawn_sweeper(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
                         tracing::warn!(org = %org.id, released = n, "released expired reservations")
                     }
                     Err(e) => {
-                        tracing::error!(org = %org.id, error = %e, "reservation sweep failed")
+                        tracing::error!(org = %org.id, error = %e, "reservation sweep failed");
+                        metrics::ledger_error();
                     }
                 }
             }

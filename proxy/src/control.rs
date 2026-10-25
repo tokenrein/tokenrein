@@ -71,6 +71,7 @@ async fn store(
         && let Err(err) = state.ledger.audit_append(e, Some(v)).await
     {
         tracing::error!(error = %err, action = %e.action, "could not write the audit log");
+        crate::metrics::audit_write_failed();
     }
     Ok(version)
 }
@@ -215,5 +216,74 @@ async fn edit_managed<T>(
         }
         Ok(None) => Err(EditError::Conflict),
         Err(e) => Err(EditError::Unavailable(e)),
+    }
+}
+
+/// Re-encrypts every provider key saved from the dashboard under the current secrets key
+/// (`TL_SECRETS_KEY`). Keys sealed under the previous one are opened with
+/// `TL_SECRETS_KEY_PREVIOUS`; keys already under the current key are left alone. Nothing is saved
+/// unless every key can be opened. Returns the `org/provider` pairs that were re-encrypted.
+pub async fn rotate_secrets_key(state: &AppState, actor: &str) -> Result<Vec<String>> {
+    let _guard = state.control_edit.lock().await;
+    sync(state).await?;
+    let version = state.control_version.load(Ordering::SeqCst);
+    anyhow::ensure!(version != 0, "managed config is not initialised");
+    let rt = state.rt();
+    let var = &rt.cfg.server.secrets_key_env;
+    let current = rt
+        .secrets()
+        .with_context(|| format!("{var} (the new secrets key) is not set"))?;
+    let previous = rt.previous_secrets();
+    let mut m = Managed {
+        orgs: rt.cfg.orgs.clone(),
+        pricing: rt.cfg.pricing.clone(),
+    };
+    let (mut resealed, mut unreadable) = (Vec::new(), Vec::new());
+    for org in &mut m.orgs {
+        for (provider, saved) in &mut org.provider_secrets {
+            let ctx = crate::secrets::context(&org.id, provider);
+            if current.open(&ctx, &saved.sealed).is_ok() {
+                continue;
+            }
+            match previous.and_then(|p| p.open(&ctx, &saved.sealed).ok()) {
+                Some(plain) => {
+                    saved.sealed = current.seal(&ctx, &plain)?;
+                    resealed.push(format!("{}/{provider}", org.id));
+                }
+                None => unreadable.push(format!("{}/{provider}", org.id)),
+            }
+        }
+    }
+    if !unreadable.is_empty() {
+        anyhow::bail!(
+            "neither {var} nor {var}_PREVIOUS can decrypt the saved keys for {}; nothing was changed",
+            unreadable.join(", ")
+        );
+    }
+    if resealed.is_empty() {
+        return Ok(resealed);
+    }
+    resealed.sort();
+    let next = rt.with_managed(m.orgs, m.pricing)?;
+    let doc = serde_json::to_string(&Managed {
+        orgs: next.cfg.orgs.clone(),
+        pricing: next.cfg.pricing.clone(),
+    })?;
+    // The audit diff hides sealed values, so record which keys were re-encrypted instead.
+    let entry = Change {
+        actor: actor.to_string(),
+        ip: None,
+        org: None,
+        action: "secrets_key.rotate",
+        target: "provider_secrets".into(),
+    }
+    .entry(serde_json::json!({ "resealed": resealed }));
+    match store(state, version, &doc, actor, Some(&entry)).await? {
+        Some(v) => {
+            audit::logged(&entry, v);
+            state.replace_rt(next, v);
+            Ok(resealed)
+        }
+        None => anyhow::bail!("the config changed while rotating; run the command again"),
     }
 }

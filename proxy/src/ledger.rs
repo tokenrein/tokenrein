@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow};
-use redis::aio::ConnectionManager;
+use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{AsyncCommands, Script};
 
 use crate::config::Mode;
@@ -330,14 +330,29 @@ pub struct Ledger {
     ancestry: Mutex<HashMap<String, Arc<Vec<String>>>>,
 }
 
+/// See [`Ledger::connect_with_timeout`].
+pub const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
 fn lua_num(s: &str) -> i64 {
     s.parse::<f64>().map(|f| f as i64).unwrap_or(0)
 }
 
 impl Ledger {
     pub async fn connect(url: &str) -> Result<Self> {
+        Self::connect_with_timeout(url, DEFAULT_TIMEOUT).await
+    }
+
+    /// Every Redis call (and every connection attempt) fails after `timeout`, so a Redis outage
+    /// becomes an error at once and the org's fail mode applies, instead of a hung request.
+    pub async fn connect_with_timeout(url: &str, timeout: std::time::Duration) -> Result<Self> {
         let client = redis::Client::open(url)?;
-        let conn = ConnectionManager::new(client).await?;
+        // No retries inside a call: the client's backoff starts at one second and grows to a
+        // minute. A failed call reconnects on the next one instead.
+        let config = ConnectionManagerConfig::new()
+            .set_connection_timeout(timeout)
+            .set_response_timeout(timeout)
+            .set_number_of_retries(0);
+        let conn = ConnectionManager::new_with_config(client, config).await?;
         Ok(Self {
             conn,
             reserve: Script::new(RESERVE_LUA),

@@ -81,6 +81,8 @@ pub struct ServerConfig {
     #[serde(default = "default_admin_token_env")]
     pub admin_token_env: String,
     /// Env var holding the 32-byte hex key that encrypts provider API keys saved from the dashboard.
+    /// During a key rotation, `<this>_PREVIOUS` holds the old key: saved keys are still opened
+    /// with it until `tokenlens-proxy rotate-secrets-key` re-encrypts them.
     #[serde(default = "default_secrets_key_env")]
     pub secrets_key_env: String,
     #[serde(default = "default_upstream_timeout")]
@@ -120,6 +122,13 @@ fn default_cursor_api_url() -> String {
 #[serde(deny_unknown_fields)]
 pub struct RedisConfig {
     pub url: String,
+    /// Each Redis call fails after this long; the org's fail mode then decides.
+    #[serde(default = "default_redis_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+fn default_redis_timeout_ms() -> u64 {
+    1000
 }
 
 /// Postgres keeps every config version and the audit log. Optional: without it they live in
@@ -337,8 +346,56 @@ pub struct Config {
     pub orgs: Vec<OrgConfig>,
 }
 
+/// Settings a container can set from the environment instead of editing the config file.
+pub const ENV_OVERRIDES: &[(&str, &str)] = &[
+    ("TL_LISTEN", "server.listen"),
+    ("TL_ADMIN_LISTEN", "server.admin_listen"),
+    ("TL_REDIS_URL", "redis.url"),
+    ("TL_DATABASE_MAX_CONNECTIONS", "database.max_connections"),
+];
+
+impl Config {
+    /// Applies [`ENV_OVERRIDES`]; unset or empty variables leave the file's value.
+    fn apply_env_overrides(&mut self, env: &dyn Fn(&str) -> Option<String>) {
+        let get = |name: &str| env(name).filter(|v| !v.trim().is_empty());
+        if let Some(v) = get("TL_LISTEN") {
+            self.server.listen = v;
+        }
+        if let Some(v) = get("TL_ADMIN_LISTEN") {
+            self.server.admin_listen = v;
+        }
+        if let Some(v) = get("TL_REDIS_URL") {
+            self.redis.url = v;
+        }
+        if let Some(n) = get("TL_DATABASE_MAX_CONNECTIONS").and_then(|v| v.trim().parse().ok()) {
+            self.database.max_connections = n;
+        }
+    }
+}
+
 /// Looks up environment variables (provider keys, admin token); swapped out in tests.
 pub type EnvFn = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
+/// The process environment, where any variable `NAME` can instead be given as `NAME_FILE`: the
+/// path of a file holding the value (Docker and Kubernetes secrets). `NAME` wins if both are set.
+pub fn process_env(name: &str) -> Option<String> {
+    env_or_file(name, |n| std::env::var(n).ok())
+}
+
+fn env_or_file(name: &str, var: impl Fn(&str) -> Option<String>) -> Option<String> {
+    if let Some(v) = var(name) {
+        return Some(v);
+    }
+    let path = var(&format!("{name}_FILE")).filter(|p| !p.is_empty())?;
+    match std::fs::read_to_string(&path) {
+        // Secret files usually end with a newline; values never do.
+        Ok(v) => Some(v.trim_end_matches(['\n', '\r']).to_string()),
+        Err(e) => {
+            tracing::error!(var = %format!("{name}_FILE"), path, error = %e, "cannot read secret file");
+            None
+        }
+    }
+}
 
 pub struct Resolved {
     pub cfg: Config,
@@ -353,6 +410,7 @@ pub struct Resolved {
     /// Model prices: built-in list plus `cfg.pricing` overrides.
     pub prices: crate::pricing::Catalog,
     secrets: Option<Arc<SecretBox>>,
+    previous_secrets: Option<Arc<SecretBox>>,
     env: EnvFn,
 }
 
@@ -370,7 +428,8 @@ impl Resolved {
         text: &str,
         env: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
     ) -> Result<Self> {
-        let cfg: Config = toml::from_str(text).context("parsing config")?;
+        let mut cfg: Config = toml::from_str(text).context("parsing config")?;
+        cfg.apply_env_overrides(&env);
         Self::build(cfg, Arc::new(env))
     }
 
@@ -441,14 +500,22 @@ impl Resolved {
             }
         }
 
-        let secrets = match env(&cfg.server.secrets_key_env) {
-            Some(k) if !k.trim().is_empty() => {
-                Some(Arc::new(SecretBox::from_hex(&k).with_context(|| {
-                    format!("invalid {}", cfg.server.secrets_key_env)
-                })?))
+        let secrets_box = |var: &str| -> Result<Option<Arc<SecretBox>>> {
+            match env(var) {
+                Some(k) if !k.trim().is_empty() => Ok(Some(Arc::new(
+                    SecretBox::from_hex(&k).with_context(|| format!("invalid {var}"))?,
+                ))),
+                _ => Ok(None),
             }
-            _ => None,
         };
+        let secrets = secrets_box(&cfg.server.secrets_key_env)?;
+        let previous_secrets = secrets_box(&format!("{}_PREVIOUS", cfg.server.secrets_key_env))?;
+        if previous_secrets.is_some() && secrets.is_none() {
+            bail!(
+                "{0}_PREVIOUS is set but {0} is not",
+                cfg.server.secrets_key_env
+            );
+        }
 
         let mut provider_keys = HashMap::new();
         let mut provider_status = HashMap::new();
@@ -482,12 +549,15 @@ impl Resolved {
                                 "saved key cannot be decrypted: {} is not set",
                                 cfg.server.secrets_key_env
                             )),
-                            Some(b) => b
-                                .open(
-                                    &crate::secrets::context(&org.id, provider.name()),
-                                    &saved.sealed,
-                                )
-                                .map_err(|e| format!("saved key cannot be used: {e}")),
+                            Some(b) => {
+                                let ctx = crate::secrets::context(&org.id, provider.name());
+                                b.open(&ctx, &saved.sealed)
+                                    .or_else(|e| match &previous_secrets {
+                                        Some(p) => p.open(&ctx, &saved.sealed),
+                                        None => Err(e),
+                                    })
+                                    .map_err(|e| format!("saved key cannot be used: {e}"))
+                            }
                         };
                         status.last4 = Some(saved.last4.clone());
                         status.updated_at = Some(saved.updated_at.clone());
@@ -529,6 +599,7 @@ impl Resolved {
             admin_token,
             database_url,
             secrets,
+            previous_secrets,
             env,
         })
     }
@@ -555,6 +626,11 @@ impl Resolved {
 
     pub fn secrets(&self) -> Option<&SecretBox> {
         self.secrets.as_deref()
+    }
+
+    /// The secrets key being rotated away from, if one is set.
+    pub fn previous_secrets(&self) -> Option<&SecretBox> {
+        self.previous_secrets.as_deref()
     }
 
     pub fn upstream_base(&self, provider: Provider) -> Option<&str> {
@@ -733,6 +809,56 @@ mod tests {
         assert!(!valid_provider_key("short"));
         assert!(!valid_provider_key("sk-ant-abc def"));
         assert!(!valid_provider_key("sk-ant-abc\r\nX-Evil: 1"));
+    }
+
+    #[test]
+    fn env_overrides_server_and_redis_settings() {
+        let rt = Resolved::from_toml(BASE, |name| match name {
+            "TL_LISTEN" => Some("0.0.0.0:8787".into()),
+            "TL_ADMIN_LISTEN" => Some("0.0.0.0:8788".into()),
+            "TL_REDIS_URL" => Some("redis://redis:6379/2".into()),
+            "TL_DATABASE_MAX_CONNECTIONS" => Some("25".into()),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(rt.cfg.server.listen, "0.0.0.0:8787");
+        assert_eq!(rt.cfg.server.admin_listen, "0.0.0.0:8788");
+        assert_eq!(rt.cfg.redis.url, "redis://redis:6379/2");
+        assert_eq!(rt.cfg.database.max_connections, 25);
+        // Empty values keep the file's settings.
+        let rt = Resolved::from_toml(BASE, |name| (name == "TL_LISTEN").then(String::new)).unwrap();
+        assert_eq!(rt.cfg.server.listen, "127.0.0.1:0");
+    }
+
+    #[test]
+    fn values_can_come_from_files() {
+        let dir = std::env::temp_dir().join(format!("tl-env-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("token");
+        std::fs::write(&file, "from-the-file\n").unwrap();
+        let path = file.to_string_lossy().to_string();
+        let vars = |direct: Option<&str>| {
+            let path = path.clone();
+            let direct = direct.map(str::to_string);
+            move |n: &str| match n {
+                "TL_ADMIN_TOKEN" => direct.clone(),
+                "TL_ADMIN_TOKEN_FILE" => Some(path.clone()),
+                "TL_MISSING_FILE" => Some("/nonexistent/tokenlens".into()),
+                _ => None,
+            }
+        };
+        assert_eq!(
+            env_or_file("TL_ADMIN_TOKEN", vars(None)).as_deref(),
+            Some("from-the-file")
+        );
+        // The variable itself wins over the file.
+        assert_eq!(
+            env_or_file("TL_ADMIN_TOKEN", vars(Some("direct"))).as_deref(),
+            Some("direct")
+        );
+        assert_eq!(env_or_file("TL_MISSING", vars(None)), None);
+        assert_eq!(env_or_file("TL_UNSET", vars(None)), None);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

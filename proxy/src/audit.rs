@@ -171,6 +171,7 @@ pub async fn record(state: &AppState, e: Entry) {
     };
     if let Err(err) = result {
         tracing::error!(error = %err, action = %e.action, "could not write the audit log");
+        crate::metrics::audit_write_failed();
     }
 }
 

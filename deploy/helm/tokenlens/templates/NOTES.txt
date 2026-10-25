@@ -1,0 +1,23 @@
+TokenLens {{ .Chart.AppVersion }} is installed.
+
+Agents and SDKs call the proxy:
+  http://{{ include "tokenlens.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.proxyPort }}/v1
+
+Dashboard and admin API (keep internal):
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "tokenlens.fullname" . }}-admin 8788:{{ .Values.adminService.port }}
+  open http://127.0.0.1:8788/
+
+Sign in with the admin token:
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "tokenlens.secretName" . }} -o jsonpath='{.data.TL_ADMIN_TOKEN}' | base64 -d
+{{- if not .Values.secrets.existingSecret }}
+
+Back up TL_SECRETS_KEY from that Secret now: provider keys saved in the dashboard can only be
+decrypted with it. The Secret is kept when the release is uninstalled.
+{{- end }}
+{{- if or .Values.redis.enabled .Values.postgresql.enabled }}
+
+The bundled {{ if .Values.redis.enabled }}Redis{{ end }}{{ if and .Values.redis.enabled .Values.postgresql.enabled }} and {{ end }}{{ if .Values.postgresql.enabled }}Postgres{{ end }} run as single pods, for evaluation.
+For production use managed services: externalRedis / externalDatabase (see docs/install.md).
+{{- end }}
+
+Prometheus metrics: GET /metrics on port {{ .Values.adminService.port }}.

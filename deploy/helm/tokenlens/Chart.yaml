@@ -1,0 +1,10 @@
+apiVersion: v2
+name: tokenlens
+description: Runtime spend guardrails for AI agents (proxy, admin API and dashboard)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/geektuhin123/tokenlens
+sources:
+  - https://github.com/geektuhin123/tokenlens
+keywords: [llm, ai-agents, budgets, proxy, openai, anthropic]

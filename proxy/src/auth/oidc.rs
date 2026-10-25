@@ -105,12 +105,49 @@ impl SsoConfig {
             return Ok(rt.env_var(name));
         }
         match (&self.client_secret, rt.secrets()) {
-            (Some(s), Some(b)) => Ok(Some(b.open(SECRET_CONTEXT, &s.sealed)?)),
+            // During a secrets key rotation the secret may still be sealed with the old key.
+            (Some(s), Some(b)) => match b.open(SECRET_CONTEXT, &s.sealed) {
+                Ok(plain) => Ok(Some(plain)),
+                Err(e) => match rt.previous_secrets() {
+                    Some(prev) => Ok(Some(prev.open(SECRET_CONTEXT, &s.sealed)?)),
+                    None => Err(e),
+                },
+            },
             (Some(_), None) => {
                 bail!("the SSO client secret is saved but the secrets key is not set")
             }
             (None, _) => Ok(None),
         }
+    }
+
+    /// Re-encrypt the saved client secret with the current secrets key if it is still sealed
+    /// with the previous one. Returns whether anything changed.
+    pub async fn rotate_secret(st: &AppState) -> Result<bool> {
+        let (Some(db), Some(mut cfg)) = (&st.db, Self::load(st).await?) else {
+            return Ok(false);
+        };
+        let rt = st.rt();
+        let (Some(saved), Some(current)) = (&cfg.client_secret, rt.secrets()) else {
+            return Ok(false);
+        };
+        if current.open(SECRET_CONTEXT, &saved.sealed).is_ok() {
+            return Ok(false);
+        }
+        let plain = rt
+            .previous_secrets()
+            .and_then(|p| p.open(SECRET_CONTEXT, &saved.sealed).ok())
+            .ok_or_else(|| {
+                anyhow!(
+                    "neither the secrets key nor the previous one can decrypt the SSO client secret"
+                )
+            })?;
+        let last4 = saved.last4.clone();
+        cfg.client_secret = Some(SealedSecret {
+            sealed: current.seal(SECRET_CONTEXT, &plain)?,
+            last4,
+        });
+        store::put_sso_config(db.pool(), &serde_json::to_value(&cfg)?).await?;
+        Ok(true)
     }
 
     pub fn seal_secret(st: &AppState, secret: &str) -> Result<SealedSecret> {

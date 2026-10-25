@@ -1,0 +1,167 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tokenlens.fullname" . }}
+  labels:
+    {{- include "tokenlens.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "tokenlens.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if not .Values.secrets.existingSecret }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if .Values.metrics.podAnnotations }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8788"
+        prometheus.io/path: /metrics
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "tokenlens.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "tokenlens.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: tokenlens
+          image: {{ include "tokenlens.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: proxy
+              containerPort: 8787
+            - name: admin
+              containerPort: 8788
+          env:
+            - name: TL_CONFIG
+              value: /etc/tokenlens/tokenlens.toml
+            - name: TL_LISTEN
+              value: "0.0.0.0:8787"
+            - name: TL_ADMIN_LISTEN
+              value: "0.0.0.0:8788"
+            {{- if .Values.redis.enabled }}
+            - name: TL_REDIS_URL
+              value: {{ printf "redis://%s:6379" (include "tokenlens.redisHost" .) | quote }}
+            {{- else if .Values.externalRedis.existingSecret }}
+            - name: TL_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.externalRedis.existingSecret }}
+                  key: {{ .Values.externalRedis.existingSecretKey }}
+            {{- else }}
+            - name: TL_REDIS_URL
+              value: {{ required "set externalRedis.url (or externalRedis.existingSecret) when redis.enabled is false" .Values.externalRedis.url | quote }}
+            {{- end }}
+            {{- $secret := include "tokenlens.secretName" . }}
+            {{- if .Values.secrets.mountAsFiles }}
+            - name: TL_ADMIN_TOKEN_FILE
+              value: /var/run/secrets/tokenlens/TL_ADMIN_TOKEN
+            - name: TL_SECRETS_KEY_FILE
+              value: /var/run/secrets/tokenlens/TL_SECRETS_KEY
+            {{- if include "tokenlens.hasDatabase" . }}
+            - name: TL_DATABASE_URL_FILE
+              value: /var/run/secrets/tokenlens/TL_DATABASE_URL
+            {{- end }}
+            {{- if or .Values.secrets.previousSecretsKey .Values.secrets.rotating }}
+            - name: TL_SECRETS_KEY_PREVIOUS_FILE
+              value: /var/run/secrets/tokenlens/TL_SECRETS_KEY_PREVIOUS
+            {{- end }}
+            {{- else }}
+            {{- range $name := list "TL_ADMIN_TOKEN" "TL_SECRETS_KEY" }}
+            - name: {{ $name }}
+              valueFrom:
+                secretKeyRef: { name: {{ $secret }}, key: {{ $name }} }
+            {{- end }}
+            {{- if include "tokenlens.hasDatabase" . }}
+            - name: TL_DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: {{ $secret }}, key: TL_DATABASE_URL }
+            {{- end }}
+            - name: TL_SECRETS_KEY_PREVIOUS
+              valueFrom:
+                secretKeyRef: { name: {{ $secret }}, key: TL_SECRETS_KEY_PREVIOUS, optional: true }
+            {{- end }}
+            {{- with .Values.providerKeys.existingSecret }}
+            {{- range $name := list "OPENAI_API_KEY" "ANTHROPIC_API_KEY" }}
+            - name: {{ $name }}
+              valueFrom:
+                secretKeyRef: { name: {{ $.Values.providerKeys.existingSecret }}, key: {{ $name }}, optional: true }
+            {{- end }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/tokenlens
+              readOnly: true
+            {{- if .Values.secrets.mountAsFiles }}
+            - name: secrets
+              mountPath: /var/run/secrets/tokenlens
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "tokenlens.fullname" . }}
+        {{- if .Values.secrets.mountAsFiles }}
+        - name: secrets
+          secret:
+            secretName: {{ include "tokenlens.secretName" . }}
+            defaultMode: 0400
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -734,3 +734,38 @@ async fn without_a_database_only_the_admin_token_works() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn the_sso_client_secret_survives_a_secrets_key_rotation() {
+    let Some(t) = T::start().await else { return };
+    let sso = json!({"enabled": false, "issuer": "https://idp.example.com", "client_id": "c",
+                     "client_secret": "rotate-me-secret"});
+    assert_eq!(
+        t.root(Method::PUT, "/admin/sso", Some(sso)).await.0,
+        StatusCode::OK
+    );
+
+    const NEW_KEY: &str = "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100";
+    let (redis, db) = (t._redis.url.clone(), t._pg.url.clone());
+    let resolved = |previous: bool| {
+        let (redis, db) = (redis.clone(), db.clone());
+        Resolved::from_toml(&config(&redis), move |name| match name {
+            "SECRETS" => Some(NEW_KEY.into()),
+            "SECRETS_PREVIOUS" if previous => Some(SECRETS_KEY.into()),
+            "DB" => Some(db.clone()),
+            _ => None,
+        })
+        .unwrap()
+    };
+    let resealed = tokenlens_proxy::rotate_secrets_key(resolved(true))
+        .await
+        .unwrap();
+    assert_eq!(resealed, ["single sign-on client secret"]);
+    // With only the new key, the secret opens: nothing left to re-encrypt.
+    let state = build_state(resolved(false)).await.unwrap();
+    control::init(&state).await.unwrap();
+    let again = tokenlens_proxy::auth::oidc::SsoConfig::rotate_secret(&state)
+        .await
+        .unwrap();
+    assert!(!again);
+}
