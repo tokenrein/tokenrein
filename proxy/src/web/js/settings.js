@@ -93,11 +93,11 @@ function renderSettings() {
         <input type="text" required pattern="[A-Za-z0-9._\\-]{1,128}" placeholder="project id, e.g. research-agent" aria-label="New project id" style="min-width:240px">
         <button class="btn" type="submit">Create project</button></form></div></div>`;
   }
-  html += `<div class="card"><div class="card-h"><h2>New org</h2></div>
+  if (S.me?.instance_admin) html += `<div class="card"><div class="card-h"><h2>New org</h2></div>
     <div class="card-b"><p class="help">An org has its own monthly budget and projects. It uses the proxy's provider keys.</p><form class="inline" data-new-org>
       <input type="text" required pattern="[A-Za-z0-9._\\-]{1,128}" placeholder="org id, e.g. acme" aria-label="New org id" style="min-width:240px">
       <button class="btn" type="submit">Create org</button></form></div></div>`;
-  if (org) {
+  if (org && can("owner")) {
     html += `<div class="card"><div class="card-h"><h2>Danger zone</h2>
       <div class="toolbar"><button class="btn sm danger" data-delete-org>Delete org ${esc(org.id)}</button></div></div>
       <div class="card-b"><p class="help" style="margin:0">Deleting an org or project revokes all of its keys at once. Recorded spend stays in Redis until it expires.</p></div></div>`;
@@ -105,7 +105,11 @@ function renderSettings() {
   if (!S.overview.managed) {
     html = `<div class="card"><div class="card-b"><b>Read-only.</b> This proxy has not loaded the managed config, so edits are disabled.</div></div>` + html;
   }
+  if (org && !can("admin")) {
+    html = `<div class="card"><div class="card-b"><b>Read-only.</b> You are ${esc(roleIn() || "not a member")} in ${esc(org.id)}; an admin or owner can change keys and limits.</div></div>` + html;
+  }
   $("#settings").innerHTML = html;
+  if (org && !can("admin")) $$("#settings input, #settings select, #settings button").forEach(el => { el.disabled = true; });
 }
 // A mode only means something once a limit is set.
 $("#settings").addEventListener("input", e => {

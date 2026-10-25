@@ -5,9 +5,6 @@
   --meter: #dfe4ec; --shadow: 0 1px 2px rgba(16, 24, 40, .06); --accent-soft: #eaefff;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
-details.changes summary { cursor: pointer; color: var(--accent); white-space: nowrap; }
-details.changes ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
-details.changes li { margin: 2px 0; word-break: break-word; }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #0f1216; --panel: #171b21; --panel-2: #1e232b; --text: #e7eaee; --muted: #9aa4b2;
@@ -100,7 +97,8 @@ table.wide { min-width: 960px; }
 .btn:disabled, select:disabled { opacity: .5; cursor: default; }
 .row-actions { display: flex; gap: 6px; justify-content: flex-end; }
 
-input[type=text], input[type=password], input[type=number], input[type=search], select {
+input[type=text], input[type=password], input[type=number], input[type=search],
+input[type=email], input[type=url], textarea, select {
   border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 6px 10px; min-width: 0;
 }
 input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -221,3 +219,15 @@ details.more[open] summary { margin-bottom: 8px; }
   main.content { padding: 18px 16px 48px; }
   .kpi .value { font-size: 20px; }
 }
+
+.btn.wide { display: flex; justify-content: center; width: 100%; text-decoration: none; }
+.login .or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; margin: 4px 0; }
+.login .or::before, .login .or::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.login form { display: grid; gap: 12px; }
+.whoami { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.whoami b { color: var(--text); font-weight: 600; }
+.sso-form { display: grid; gap: 12px; }
+.sso-form textarea { font-family: var(--mono); font-size: 12.5px; width: 100%; }
+details.changes summary { cursor: pointer; color: var(--accent); white-space: nowrap; }
+details.changes ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
+details.changes li { margin: 2px 0; word-break: break-word; }

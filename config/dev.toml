@@ -18,6 +18,14 @@ url = "redis://127.0.0.1:6379"
 # url_env = "TL_DATABASE_URL"
 # max_connections = 10
 
+# Optional: people sign in with their own accounts (needs the database). public_url is the
+# dashboard's address as people reach it; single sign-on sends them back there.
+# [auth]
+# public_url = "https://tokenlens.example.com"
+# session_hours = 12
+# idle_minutes = 120
+# password_login = true
+
 [providers.openai]
 base_url = "https://api.openai.com"
 api_key_env = "OPENAI_API_KEY"

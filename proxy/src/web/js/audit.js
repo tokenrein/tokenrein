@@ -13,7 +13,8 @@ const AUDIT_DANGER = new Set(["org.delete", "project.delete", "key.revoke", "pro
 
 function auditPath(before) {
   const q = new URLSearchParams({ limit: "100" });
-  if (S.auditOrgOnly && S.org) q.set("org", S.org);
+  // Only instance admins see the whole log; everyone else sees their org's.
+  if ((S.auditOrgOnly || !S.me?.instance_admin) && S.org) q.set("org", S.org);
   if (before) q.set("before", before);
   return `/admin/audit?${q}`;
 }
@@ -50,6 +51,7 @@ function auditChanges(e) {
 function renderAudit() {
   const el = $("#audit");
   const a = S.audit;
+  if (!can("admin")) { el.innerHTML = `<div class="card"><div class="card-b">Only admins and owners of ${esc(S.org || "this org")} can see its audit log.</div></div>`; return; }
   if (!a) { el.innerHTML = '<p class="muted">Loading…</p>'; return; }
   const q = S.auditQuery.trim().toLowerCase();
   const entries = q ? a.entries.filter(e => [e.actor, e.action, AUDIT_ACTIONS[e.action], e.target, e.org, e.ip]
@@ -64,7 +66,7 @@ function renderAudit() {
   el.innerHTML = `${note}<div class="card">
     <div class="card-h">
       <input type="search" data-audit-q placeholder="Filter by person, action or target" aria-label="Filter audit log" value="${esc(S.auditQuery)}" style="min-width:240px">
-      <label class="inline status"><input type="checkbox" data-audit-org ${S.auditOrgOnly ? "checked" : ""}> Only org ${esc(S.org || "")}</label>
+      ${S.me?.instance_admin ? `<label class="inline status"><input type="checkbox" data-audit-org ${S.auditOrgOnly ? "checked" : ""}> Only org ${esc(S.org || "")}</label>` : `<span class="status">Org ${esc(S.org || "")}</span>`}
       <div class="toolbar"><button class="btn sm" data-audit-csv>Download CSV</button></div>
     </div>
     <div class="table-wrap"><table>${entries.length
@@ -100,9 +102,9 @@ document.addEventListener("click", async e => {
     } catch (err) { if (err.message !== "unauthorized") toast(err.message, true); b.disabled = false; }
   } else if (t.closest("[data-audit-csv]")) {
     const q = new URLSearchParams({ format: "csv" });
-    if (S.auditOrgOnly && S.org) q.set("org", S.org);
+    if ((S.auditOrgOnly || !S.me?.instance_admin) && S.org) q.set("org", S.org);
     try {
-      const res = await fetch(`/admin/audit?${q}`, { headers: { Authorization: "Bearer " + S.token } });
+      const res = await fetch(`/admin/audit?${q}`, { headers: S.token ? { Authorization: "Bearer " + S.token } : {} });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const url = URL.createObjectURL(await res.blob());
       const a = document.createElement("a");

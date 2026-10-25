@@ -65,7 +65,7 @@ function renderConnect() {
        <details class="more"><summary>Prefer to edit the settings yourself?</summary>
          <p class="help">Merge this into <span class="mono">~/.claude/settings.json</span>, keeping your existing hooks:</p>${cmdBlock(claudeCodeSettings(S.connectKey))}</details>`
     : `<div class="step-h"><span class="n">2</span>Create a key and get the command</div>
-       <div><button class="btn primary" data-cc-key ${S.connectProject ? "" : "disabled"}>Create key &amp; show command</button></div>`;
+       <div>${can("admin") ? `<button class="btn primary" data-cc-key ${S.connectProject ? "" : "disabled"}>Create key &amp; show command</button>` : `<span class="muted">Ask an admin of ${esc(S.org)} to create a key.</span>`}</div>`;
   $("#connect").innerHTML = `<div class="connect-grid">
     <div class="card connect-card">
       <div class="card-h"><h2>Claude Code</h2><span class="tag">Recommended · no code</span></div>
@@ -79,7 +79,7 @@ function renderConnect() {
         <div class="step-h"><span class="n">1</span>Choose the project its spend counts against</div>
         <div class="inline">
           <select data-cc-project aria-label="Project for Claude Code">${projects.map(p => `<option ${p === S.connectProject ? "selected" : ""}>${esc(p)}</option>`).join("")}</select>
-          ${projects.includes("claude-code") ? "" : `<button class="btn sm" data-cc-newproject>New project “claude-code”</button>`}
+          ${projects.includes("claude-code") || !can("admin") ? "" : `<button class="btn sm" data-cc-newproject>New project “claude-code”</button>`}
         </div>
         ${keyStep}
         <details class="more"><summary>Disconnect later</summary>${cmdBlock(`curl -fsSL ${adminUrl()}/connect/claude-code.py | python3 - --remove`)}</details>

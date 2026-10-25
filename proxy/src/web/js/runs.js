@@ -26,7 +26,7 @@ function runTable(runs, flat) {
   }
   const rows = ordered.map(([r, depth]) => {
     const indent = depth ? `<span class="tree-indent" style="width:${depth * 16}px">↳</span>` : "";
-    const actions = r.state === "killed" ? '<span class="muted">–</span>' : `
+    const actions = r.state === "killed" || !can("approver") ? '<span class="muted">–</span>' : `
       ${r.state === "paused"
         ? `<button class="btn sm" data-run-action="resume" data-run="${esc(r.run_id)}">Resume</button>`
         : `<button class="btn sm" data-run-action="pause" data-run="${esc(r.run_id)}">Pause</button>`}
@@ -87,7 +87,7 @@ function renderRun() {
   const tokens = t.events.reduce((a, e) => a + (e.usage ? (e.usage.input || 0) + (e.usage.output || 0) : 0), 0);
   const startTs = t.events[0]?.ts, endTs = t.events[t.events.length - 1]?.ts;
   const dur = startTs && endTs ? Math.max(0, (new Date(endTs) - new Date(startTs)) / 1000) : 0;
-  const actions = root.state === "killed" ? "" : `${root.state === "paused"
+  const actions = root.state === "killed" || !can("approver") ? "" : `${root.state === "paused"
       ? `<button class="btn sm" data-run-action="resume" data-run="${esc(root.run_id)}">Resume</button>`
       : `<button class="btn sm" data-run-action="pause" data-run="${esc(root.run_id)}">Pause</button>`}
     <button class="btn sm danger" data-run-action="kill" data-run="${esc(root.run_id)}">Kill</button>`;

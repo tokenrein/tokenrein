@@ -70,6 +70,7 @@ impl Drop for RedisServer {
 pub struct PostgresServer {
     child: Child,
     dir: std::path::PathBuf,
+    bin: std::path::PathBuf,
     pub url: String,
 }
 
@@ -143,6 +144,7 @@ impl PostgresServer {
         let server = Self {
             child,
             dir,
+            bin: bin.clone(),
             url: format!("postgres://postgres@127.0.0.1:{port}/postgres"),
         };
         // Accepting TCP connections comes before accepting queries; pg_isready knows the difference.
@@ -186,7 +188,25 @@ fn uuid_like() -> String {
 
 impl Drop for PostgresServer {
     fn drop(&mut self) {
-        let _ = self.child.kill();
+        // Stop it properly: a killed postmaster leaves its System V shared memory segment
+        // behind, and macOS allows only a few dozen of those.
+        let stopped = Command::new(self.bin.join("pg_ctl"))
+            .args([
+                "stop",
+                "-D",
+                self.dir.to_str().unwrap(),
+                "-m",
+                "immediate",
+                "-w",
+            ])
+            .env("LC_ALL", "C")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !stopped {
+            let _ = self.child.kill();
+        }
         let _ = self.child.wait();
         let _ = std::fs::remove_dir_all(&self.dir);
     }

@@ -31,8 +31,10 @@ pub struct AppState {
     /// Serialises config edits made through this process.
     pub control_edit: tokio::sync::Mutex<()>,
     pub ledger: Ledger,
-    /// Postgres, when configured: config history and the audit log.
+    /// Postgres, when configured: config history, the audit log, users and sessions.
     pub db: Option<crate::db::Db>,
+    /// Sign-in rate limits and the identity provider's metadata.
+    pub auth: crate::auth::AuthState,
     pub http: reqwest::Client,
     /// Request events for the dashboard, written to Redis by a background task.
     pub activity: mpsc::Sender<Value>,
@@ -52,6 +54,7 @@ impl AppState {
             control_edit: tokio::sync::Mutex::new(()),
             ledger,
             db,
+            auth: Default::default(),
             http,
             activity,
         }

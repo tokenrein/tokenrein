@@ -15,7 +15,13 @@ const POLICIES = [
 const S = { token: null, org: null, overview: null, runs: [], agents: [], events: [], tab: "overview", timer: null, editing: false,
   packs: [], review: null, spend: null, runId: null, run: null, snip: "python",
   models: null, modelFilter: "", modelProvider: "", connectProject: null, connectKey: null, sdkSnip: "python",
-  audit: null, auditQuery: "", auditOrgOnly: false };
+  audit: null, auditQuery: "", auditOrgOnly: false,
+  me: null, csrf: null, authConfig: null, people: null, peopleNotice: "" };
+
+// Roles, lowest first; each can do everything the ones before it can.
+const RANK = { viewer: 1, approver: 2, admin: 3, owner: 4 };
+function roleIn(org = S.org) { return S.me?.instance_admin ? "owner" : S.me?.roles?.[org]; }
+function can(role, org = S.org) { return (RANK[roleIn(org)] || 0) >= RANK[role]; }
 const LIVE_SECS = 60, IDLE_SECS = 15 * 60;
 function liveness(ts) {
   if (!ts) return `<span class="live off"><span class="dot"></span>Never</span>`;
@@ -94,13 +100,16 @@ function toast(msg, bad = false) {
   setTimeout(() => t.remove(), bad ? 6000 : 2500);
 }
 
+// Signed in either with a session cookie (sent automatically; changes also need the CSRF token)
+// or with the admin token kept in this tab.
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    method: opts.method || "GET",
-    headers: { Authorization: "Bearer " + S.token, ...(opts.body ? { "Content-Type": "application/json" } : {}) },
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  });
-  if (res.status === 401) { signOut("That admin token was not accepted."); throw new Error("unauthorized"); }
+  const method = opts.method || "GET";
+  const headers = { ...(opts.body ? { "Content-Type": "application/json" } : {}) };
+  if (S.token) headers.Authorization = "Bearer " + S.token;
+  if (S.csrf && method !== "GET") headers["x-csrf-token"] = S.csrf;
+  const res = await fetch(path, { method, headers, credentials: "same-origin",
+    body: opts.body ? JSON.stringify(opts.body) : undefined });
+  if (res.status === 401 && !opts.quiet) { signOut("Your session ended. Sign in again."); throw new Error("unauthorized"); }
   if (res.status === 204) return null;
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);

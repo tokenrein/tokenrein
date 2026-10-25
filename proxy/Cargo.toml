@@ -15,11 +15,13 @@ path = "src/main.rs"
 [dependencies]
 aes-gcm = "0.10"
 anyhow = "1"
+argon2 = "0.5"
 axum = "0.8"
 bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 futures-util = "0.3"
 hex = "0.4"
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }
 redis = { version = "0.32", features = ["tokio-comp", "connection-manager", "streams"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2", "json"] }
 serde = { version = "1", features = ["derive"] }
@@ -32,3 +34,5 @@ toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
+url = "2"

@@ -231,12 +231,73 @@ The dashboard's **Audit log** page lists, filters and downloads it as CSV. Witho
 proxy still works: the current config lives in Redis and the audit log keeps the last 10,000
 entries there. Redis stays the hot path either way; Postgres is never called per request.
 
-## Admin API (`:8788`, `Authorization: Bearer $TL_ADMIN_TOKEN`)
+## People, roles and sign-in
+
+With a database, people sign in to the dashboard with their own account: email and password,
+single sign-on (OpenID Connect: Okta, Microsoft Entra ID, Google Workspace, Auth0, Keycloak, …),
+or both.
+
+1. Create the first account on the server; it prints a one-time link to set the password:
+
+   ```bash
+   cargo run -p tokenlens-proxy --release -- create-owner you@company.com
+   ```
+
+2. Add people under **People & access**, per org, with a role:
+
+   | Role | Can |
+   |---|---|
+   | viewer | see runs, agents, spend, activity and settings |
+   | approver | also pause, resume and kill runs |
+   | admin | also change projects, keys, limits, provider keys and members (up to admin), see the org's audit log |
+   | owner | also make owners and delete the org |
+
+   **Instance admins** manage every org plus model prices, all accounts and single sign-on.
+   People who use single sign-on only need their email added; others get a one-time link (72
+   hours) to set a password. Orgs a person has no role in don't show up for them at all.
+
+3. For single sign-on, set `auth.public_url` in the config to the dashboard's address, register
+   TokenLens with your identity provider using the redirect URI shown under People & access
+   (`<public_url>/auth/sso/callback`), and fill in the issuer, client ID and secret there. Options:
+   allowed email domains, create accounts on first sign-in (with a default org and role), and
+   **roles from groups** (`group = org:role`, synced at every sign-in). The client secret is
+   encrypted with `TL_SECRETS_KEY` (or read from an env var you name). Set
+   `auth.password_login = false` to require single sign-on.
+
+Security details: passwords are hashed with argon2id (at least 12 characters, not containing the
+email); 10 wrong passwords lock an account for 15 minutes, and sign-in attempts are rate-limited
+per address. Sessions are HttpOnly, SameSite=Lax cookies (Secure when `public_url` is https)
+stored as hashes in Postgres; they end after `auth.session_hours` (12) or `auth.idle_minutes`
+(120) without use, and every change needs the session's `x-csrf-token` header. Single sign-on
+uses the authorization code flow with PKCE, checks the ID token's signature, issuer, audience,
+expiry and nonce, and refuses unverified emails. Personal **API tokens** (`tlu_…`, 1-365 days)
+act as their owner for scripts. Sign-ins, failed sign-ins, role changes, tokens and single
+sign-on changes are all in the audit log.
+
+The admin token (`TL_ADMIN_TOKEN`) still works as an instance admin; keep it as a break-glass
+key or unset it once people can sign in. Without a database it is the only way in.
+
+## Admin API (`:8788`)
+
+Authenticate with `Authorization: Bearer tlu_…` (a personal API token), a dashboard session, or
+`Authorization: Bearer $TL_ADMIN_TOKEN`. Each endpoint needs a role in the org it names (viewer
+to read, approver for run actions, admin to change things); `/admin/orgs` (create), `/admin/pricing`,
+`/admin/users` and `/admin/sso` need an instance admin.
 
 | Method | Path | Effect |
 |---|---|---|
 | `GET` | `/` | The dashboard page (no data; it calls the API below) |
 | `GET` | `/admin/overview` | Orgs, projects, keys (prefix only), budgets, this month's spend |
+| `GET` | `/auth/config` | How people can sign in here (no auth needed) |
+| `POST` | `/auth/login`, `/auth/setup`, `/auth/logout` | Sign in `{email, password}`; set a password from a setup link `{token, password, name?}`; sign out |
+| `GET` / `PUT` | `/auth/me`, `/auth/password` | Who you are and your roles; change your password `{current, new}` |
+| `GET` / `POST` / `DELETE` | `/auth/tokens`, `/auth/tokens/{id}` | Your API tokens; create `{name, expires_days?}` (shown once); revoke |
+| `GET` | `/auth/sso/start`, `/auth/sso/callback` | Single sign-on |
+| `GET` / `POST` | `/admin/orgs/{org}/members` | An org's members; add `{email, role}` (returns a setup link for people without a password) |
+| `PUT` / `DELETE` | `/admin/orgs/{org}/members/{user}` | Change `{role}` / remove (an org with owners keeps at least one) |
+| `POST` | `/admin/orgs/{org}/members/{user}/setup-link` | A new one-time password link |
+| `GET` / `POST` / `PUT` | `/admin/users`, `/admin/users/{user}` | Every account; add an instance admin `{email}`; set `{instance_admin?, disabled?}` |
+| `GET` / `PUT` / `POST` | `/admin/sso`, `/admin/sso/test` | Single sign-on settings (secret never returned); check the issuer |
 | `GET` | `/admin/audit?org=&limit=&before=&format=csv` | Audit log, newest first; `next` is the cursor for `before`; `format=csv` downloads up to 10,000 entries |
 | `POST` | `/admin/orgs` | Create an org `{id, fail_mode?, budgets?}` |
 | `PUT` / `DELETE` | `/admin/orgs/{org}` | Set `{fail_mode?, budgets?, anthropic_workspace_id?}` (`""` clears it) / delete the org and its keys |
@@ -281,16 +342,17 @@ request. Spend reports come from these events; budgets are always enforced from 
 cargo test
 ```
 
-72 tests: unit tests plus integration tests that start a real `redis-server` (and, for config
-history and the audit log, a throwaway Postgres cluster) and a fake OpenAI/Anthropic upstream. They include a concurrency test (500 parallel
+81 tests: unit tests plus integration tests that start a real `redis-server` (and, for config
+history, the audit log, accounts and single sign-on, a throwaway Postgres cluster and a mock
+OpenID Connect provider) and a fake OpenAI/Anthropic upstream. They include a concurrency test (500 parallel
 reservations against a budget that fits exactly 100 — exactly 100 succeed),
 streaming settlement for both providers, child-run spend counting against the
 parent, shadow mode, pause/resume/kill, and the dashboard API (keys and limits created
 there apply immediately, other instances pick them up, runs / agents / events are
 recorded, provider keys saved there are encrypted, used and never returned, guardrail packs, the
 Check-mode review, run timelines and spend by model and user, and the proxy-free endpoints:
-reported usage, checks, Claude Code telemetry and hooks, and the audit log with and without
-Postgres). Integration tests skip if `redis-server` or Postgres (`initdb`) is missing unless
+reported usage, checks, Claude Code telemetry and hooks, the audit log with and without
+Postgres, roles, sessions, CSRF, lockout, API tokens and single sign-on with group roles). Integration tests skip if `redis-server` or Postgres (`initdb`) is missing unless
 `TL_REQUIRE_REDIS=1` / `TL_REQUIRE_POSTGRES=1` (both set in CI).
 
 Local smoke run of the release binary (Apple Silicon laptop, Redis on the same
@@ -302,8 +364,7 @@ expected cost exactly. This is not a production load test.
 
 - Loop detectors (identical-call repeats, spend velocity, run structure, retry storms)
 - Slack / email alerts with Resume / Raise / Kill
-- Control plane: signup and multi-user login (the dashboard has one admin token today),
-  per-org access, KMS instead of `TL_SECRETS_KEY` for provider keys, Stripe
+- KMS instead of `TL_SECRETS_KEY` for provider keys; SCIM provisioning; Stripe
 - Event pipeline to ClickHouse (stdout today), replay simulation, shadow-mode report
 - Responses API: context size of a `previous_response_id` the proxy never saw is
   assumed to be 32k tokens

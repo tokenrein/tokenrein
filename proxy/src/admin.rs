@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::audit;
-use crate::auth::Admin;
+use crate::auth::{Admin, Role};
 use crate::config::{
     Budgets, FailMode, OrgConfig, ProjectConfig, ProviderSecret, VirtualKey, generate_virtual_key,
     valid_id, valid_provider_key,
@@ -39,6 +39,7 @@ const ASSETS: &[(&str, &str, &str)] = &[
     ("js/spend.js", JS, include_str!("web/js/spend.js")),
     ("js/activity.js", JS, include_str!("web/js/activity.js")),
     ("js/settings.js", JS, include_str!("web/js/settings.js")),
+    ("js/people.js", JS, include_str!("web/js/people.js")),
     ("js/audit.js", JS, include_str!("web/js/audit.js")),
     ("js/app.js", JS, include_str!("web/js/app.js")),
 ];
@@ -94,6 +95,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/admin/orgs/{org}/runs/{run}/pause", post(pause))
         .route("/admin/orgs/{org}/runs/{run}/resume", post(resume))
         .route("/admin/orgs/{org}/runs/{run}/kill", post(kill))
+        .merge(crate::auth::routes::router())
         .with_state(state)
 }
 
@@ -165,7 +167,7 @@ struct ModelsQuery {
 async fn list_models(
     State(st): State<Arc<AppState>>,
     Query(q): Query<ModelsQuery>,
-    _admin: Admin,
+    admin: Admin,
 ) -> Response {
     let rt = st.rt();
     let mut unpriced: Vec<Value> = Vec::new();
@@ -173,7 +175,7 @@ async fn list_models(
     if let Some(org) = q
         .org
         .as_deref()
-        .filter(|o| rt.cfg.orgs.iter().any(|x| x.id == *o))
+        .filter(|o| rt.cfg.orgs.iter().any(|x| x.id == *o) && admin.can_see(o))
     {
         let events = match st.ledger.recent_events(org, 2000).await {
             Ok(e) => e,
@@ -225,6 +227,9 @@ async fn set_pricing(
     admin: Admin,
     Json(body): Json<PricingBody>,
 ) -> Response {
+    if let Err(r) = admin.instance() {
+        return r;
+    }
     if body.overrides.len() > 500 {
         return err(StatusCode::BAD_REQUEST, "at most 500 price overrides");
     }
@@ -306,12 +311,12 @@ fn key_id(hash: &str) -> String {
 
 // --- Overview: orgs, projects, keys, budgets and this month's spend ---
 
-async fn overview(State(st): State<Arc<AppState>>, _admin: Admin) -> Response {
+async fn overview(State(st): State<Arc<AppState>>, admin: Admin) -> Response {
     let rt = st.rt();
     let now = Utc::now();
     let ym = now.format("%Y%m").to_string();
     let mut budget_keys = Vec::new();
-    for org in &rt.cfg.orgs {
+    for org in rt.cfg.orgs.iter().filter(|o| admin.can_see(&o.id)) {
         let keys = Keys::new(&org.id);
         budget_keys.push(keys.org_monthly(&ym));
         for p in &org.projects {
@@ -328,6 +333,7 @@ async fn overview(State(st): State<Arc<AppState>>, _admin: Admin) -> Response {
         .orgs
         .iter()
         .enumerate()
+        .filter(|(_, o)| admin.can_see(&o.id))
         .map(|(oi, org)| {
             let providers: serde_json::Map<String, Value> = [Provider::OpenAI, Provider::Anthropic]
                 .into_iter()
@@ -448,6 +454,9 @@ async fn create_org(
     admin: Admin,
     Json(body): Json<OrgBody>,
 ) -> Response {
+    if let Err(r) = admin.instance() {
+        return r;
+    }
     let target = body.id.clone().unwrap_or_default();
     let result = control::edit(
         &st,
@@ -482,7 +491,7 @@ async fn update_org(
     admin: Admin,
     Json(body): Json<OrgBody>,
 ) -> Response {
-    if let Err(r) = admin.org(&st, &org) {
+    if let Err(r) = admin.org(&st, &org, Role::Admin) {
         return r;
     }
     let result = control::edit(&st, admin.change("org.update", Some(&org), &org), |orgs| {
@@ -514,7 +523,7 @@ async fn delete_org(
     Path(org): Path<String>,
     admin: Admin,
 ) -> Response {
-    if let Err(r) = admin.org(&st, &org) {
+    if let Err(r) = admin.org(&st, &org, Role::Owner) {
         return r;
     }
     let result = control::edit(&st, admin.change("org.delete", Some(&org), &org), |orgs| {
@@ -522,6 +531,12 @@ async fn delete_org(
         Ok(())
     })
     .await;
+    if result.is_ok()
+        && let Some(db) = &st.db
+        && let Err(e) = crate::auth::store::delete_org_members(db.pool(), &org).await
+    {
+        tracing::error!(error = %e, org = %org, "could not remove the deleted org's members");
+    }
     match result {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => edit_error(e),
@@ -534,7 +549,7 @@ async fn create_project(
     admin: Admin,
     Json(body): Json<ProjectBody>,
 ) -> Response {
-    if let Err(r) = admin.org(&st, &org) {
+    if let Err(r) = admin.org(&st, &org, Role::Admin) {
         return r;
     }
     let target = body.id.clone().unwrap_or_default();
@@ -570,7 +585,7 @@ async fn update_project(
     admin: Admin,
     Json(body): Json<ProjectBody>,
 ) -> Response {
-    if let Err(r) = admin.org(&st, &org) {
+    if let Err(r) = admin.org(&st, &org, Role::Admin) {
         return r;
     }
     let result = control::edit(
@@ -601,7 +616,7 @@ async fn delete_project(
     Path((org, project)): Path<(String, String)>,
     admin: Admin,
 ) -> Response {
-    if let Err(r) = admin.org(&st, &org) {
+    if let Err(r) = admin.org(&st, &org, Role::Admin) {
         return r;
     }
     let result = control::edit(
@@ -632,7 +647,7 @@ async fn create_key(
     admin: Admin,
     Json(body): Json<KeyBody>,
 ) -> Response {
-    if let Err(r) = admin.org(&st, &org) {
+    if let Err(r) = admin.org(&st, &org, Role::Admin) {
         return r;
     }
     let name = body.name.trim().to_string();
@@ -681,7 +696,7 @@ async fn revoke_key(
     Path((org, project, key)): Path<(String, String, String)>,
     admin: Admin,
 ) -> Response {
-    if let Err(r) = admin.org(&st, &org) {
+    if let Err(r) = admin.org(&st, &org, Role::Admin) {
         return r;
     }
     let result = control::edit(
@@ -719,7 +734,7 @@ async fn set_provider_key(
     admin: Admin,
     Json(body): Json<ProviderKeyBody>,
 ) -> Response {
-    if let Err(r) = admin.org(&st, &org) {
+    if let Err(r) = admin.org(&st, &org, Role::Admin) {
         return r;
     }
     let Some(p) = Provider::from_name(&provider) else {
@@ -788,7 +803,7 @@ async fn remove_provider_key(
     Path((org, provider)): Path<(String, String)>,
     admin: Admin,
 ) -> Response {
-    if let Err(r) = admin.org(&st, &org) {
+    if let Err(r) = admin.org(&st, &org, Role::Admin) {
         return r;
     }
     let Some(p) = Provider::from_name(&provider) else {
@@ -828,7 +843,7 @@ async fn apply_pack(
     admin: Admin,
     Json(body): Json<PackBody>,
 ) -> Response {
-    if let Err(r) = admin.org(&st, &org) {
+    if let Err(r) = admin.org(&st, &org, Role::Admin) {
         return r;
     }
     let Some(pack) = crate::packs::find(&body.pack) else {
@@ -860,7 +875,7 @@ async fn test_provider_key(
     Path((org, provider)): Path<(String, String)>,
     admin: Admin,
 ) -> Response {
-    if let Err(r) = admin.org(&st, &org) {
+    if let Err(r) = admin.org(&st, &org, Role::Admin) {
         return r;
     }
     let Some(p) = Provider::from_name(&provider) else {
@@ -938,7 +953,7 @@ async fn review(
     Query(q): Query<ListQuery>,
     admin: Admin,
 ) -> Response {
-    if let Err(r) = admin.org(&st, &org) {
+    if let Err(r) = admin.org(&st, &org, Role::Viewer) {
         return r;
     }
     let events = match st
@@ -1069,7 +1084,7 @@ async fn spend(
     Query(q): Query<SpendQuery>,
     admin: Admin,
 ) -> Response {
-    if let Err(r) = admin.org(&st, &org) {
+    if let Err(r) = admin.org(&st, &org, Role::Viewer) {
         return r;
     }
     let n = q.days.unwrap_or(30).clamp(1, 40) as i64;
@@ -1150,7 +1165,7 @@ async fn list_runs(
     Query(q): Query<ListQuery>,
     admin: Admin,
 ) -> Response {
-    if let Err(r) = admin.org(&st, &org) {
+    if let Err(r) = admin.org(&st, &org, Role::Viewer) {
         return r;
     }
     let recent = match st.ledger.recent_runs(&org, q.limit(200)).await {
@@ -1192,7 +1207,7 @@ async fn list_agents(
     Query(q): Query<ListQuery>,
     admin: Admin,
 ) -> Response {
-    if let Err(r) = admin.org(&st, &org) {
+    if let Err(r) = admin.org(&st, &org, Role::Viewer) {
         return r;
     }
     let recent = match st.ledger.recent_agents(&org, q.limit(200)).await {
@@ -1232,7 +1247,7 @@ async fn list_events(
     Query(q): Query<ListQuery>,
     admin: Admin,
 ) -> Response {
-    if let Err(r) = admin.org(&st, &org) {
+    if let Err(r) = admin.org(&st, &org, Role::Viewer) {
         return r;
     }
     match st.ledger.recent_events(&org, q.limit(100)).await {
@@ -1246,7 +1261,7 @@ async fn run_timeline(
     Path((org, run)): Path<(String, String)>,
     admin: Admin,
 ) -> Response {
-    if let Err(r) = admin.run(&st, &org, &run) {
+    if let Err(r) = admin.run(&st, &org, &run, Role::Viewer) {
         return r;
     }
     let (runs, events) = match st.ledger.run_timeline(&org, &run, 200).await {
@@ -1297,9 +1312,20 @@ const AUDIT_CSV_MAX: usize = 10_000;
 async fn list_audit(
     State(st): State<Arc<AppState>>,
     Query(q): Query<AuditQuery>,
-    _admin: Admin,
+    admin: Admin,
 ) -> Response {
     let org = q.org.as_deref().filter(|o| !o.is_empty());
+    if !admin.instance_admin {
+        let Some(o) = org else {
+            return err(
+                StatusCode::FORBIDDEN,
+                "pass ?org=: only instance admins see the whole audit log",
+            );
+        };
+        if let Err(r) = admin.org(&st, o, Role::Admin) {
+            return r;
+        }
+    }
     if q.format.as_deref() != Some("csv") {
         return match audit::list(&st, org, q.before.as_deref(), q.limit.unwrap_or(100)).await {
             Ok((entries, next)) => Json(json!({ "entries": entries, "next": next,
@@ -1381,7 +1407,7 @@ async fn pause(
     Path((org, run)): Path<(String, String)>,
     admin: Admin,
 ) -> Response {
-    if let Err(r) = admin.run(&st, &org, &run) {
+    if let Err(r) = admin.run(&st, &org, &run, Role::Approver) {
         return r;
     }
     match st.ledger.run_state(&org, &run).await {
@@ -1403,7 +1429,7 @@ async fn resume(
     Path((org, run)): Path<(String, String)>,
     admin: Admin,
 ) -> Response {
-    if let Err(r) = admin.run(&st, &org, &run) {
+    if let Err(r) = admin.run(&st, &org, &run, Role::Approver) {
         return r;
     }
     match st.ledger.run_state(&org, &run).await {
@@ -1427,7 +1453,7 @@ async fn kill(
     Path((org, run)): Path<(String, String)>,
     admin: Admin,
 ) -> Response {
-    if let Err(r) = admin.run(&st, &org, &run) {
+    if let Err(r) = admin.run(&st, &org, &run, Role::Approver) {
         return r;
     }
     match st.ledger.set_run_state(&org, &run, "killed").await {
@@ -1444,7 +1470,7 @@ async fn get_run(
     Path((org, run)): Path<(String, String)>,
     admin: Admin,
 ) -> Response {
-    if let Err(r) = admin.run(&st, &org, &run) {
+    if let Err(r) = admin.run(&st, &org, &run, Role::Viewer) {
         return r;
     }
     let state = match st.ledger.run_state(&org, &run).await {

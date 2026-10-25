@@ -7,7 +7,10 @@ use tracing_subscriber::EnvFilter;
 const USAGE: &str = "usage:
   tokenlens-proxy               run the proxy (config path from TL_CONFIG, default config/dev.toml)
   tokenlens-proxy gen-key       print a new virtual key and the sha256 hash to put in config
-  tokenlens-proxy hash-key KEY  print the sha256 hash of an existing virtual key";
+  tokenlens-proxy hash-key KEY  print the sha256 hash of an existing virtual key
+  tokenlens-proxy create-owner EMAIL
+                                make EMAIL an instance admin and print a one-time link to set
+                                their password (needs the database URL; same config as the proxy)";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -23,6 +26,10 @@ async fn main() -> Result<()> {
             let key = args.get(2).context(USAGE)?;
             println!("{}", config::sha256_hex(key));
             return Ok(());
+        }
+        Some("create-owner") => {
+            let email = args.get(2).context(USAGE)?;
+            return create_owner(email).await;
         }
         Some("help" | "--help" | "-h") => {
             println!("{USAGE}");
@@ -91,6 +98,43 @@ async fn main() -> Result<()> {
     )
     .with_graceful_shutdown(shutdown_signal());
     tokio::try_join!(async { proxy_server.await }, async { admin_server.await })?;
+    Ok(())
+}
+
+/// Make `email` an instance admin and print a link to set their password.
+async fn create_owner(email: &str) -> Result<()> {
+    use tokenlens_proxy::auth::store;
+    let email = email.trim().to_lowercase();
+    anyhow::ensure!(
+        email.contains('@') && !email.contains(char::is_whitespace),
+        "{email:?} is not an email address"
+    );
+    let path = std::env::var("TL_CONFIG").unwrap_or_else(|_| "config/dev.toml".into());
+    let rt = config::Resolved::load(&path, |name| std::env::var(name).ok())?;
+    let url = rt.database_url.clone().with_context(|| {
+        format!(
+            "set {} to the Postgres URL: people and sign-in need a database",
+            rt.cfg.database.url_env
+        )
+    })?;
+    let db = tokenlens_proxy::db::Db::connect(&url, 2).await?;
+    let pool = db.pool();
+    let (id, created) = store::upsert_user(pool, &email, "").await?;
+    store::set_instance_admin(pool, id, true).await?;
+    let token = store::create_setup_token(pool, id, 72).await?;
+    let base = rt
+        .cfg
+        .auth
+        .public_url
+        .clone()
+        .unwrap_or_else(|| format!("http://{}", rt.cfg.server.admin_listen));
+    if created {
+        println!("Created {email} as an instance admin.");
+    } else {
+        println!("{email} already had an account; it is now an instance admin.");
+    }
+    println!("Open this link within 72 hours to set the password (it works once):");
+    println!("  {}/#setup={token}", base.trim_end_matches('/'));
     Ok(())
 }
 

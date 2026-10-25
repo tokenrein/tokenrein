@@ -13,6 +13,7 @@
 <script src="/assets/js/spend.js" defer></script>
 <script src="/assets/js/activity.js" defer></script>
 <script src="/assets/js/settings.js" defer></script>
+<script src="/assets/js/people.js" defer></script>
 <script src="/assets/js/audit.js" defer></script>
 <script src="/assets/js/app.js" defer></script>
 </head>
@@ -20,15 +21,29 @@
 
 <section id="login" class="card login hide" aria-labelledby="login-title">
   <div class="brand"><span class="dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></span>TokenLens</div>
-  <h1 id="login-title">Sign in to the dashboard</h1>
-  <p class="sub">Enter the proxy's admin token (the value of <span class="mono">TL_ADMIN_TOKEN</span>). It stays in this browser tab only.</p>
-  <form id="login-form">
-    <label class="field">Admin token
-      <input id="token" type="password" autocomplete="current-password" required>
-    </label>
-    <div class="err" id="login-err" role="alert"></div>
+  <h1 id="login-title">Sign in to TokenLens</h1>
+  <div class="err" id="login-err" role="alert"></div>
+  <a class="btn primary wide hide" id="sso-btn" href="/auth/sso/start">Sign in with single sign-on</a>
+  <div class="or hide" id="login-or"><span>or</span></div>
+  <form id="password-form" class="hide">
+    <label class="field">Email <input id="email" type="email" autocomplete="username" required></label>
+    <label class="field">Password <input id="password" type="password" autocomplete="current-password" required></label>
     <button class="btn primary" type="submit">Sign in</button>
   </form>
+  <form id="setup-form" class="hide">
+    <p class="sub">Choose a password for your TokenLens account: at least 12 characters, not your email.</p>
+    <label class="field"><span>Your name <span class="muted">(optional)</span></span><input id="setup-name" type="text" autocomplete="name"></label>
+    <label class="field">New password <input id="setup-password" type="password" autocomplete="new-password" minlength="12" required></label>
+    <button class="btn primary" type="submit">Set password and sign in</button>
+  </form>
+  <details class="more hide" id="token-login"><summary>Use the admin token</summary>
+    <form id="login-form">
+      <p class="help">The value of <span class="mono">TL_ADMIN_TOKEN</span> on the proxy. It stays in this browser tab only.</p>
+      <label class="field">Admin token <input id="token" type="password" autocomplete="off" required></label>
+      <button class="btn" type="submit">Sign in with the token</button>
+    </form>
+  </details>
+  <p class="help hide" id="login-help"></p>
 </section>
 
 <div id="app" class="hide shell">
@@ -51,9 +66,11 @@
       <button role="tab" data-tab="settings" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M14 9l2 2"/></svg>Keys &amp; limits</button>
       <button role="tab" data-tab="models" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9-9-9z"/><circle cx="8" cy="8" r="1.5"/></svg>Models &amp; prices</button>
       <div class="nav-group">Govern</div>
+      <button role="tab" data-tab="people" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/></svg>People &amp; access</button>
       <button role="tab" data-tab="audit" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg>Audit log</button>
     </nav>
     <div class="side-foot">
+      <div class="whoami" id="whoami"></div>
       <span class="status" id="updated"></span>
       <button class="btn sm" id="signout" type="button">Sign out</button>
     </div>
@@ -145,6 +162,12 @@
         </div>
         <div class="table-wrap"><table id="events-table" class="wide"></table></div>
       </div>
+    </section>
+
+    <section data-view="people" class="hide">
+      <h1>People &amp; access</h1>
+      <p class="sub">Who can see and change this org, how they sign in, and your own API tokens.</p>
+      <div id="people"></div>
     </section>
 
     <section data-view="audit" class="hide">

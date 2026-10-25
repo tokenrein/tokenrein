@@ -137,6 +137,47 @@ impl Default for DatabaseConfig {
     }
 }
 
+/// Signing in to the dashboard and admin API (needs a database).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthConfig {
+    /// The dashboard's address as people reach it (`https://tokenlens.example.com`). Needed for
+    /// single sign-on (the identity provider sends people back here) and full setup links;
+    /// `https://` also marks session cookies Secure.
+    #[serde(default)]
+    pub public_url: Option<String>,
+    /// Sessions end this long after sign-in...
+    #[serde(default = "default_session_hours")]
+    pub session_hours: u32,
+    /// ...or after this long without activity.
+    #[serde(default = "default_idle_minutes")]
+    pub idle_minutes: u32,
+    /// Allow email + password sign-in (turn off to require single sign-on).
+    #[serde(default = "default_true")]
+    pub password_login: bool,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            public_url: None,
+            session_hours: default_session_hours(),
+            idle_minutes: default_idle_minutes(),
+            password_login: true,
+        }
+    }
+}
+
+fn default_session_hours() -> u32 {
+    12
+}
+fn default_idle_minutes() -> u32 {
+    120
+}
+fn default_true() -> bool {
+    true
+}
+
 fn default_database_url_env() -> String {
     "TL_DATABASE_URL".into()
 }
@@ -267,6 +308,8 @@ pub struct Config {
     pub redis: RedisConfig,
     #[serde(default)]
     pub database: DatabaseConfig,
+    #[serde(default)]
+    pub auth: AuthConfig,
     #[serde(default)]
     pub providers: ProvidersConfig,
     #[serde(default)]
@@ -486,6 +529,11 @@ impl Resolved {
     }
 
     /// Encrypts provider keys saved from the dashboard; None when the secrets key is not set.
+    /// An environment variable, through the same lookup the config uses.
+    pub fn env_var(&self, name: &str) -> Option<String> {
+        (self.env)(name)
+    }
+
     pub fn secrets(&self) -> Option<&SecretBox> {
         self.secrets.as_deref()
     }

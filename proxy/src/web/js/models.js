@@ -5,27 +5,28 @@
 const perM = micros => "$" + (micros / 1e6).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 });
 function renderModels() {
   const m = S.models;
+  const edit = !!S.me?.instance_admin;
   if (!m) { $("#models").innerHTML = '<p class="muted">Loading…</p>'; return; }
   $("#models-sub").textContent = `Prices TokenLens uses to turn tokens into dollars, per million tokens. Built-in prices were last checked ${m.verified_as_of}; check them against your provider's price page before relying on them for billing.`;
   const providers = [...new Set(m.rows.map(r => r.provider))].sort();
   const q = S.modelFilter.toLowerCase();
   const rows = m.rows.filter(r => (!S.modelProvider || r.provider === S.modelProvider) && (!q || r.model.includes(q) || r.provider.includes(q)));
-  const unpriced = m.unpriced.length ? `<div class="alert"><b>${m.unpriced.length} model${m.unpriced.length === 1 ? "" : "s"} without a price</b> used recently. They're charged at the provider's most expensive rate until you add one.
+  const unpriced = m.unpriced.length && edit ? `<div class="alert"><b>${m.unpriced.length} model${m.unpriced.length === 1 ? "" : "s"} without a price</b> used recently. They're charged at the provider's most expensive rate until you add one.
     <div class="inline" style="margin-top:8px">${m.unpriced.map(u => `<button class="btn sm" data-price-new data-provider="${esc(u.provider || "")}" data-model="${esc(u.model)}">Set price: ${esc(u.provider ? u.provider + "/" : "")}${esc(u.model)}</button>`).join("")}</div></div>` : "";
   const body = rows.map(r => `<tr>
     <td>${esc(r.provider)}</td><td class="mono">${esc(r.model)}</td>
     <td class="price">${perM(r.price.input)}</td><td class="price">${perM(r.price.output)}</td>
     <td class="price">${perM(r.price.cached_input)}</td><td class="price">${perM(r.price.cache_write)}</td>
     <td>${r.source === "override" ? '<span class="badge b-info">your price</span>' : '<span class="badge b-muted">built-in</span>'}</td>
-    <td><div class="row-actions">
+    <td><div class="row-actions">${!edit ? "" : `
       <button class="btn sm" data-price-edit data-provider="${esc(r.provider)}" data-model="${esc(r.model)}">${r.source === "override" ? "Edit" : "Override"}</button>
-      ${r.source === "override" ? `<button class="btn sm danger" data-price-remove data-provider="${esc(r.provider)}" data-model="${esc(r.model)}">Remove</button>` : ""}
+      ${r.source === "override" ? `<button class="btn sm danger" data-price-remove data-provider="${esc(r.provider)}" data-model="${esc(r.model)}">Remove</button>` : ""}`}
     </div></td></tr>`).join("");
   $("#models").innerHTML = `${unpriced}<div class="card">
     <div class="card-h">
       <input type="search" data-model-filter placeholder="Search models" aria-label="Search models" value="${esc(S.modelFilter)}" style="min-width:220px">
       <select data-model-provider aria-label="Provider"><option value="">All providers</option>${providers.map(p => `<option ${p === S.modelProvider ? "selected" : ""}>${esc(p)}</option>`).join("")}</select>
-      <div class="toolbar"><button class="btn primary sm" data-price-new>Add a model price</button></div>
+      ${edit ? `<div class="toolbar"><button class="btn primary sm" data-price-new>Add a model price</button></div>` : ""}
     </div>
     <div class="table-wrap"><table class="wide"><thead><tr><th>Provider</th><th>Model</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cached input</th><th class="num">Cache write</th><th>Source</th><th></th></tr></thead>
     <tbody>${body || '<tr><td colspan="8" class="empty">No models match.</td></tr>'}</tbody></table></div></div>

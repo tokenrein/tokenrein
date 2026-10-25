@@ -2,39 +2,100 @@
 "use strict";
 
 // --- auth ---
-function signOut(message) {
-  S.token = null;
-  store("session", TOKEN_KEY, null);
+// Show the sign-in screen with the ways this install allows (single sign-on, password, admin token).
+async function showLogin(message) {
   clearInterval(S.timer);
+  S.token = null; S.csrf = null; S.me = null;
+  store("session", TOKEN_KEY, null);
   $("#app").classList.add("hide");
   $("#login").classList.remove("hide");
   $("#login-err").textContent = message || "";
-  $("#token").value = "";
-  $("#token").focus();
+  let cfg = S.authConfig;
+  try { cfg = S.authConfig = await (await fetch("/auth/config")).json(); } catch (_) { /* keep the last one */ }
+  cfg = cfg || { admin_token: true };
+  const setup = !!S.setupToken;
+  $("#setup-form").classList.toggle("hide", !setup);
+  $("#sso-btn").classList.toggle("hide", setup || !cfg.sso);
+  if (cfg.sso) $("#sso-btn").textContent = `Sign in with ${cfg.sso.label}`;
+  $("#password-form").classList.toggle("hide", setup || !cfg.password_login);
+  $("#login-or").classList.toggle("hide", setup || !(cfg.sso && cfg.password_login));
+  const tokenOnly = !cfg.sso && !cfg.password_login;
+  $("#token-login").classList.toggle("hide", setup || !cfg.admin_token);
+  $("#token-login").open = tokenOnly;
+  $("#login-title").textContent = setup ? "Set your password" : "Sign in to TokenLens";
+  const help = $("#login-help");
+  help.classList.toggle("hide", !(cfg.database && cfg.users === 0 && !setup));
+  help.innerHTML = cfg.database && cfg.users === 0
+    ? `No accounts yet. Run <span class="mono">tokenlens-proxy create-owner you@company.com</span> on the server for a link to set the first password, or sign in with the admin token and add people under People &amp; access.`
+    : "";
+  const focus = setup ? "#setup-password" : cfg.password_login ? "#email" : "#token";
+  $(focus)?.focus();
 }
+function signOut(message) { showLogin(message); }
+
+async function signedIn(csrf) {
+  S.csrf = csrf || null;
+  S.me = await api("/auth/me", { quiet: true });
+  S.csrf = S.me.csrf || S.csrf;
+  start();
+}
+
+$("#password-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  $("#login-err").textContent = "";
+  const res = await fetch("/auth/login", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: $("#email").value.trim(), password: $("#password").value }) });
+  const data = await res.json().catch(() => ({}));
+  $("#password").value = "";
+  if (!res.ok) { $("#login-err").textContent = data.error || `HTTP ${res.status}`; return; }
+  try { await signedIn(data.csrf); } catch (err) { $("#login-err").textContent = err.message; }
+});
+$("#setup-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  $("#login-err").textContent = "";
+  const res = await fetch("/auth/setup", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: S.setupToken, password: $("#setup-password").value, name: $("#setup-name").value.trim() || null }) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { $("#login-err").textContent = data.error || `HTTP ${res.status}`; return; }
+  S.setupToken = null;
+  $("#setup-password").value = "";
+  try { await signedIn(data.csrf); } catch (err) { $("#login-err").textContent = err.message; }
+});
 $("#login-form").addEventListener("submit", async e => {
   e.preventDefault();
   S.token = $("#token").value.trim();
   $("#login-err").textContent = "";
   try {
-    await api("/admin/overview");
+    await signedIn();
     store("session", TOKEN_KEY, S.token);
-    start();
+    $("#token").value = "";
   } catch (err) {
-    if (err.message !== "unauthorized") $("#login-err").textContent = err.message;
+    S.token = null;
+    $("#login-err").textContent = err.message === "HTTP 401" || /token/.test(err.message) ? "That admin token was not accepted." : err.message;
   }
 });
-$("#signout").addEventListener("click", () => signOut());
+$("#signout").addEventListener("click", async () => {
+  if (S.csrf) { try { await api("/auth/logout", { method: "POST", quiet: true }); } catch (_) { /* signed out anyway */ } }
+  showLogin();
+});
+
+function renderWhoami() {
+  const who = S.me?.via === "admin_token" ? "Admin token" : S.me?.email || "";
+  const role = S.me?.instance_admin ? "instance admin" : roleIn() || "no role";
+  $("#whoami").innerHTML = `<b>${esc(who)}</b><br>${esc(role)}${S.org && !S.me?.instance_admin ? ` in ${esc(S.org)}` : ""}`;
+  $("#whoami").title = who;
+}
 
 // --- navigation ---
 function showTab(tab) {
   const changed = S.tab !== tab;
   S.tab = tab;
   if (tab !== "run") store("local", TAB_KEY, tab);
+  if (changed) S.peopleNotice = ""; // one-time links and tokens are shown once
   $$("nav.tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
   $$("[data-view]").forEach(v => v.classList.toggle("hide", v.dataset.view !== tab));
   render();
-  if (changed && ["spend", "run", "overview", "models", "connect", "audit"].includes(tab) && S.token) refresh();
+  if (changed && ["spend", "run", "overview", "models", "connect", "audit", "people"].includes(tab) && S.me) refresh();
 }
 function openRun(id) {
   S.runId = id; S.run = null;
@@ -76,7 +137,8 @@ async function refresh() {
       if (S.tab === "spend") S.spend = await api(`/admin/orgs/${o}/spend?days=${$("#spend-days").value}`);
       if (S.tab === "models") S.models = await api(`/admin/models?org=${o}`);
       if (S.tab === "run" && S.runId) S.run = await api(`/admin/orgs/${o}/runs/${encodeURIComponent(S.runId)}/timeline`);
-      if (S.tab === "audit") S.audit = await api(auditPath());
+      if (S.tab === "audit") S.audit = can("admin") ? await api(auditPath()) : null;
+      if (S.tab === "people") await loadPeople();
     } else {
       S.runs = []; S.agents = []; S.events = []; S.review = null;
     }
@@ -101,6 +163,10 @@ function render() {
   if (S.tab === "activity") renderEvents();
   if (S.tab === "settings" && !S.editing) renderSettings();
   if (S.tab === "audit") renderAudit();
+  if (S.tab === "people") renderPeople();
+  renderWhoami();
+  // Org admins see their org's audit log; instance admins see everything.
+  $("nav.tabs button[data-tab=audit]").classList.toggle("hide", !can("admin"));
 }
 
 // --- start ---
@@ -113,9 +179,19 @@ function start() {
   clearInterval(S.timer);
   S.timer = setInterval(() => {
     if (document.hidden) return;
-    if (["settings", "connect", "models", "audit"].includes(S.tab) || !$("#autorefresh").checked && S.tab === "runs") return;
+    if (["settings", "connect", "models", "audit", "people"].includes(S.tab) || !$("#autorefresh").checked && S.tab === "runs") return;
     refresh();
   }, 5000);
 }
-S.token = store("session", TOKEN_KEY);
-if (S.token) start(); else signOut();
+// Start: a setup link or a single sign-on error in the address, else the session (cookie) or the
+// admin token kept in this tab.
+(async function boot() {
+  const hash = location.hash;
+  let message = "";
+  if (hash.startsWith("#setup=")) S.setupToken = decodeURIComponent(hash.slice(7));
+  if (hash.startsWith("#login-error=")) message = decodeURIComponent(hash.slice(13).replace(/\+/g, " "));
+  if (hash) history.replaceState(null, "", location.pathname);
+  if (S.setupToken || message) return showLogin(message);
+  S.token = store("session", TOKEN_KEY);
+  try { await signedIn(); } catch (_) { showLogin(); }
+})();

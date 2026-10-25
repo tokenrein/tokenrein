@@ -108,7 +108,7 @@ function renderGetStarted(org) {
   const el = $("#get-started");
   const steps = gsSteps(org);
   const done = steps.filter(s => s.done).length;
-  if (done === steps.length || store("local", GS_HIDE + org.id) === "1") { el.innerHTML = ""; return; }
+  if (done === steps.length || !can("admin") || store("local", GS_HIDE + org.id) === "1") { el.innerHTML = ""; return; }
   const current = steps.findIndex(s => !s.done);
   el.innerHTML = `<div class="card" style="margin-bottom:16px">
     <div class="card-h"><h2>Get started</h2>
@@ -164,7 +164,7 @@ function renderReview(org) {
     <td class="num">${i.requests}</td>
     <td class="num">${usd(i.cost_micros)}</td>
     <td>${i.run_count} run${i.run_count === 1 ? "" : "s"}<div class="muted mono">${i.runs.map(x => `<a href="#" class="runlink" data-open-run="${esc(x)}">${esc(x)}</a>`).join(", ")}</div></td>
-    <td><div class="row-actions"><button class="btn primary sm" data-enforce="${esc(i.policy)}" data-project="${esc(i.project || "")}">Switch to Enforce</button></div></td></tr>`).join("");
+    <td><div class="row-actions">${can("admin") ? `<button class="btn primary sm" data-enforce="${esc(i.policy)}" data-project="${esc(i.project || "")}">Switch to Enforce</button>` : ""}</div></td></tr>`).join("");
   el.innerHTML = `<div class="card" style="margin-bottom:16px">
     <div class="card-h"><h2>Check mode: what Enforce would have blocked</h2><span class="muted">last ${r.events_scanned} requests${since ? " · since " + esc(since) : ""}</span></div>
     ${items.length ? `<div class="card-b" style="padding-bottom:0"><p class="help">With Enforce on, <b>${total} request${total === 1 ? "" : "s"}</b> (${usd(cost)} of spend) would have been blocked with HTTP 402. Nothing was blocked: these limits are in Check mode.</p></div>
