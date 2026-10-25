@@ -1,16 +1,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "tokenlens.fullname" . }}
+  name: {{ include "tokenrein.fullname" . }}
   labels:
-    {{- include "tokenlens.labels" . | nindent 4 }}
+    {{- include "tokenrein.labels" . | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
     matchLabels:
-      {{- include "tokenlens.selectorLabels" . | nindent 6 }}
+      {{- include "tokenrein.selectorLabels" . | nindent 6 }}
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -32,7 +32,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "tokenlens.selectorLabels" . | nindent 8 }}
+        {{- include "tokenrein.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -41,14 +41,14 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "tokenlens.serviceAccountName" . }}
+      serviceAccountName: {{ include "tokenrein.serviceAccountName" . }}
       automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       containers:
-        - name: tokenlens
-          image: {{ include "tokenlens.image" . }}
+        - name: tokenrein
+          image: {{ include "tokenrein.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
@@ -58,53 +58,53 @@ spec:
             - name: admin
               containerPort: 8788
           env:
-            - name: TL_CONFIG
-              value: /etc/tokenlens/tokenlens.toml
-            - name: TL_LISTEN
+            - name: TOKENREIN_CONFIG
+              value: /etc/tokenrein/tokenrein.toml
+            - name: TOKENREIN_LISTEN
               value: "0.0.0.0:8787"
-            - name: TL_ADMIN_LISTEN
+            - name: TOKENREIN_ADMIN_LISTEN
               value: "0.0.0.0:8788"
             {{- if .Values.redis.enabled }}
-            - name: TL_REDIS_URL
-              value: {{ printf "redis://%s:6379" (include "tokenlens.redisHost" .) | quote }}
+            - name: TOKENREIN_REDIS_URL
+              value: {{ printf "redis://%s:6379" (include "tokenrein.redisHost" .) | quote }}
             {{- else if .Values.externalRedis.existingSecret }}
-            - name: TL_REDIS_URL
+            - name: TOKENREIN_REDIS_URL
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.externalRedis.existingSecret }}
                   key: {{ .Values.externalRedis.existingSecretKey }}
             {{- else }}
-            - name: TL_REDIS_URL
+            - name: TOKENREIN_REDIS_URL
               value: {{ required "set externalRedis.url (or externalRedis.existingSecret) when redis.enabled is false" .Values.externalRedis.url | quote }}
             {{- end }}
-            {{- $secret := include "tokenlens.secretName" . }}
+            {{- $secret := include "tokenrein.secretName" . }}
             {{- if .Values.secrets.mountAsFiles }}
-            - name: TL_ADMIN_TOKEN_FILE
-              value: /var/run/secrets/tokenlens/TL_ADMIN_TOKEN
-            - name: TL_SECRETS_KEY_FILE
-              value: /var/run/secrets/tokenlens/TL_SECRETS_KEY
-            {{- if include "tokenlens.hasDatabase" . }}
-            - name: TL_DATABASE_URL_FILE
-              value: /var/run/secrets/tokenlens/TL_DATABASE_URL
+            - name: TOKENREIN_ADMIN_TOKEN_FILE
+              value: /var/run/secrets/tokenrein/TOKENREIN_ADMIN_TOKEN
+            - name: TOKENREIN_SECRETS_KEY_FILE
+              value: /var/run/secrets/tokenrein/TOKENREIN_SECRETS_KEY
+            {{- if include "tokenrein.hasDatabase" . }}
+            - name: TOKENREIN_DATABASE_URL_FILE
+              value: /var/run/secrets/tokenrein/TOKENREIN_DATABASE_URL
             {{- end }}
             {{- if or .Values.secrets.previousSecretsKey .Values.secrets.rotating }}
-            - name: TL_SECRETS_KEY_PREVIOUS_FILE
-              value: /var/run/secrets/tokenlens/TL_SECRETS_KEY_PREVIOUS
+            - name: TOKENREIN_SECRETS_KEY_PREVIOUS_FILE
+              value: /var/run/secrets/tokenrein/TOKENREIN_SECRETS_KEY_PREVIOUS
             {{- end }}
             {{- else }}
-            {{- range $name := list "TL_ADMIN_TOKEN" "TL_SECRETS_KEY" }}
+            {{- range $name := list "TOKENREIN_ADMIN_TOKEN" "TOKENREIN_SECRETS_KEY" }}
             - name: {{ $name }}
               valueFrom:
                 secretKeyRef: { name: {{ $secret }}, key: {{ $name }} }
             {{- end }}
-            {{- if include "tokenlens.hasDatabase" . }}
-            - name: TL_DATABASE_URL
+            {{- if include "tokenrein.hasDatabase" . }}
+            - name: TOKENREIN_DATABASE_URL
               valueFrom:
-                secretKeyRef: { name: {{ $secret }}, key: TL_DATABASE_URL }
+                secretKeyRef: { name: {{ $secret }}, key: TOKENREIN_DATABASE_URL }
             {{- end }}
-            - name: TL_SECRETS_KEY_PREVIOUS
+            - name: TOKENREIN_SECRETS_KEY_PREVIOUS
               valueFrom:
-                secretKeyRef: { name: {{ $secret }}, key: TL_SECRETS_KEY_PREVIOUS, optional: true }
+                secretKeyRef: { name: {{ $secret }}, key: TOKENREIN_SECRETS_KEY_PREVIOUS, optional: true }
             {{- end }}
             {{- with .Values.providerKeys.existingSecret }}
             {{- range $name := list "OPENAI_API_KEY" "ANTHROPIC_API_KEY" }}
@@ -132,21 +132,21 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: config
-              mountPath: /etc/tokenlens
+              mountPath: /etc/tokenrein
               readOnly: true
             {{- if .Values.secrets.mountAsFiles }}
             - name: secrets
-              mountPath: /var/run/secrets/tokenlens
+              mountPath: /var/run/secrets/tokenrein
               readOnly: true
             {{- end }}
       volumes:
         - name: config
           configMap:
-            name: {{ include "tokenlens.fullname" . }}
+            name: {{ include "tokenrein.fullname" . }}
         {{- if .Values.secrets.mountAsFiles }}
         - name: secrets
           secret:
-            secretName: {{ include "tokenlens.secretName" . }}
+            secretName: {{ include "tokenrein.secretName" . }}
             defaultMode: 0400
         {{- end }}
       {{- with .Values.nodeSelector }}

@@ -1,4 +1,4 @@
-//! Usage from agents and SDKs that call model providers directly, with TokenLens out of the
+//! Usage from agents and SDKs that call model providers directly, with Tokenrein out of the
 //! request path:
 //!
 //! - `POST /v1/usage`: usage events reported after each call (SDK direct mode, any client).
@@ -8,7 +8,7 @@
 //! - `POST /v1/hooks/{claude-code,codex,gemini,cursor}`: coding agents' hooks; they block the
 //!   next prompt or tool call when a run is paused, killed or over an enforced budget.
 //!
-//! All of them authenticate with a TokenLens virtual key, like the proxy. Reported spend is
+//! All of them authenticate with a Tokenrein virtual key, like the proxy. Reported spend is
 //! charged to the same budgets and shows up in the same dashboard. Enforcement is between calls
 //! (the call that crosses a limit has already happened), unlike the proxy's pre-call reservation.
 
@@ -62,16 +62,16 @@ fn caller(st: &AppState, headers: &HeaderMap) -> Result<Caller, Response> {
     let Some(token) = client_token(headers) else {
         return Err(error(
             StatusCode::UNAUTHORIZED,
-            "tokenlens_unauthorized",
-            "missing TokenLens key (send it as 'Authorization: Bearer' or 'x-api-key')",
+            "tokenrein_unauthorized",
+            "missing Tokenrein key (send it as 'Authorization: Bearer' or 'x-api-key')",
         ));
     };
     let rt = st.rt();
     let Some(&(oi, pi)) = rt.keys.get(&config::sha256_hex(token)) else {
         return Err(error(
             StatusCode::UNAUTHORIZED,
-            "tokenlens_unauthorized",
-            "invalid TokenLens key",
+            "tokenrein_unauthorized",
+            "invalid Tokenrein key",
         ));
     };
     Ok(Caller { rt, oi, pi })
@@ -150,7 +150,7 @@ fn unavailable(e: anyhow::Error) -> Response {
     crate::metrics::ledger_error();
     error(
         StatusCode::SERVICE_UNAVAILABLE,
-        "tokenlens_unavailable",
+        "tokenrein_unavailable",
         "budget ledger unavailable",
     )
 }
@@ -174,7 +174,7 @@ pub struct UsageEvent {
     pub cache_read_tokens: u64,
     #[serde(default)]
     pub cache_write_tokens: u64,
-    /// Cost the client computed; otherwise TokenLens prices the tokens.
+    /// Cost the client computed; otherwise Tokenrein prices the tokens.
     pub cost_usd: Option<f64>,
     pub duration_ms: Option<u64>,
     pub run_budget_usd: Option<f64>,
@@ -323,7 +323,7 @@ pub async fn usage(
     if body.events.len() > MAX_EVENTS {
         return error(
             StatusCode::PAYLOAD_TOO_LARGE,
-            "tokenlens_invalid_request",
+            "tokenrein_invalid_request",
             "at most 500 events per request",
         );
     }
@@ -409,7 +409,7 @@ async fn verdict(st: &AppState, c: &Caller, who: &Who, estimate: u64) -> anyhow:
             } => Verdict {
                 allowed: false,
                 reason: Some(format!(
-                    "TokenLens: the {label} budget is used up ({} spent{} of {}). Ask an admin to raise it in the TokenLens dashboard.",
+                    "Tokenrein: the {label} budget is used up ({} spent{} of {}). Ask an admin to raise it in the Tokenrein dashboard.",
                     usd_text(spent),
                     if reserved > 0 {
                         format!(" + {} in flight", usd_text(reserved))
@@ -425,10 +425,10 @@ async fn verdict(st: &AppState, c: &Caller, who: &Who, estimate: u64) -> anyhow:
             Reservation::RunStopped { run_id, state } => Verdict {
                 allowed: false,
                 reason: Some(if state == "killed" {
-                    format!("TokenLens: run {run_id} was stopped by an admin and cannot continue.")
+                    format!("Tokenrein: run {run_id} was stopped by an admin and cannot continue.")
                 } else {
                     format!(
-                        "TokenLens: run {run_id} is paused by an admin. Resume it in the TokenLens dashboard to continue."
+                        "Tokenrein: run {run_id} is paused by an admin. Resume it in the Tokenrein dashboard to continue."
                     )
                 }),
                 scope: Some(format!("run:{run_id}")),
@@ -490,7 +490,7 @@ pub async fn check(
     };
     let who = match who_from_event(&ev, "sdk") {
         Ok(w) => w,
-        Err(e) => return error(StatusCode::BAD_REQUEST, "tokenlens_invalid_request", &e),
+        Err(e) => return error(StatusCode::BAD_REQUEST, "tokenrein_invalid_request", &e),
     };
     let estimate = match (body.estimate_usd, &body.model, body.max_output_tokens) {
         (Some(usd), _, _) if usd.is_finite() && usd >= 0.0 => usd_to_micros(usd),
@@ -545,7 +545,7 @@ pub async fn check(
 
 // --- Coding agents: telemetry and hooks ---
 
-/// A coding agent that reports through its own telemetry and hooks, with TokenLens out of its
+/// A coding agent that reports through its own telemetry and hooks, with Tokenrein out of its
 /// request path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
@@ -667,7 +667,7 @@ struct Record {
     usage: Option<UsageEvent>,
 }
 
-/// Read a log record from a coding agent; `None` for records TokenLens does not use.
+/// Read a log record from a coding agent; `None` for records Tokenrein does not use.
 /// See docs/connectors.md for the fields and where they are documented.
 fn read_record(tool: Tool, event: &str, a: &Map<String, Value>) -> Option<Record> {
     let user = |keys: &[&str]| keys.iter().find_map(|k| attr_str(a, k)).map(str::to_string);
@@ -782,7 +782,7 @@ pub async fn otel_logs(
     if !content_type.starts_with("application/json") {
         return error(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "tokenlens_invalid_request",
+            "tokenrein_invalid_request",
             "send OTLP logs as JSON (OTLP/HTTP with protocol http/json)",
         );
     }
@@ -791,13 +791,13 @@ pub async fn otel_logs(
         Err(_) => {
             return error(
                 StatusCode::BAD_REQUEST,
-                "tokenlens_invalid_request",
+                "tokenrein_invalid_request",
                 "invalid OTLP JSON",
             );
         }
     };
-    let header_agent = header_str(&headers, "x-tl-agent").and_then(to_id);
-    let header_user = header_str(&headers, "x-tl-user").filter(|u| valid_user(u));
+    let header_agent = header_str(&headers, "x-tr-agent").and_then(to_id);
+    let header_user = header_str(&headers, "x-tr-user").filter(|u| valid_user(u));
     let mut recorded = 0usize;
     for rl in doc
         .get("resourceLogs")
@@ -873,7 +873,7 @@ pub async fn otel_logs(
 }
 
 /// OTLP traces and metrics: accepted and dropped. Gemini CLI exports them next to its logs when
-/// it sends OTLP over HTTP; TokenLens only uses the logs.
+/// it sends OTLP over HTTP; Tokenrein only uses the logs.
 pub async fn otel_discard(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     match caller(&st, &headers) {
         Ok(_) => Json(json!({})).into_response(),
@@ -881,7 +881,7 @@ pub async fn otel_discard(State(st): State<Arc<AppState>>, headers: HeaderMap) -
     }
 }
 
-/// What a hook call asks TokenLens to allow.
+/// What a hook call asks Tokenrein to allow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Gate {
     /// A prompt is about to be sent.
@@ -960,7 +960,7 @@ fn read_hook(tool: Tool, input: &Value) -> Option<HookCall<'_>> {
     })
 }
 
-/// The hook's answer when TokenLens has no objection.
+/// The hook's answer when Tokenrein has no objection.
 fn hook_allow(tool: Tool, gate: Option<Gate>) -> Value {
     match (tool, gate) {
         (Tool::Cursor, Some(Gate::Prompt)) => json!({ "continue": true }),
@@ -1009,15 +1009,15 @@ async fn agent_hook(st: &AppState, headers: &HeaderMap, input: &Value, tool: Too
     let who = Who {
         run,
         parent,
-        agent: header_str(headers, "x-tl-agent")
+        agent: header_str(headers, "x-tr-agent")
             .and_then(to_id)
             .unwrap_or_else(|| tool.name().into()),
-        user: header_str(headers, "x-tl-user")
+        user: header_str(headers, "x-tr-user")
             .or(call.user)
             .filter(|u| valid_user(u))
             .map(str::to_string),
         source: tool.name().into(),
-        run_budget_usd: header_str(headers, "x-tl-run-budget-usd")
+        run_budget_usd: header_str(headers, "x-tr-run-budget-usd")
             .and_then(|b| b.parse::<f64>().ok())
             .filter(|b| b.is_finite() && *b > 0.0),
     };
@@ -1062,7 +1062,7 @@ async fn agent_hook(st: &AppState, headers: &HeaderMap, input: &Value, tool: Too
     );
     let reason = v
         .reason
-        .unwrap_or_else(|| "TokenLens: budget used up".into());
+        .unwrap_or_else(|| "Tokenrein: budget used up".into());
     Json(hook_block(tool, gate, call.event, &reason)).into_response()
 }
 
@@ -1075,7 +1075,7 @@ pub async fn claude_code_hook(
     agent_hook(&st, &headers, &input, Tool::ClaudeCode).await
 }
 
-/// OpenAI Codex CLI command hooks, forwarded by the TokenLens hook script.
+/// OpenAI Codex CLI command hooks, forwarded by the Tokenrein hook script.
 pub async fn codex_hook(
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1084,7 +1084,7 @@ pub async fn codex_hook(
     agent_hook(&st, &headers, &input, Tool::Codex).await
 }
 
-/// Gemini CLI command hooks, forwarded by the TokenLens hook script.
+/// Gemini CLI command hooks, forwarded by the Tokenrein hook script.
 pub async fn gemini_hook(
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1093,7 +1093,7 @@ pub async fn gemini_hook(
     agent_hook(&st, &headers, &input, Tool::Gemini).await
 }
 
-/// Cursor command hooks, forwarded by the TokenLens hook script.
+/// Cursor command hooks, forwarded by the Tokenrein hook script.
 pub async fn cursor_hook(
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,

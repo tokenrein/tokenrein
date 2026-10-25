@@ -1,4 +1,4 @@
-//! Running TokenLens: Prometheus metrics, admin security headers and secrets key rotation.
+//! Running Tokenrein: Prometheus metrics, admin security headers and secrets key rotation.
 
 mod common;
 
@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use reqwest::StatusCode;
 use serde_json::{Value, json};
-use tokenlens_proxy::config::Resolved;
-use tokenlens_proxy::providers::Provider;
-use tokenlens_proxy::{AppState, admin, build_state, control};
+use tokenrein::config::Resolved;
+use tokenrein::providers::Provider;
+use tokenrein::{AppState, admin, build_state, control};
 
 const ADMIN_TOKEN: &str = "admin-token-0123456789";
 const K1: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
@@ -93,13 +93,13 @@ async fn metrics_are_served_and_every_admin_route_sends_security_headers() {
     );
     let body = resp.text().await.unwrap();
     for metric in [
-        "tokenlens_decisions_total{path=\"proxy\",decision=\"allowed\"}",
-        "tokenlens_pre_upstream_seconds_bucket{le=\"0.001\"}",
-        "tokenlens_upstream_seconds_count{provider=\"anthropic\"}",
-        "tokenlens_ledger_errors_total",
-        "tokenlens_activity_events_dropped_total{reason=\"queue_full\"}",
-        "tokenlens_audit_write_failures_total",
-        "tokenlens_config_version 1\n",
+        "tokenrein_decisions_total{path=\"proxy\",decision=\"allowed\"}",
+        "tokenrein_pre_upstream_seconds_bucket{le=\"0.001\"}",
+        "tokenrein_upstream_seconds_count{provider=\"anthropic\"}",
+        "tokenrein_ledger_errors_total",
+        "tokenrein_activity_events_dropped_total{reason=\"queue_full\"}",
+        "tokenrein_audit_write_failures_total",
+        "tokenrein_config_version 1\n",
     ] {
         assert!(body.contains(metric), "missing {metric} in\n{body}");
     }
@@ -261,7 +261,7 @@ struct Outage {
 impl Outage {
     async fn start(redis: &str, db: Option<&str>) -> Self {
         let upstream = fake_openai().await;
-        let hash = tokenlens_proxy::config::sha256_hex;
+        let hash = tokenrein::config::sha256_hex;
         let config = format!(
             r#"
             [server]
@@ -302,7 +302,7 @@ impl Outage {
         control::init(&state).await.unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let proxy = format!("http://{}", listener.local_addr().unwrap());
-        let router = tokenlens_proxy::proxy::router(state.clone());
+        let router = tokenrein::proxy::router(state.clone());
         tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         Self {
             proxy,
@@ -315,7 +315,7 @@ impl Outage {
         self.http
             .post(format!("{}/v1/chat/completions", self.proxy))
             .bearer_auth(key)
-            .header("x-tl-run-id", "outage-run")
+            .header("x-tr-run-id", "outage-run")
             .json(&json!({"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}))
             .send()
             .await
@@ -349,8 +349,8 @@ async fn redis_outage_fails_open_or_closed_per_org() {
     let o = Outage::start(&redis.url, Some(&pg.url)).await;
     let resp = o.chat(OPEN_KEY).await;
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(resp.headers().get("x-tl-degraded").is_none());
-    let errors_before = o.metric("tokenlens_ledger_errors_total").await;
+    assert!(resp.headers().get("x-tr-degraded").is_none());
+    let errors_before = o.metric("tokenrein_ledger_errors_total").await;
 
     drop(redis);
 
@@ -361,12 +361,12 @@ async fn redis_outage_fails_open_or_closed_per_org() {
     eprintln!("fail-open request with Redis down took {took:?}");
     assert!(took < std::time::Duration::from_secs(3), "{took:?}");
     assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(resp.headers()["x-tl-degraded"], "true");
+    assert_eq!(resp.headers()["x-tr-degraded"], "true");
     // Fails closed: refused.
     let resp = o.chat(CLOSED_KEY).await;
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body: Value = resp.json().await.unwrap();
-    assert_eq!(body["error"]["code"], "tokenlens_unavailable", "{body}");
+    assert_eq!(body["error"]["code"], "tokenrein_unavailable", "{body}");
 
     let readyz = o
         .http
@@ -375,7 +375,7 @@ async fn redis_outage_fails_open_or_closed_per_org() {
         .await
         .unwrap();
     assert_eq!(readyz.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert!(o.metric("tokenlens_ledger_errors_total").await > errors_before);
+    assert!(o.metric("tokenrein_ledger_errors_total").await > errors_before);
     // The config lives in Postgres, so it can still be changed.
     let edit = o
         .http
@@ -387,12 +387,12 @@ async fn redis_outage_fails_open_or_closed_per_org() {
         .unwrap();
     assert_eq!(edit.status(), StatusCode::OK);
     assert!(
-        o.metric("tokenlens_decisions_total{path=\"proxy\",decision=\"allowed_degraded\"}")
+        o.metric("tokenrein_decisions_total{path=\"proxy\",decision=\"allowed_degraded\"}")
             .await
             >= 1
     );
     assert!(
-        o.metric("tokenlens_decisions_total{path=\"proxy\",decision=\"unavailable\"}")
+        o.metric("tokenrein_decisions_total{path=\"proxy\",decision=\"unavailable\"}")
             .await
             >= 1
     );
@@ -407,7 +407,7 @@ async fn postgres_outage_refuses_config_edits_but_traffic_keeps_flowing() {
         return;
     };
     let o = Outage::start(&redis.url, Some(&pg.url)).await;
-    let audit_failures_before = o.metric("tokenlens_audit_write_failures_total").await;
+    let audit_failures_before = o.metric("tokenrein_audit_write_failures_total").await;
 
     drop(pg);
 
@@ -432,7 +432,7 @@ async fn postgres_outage_refuses_config_edits_but_traffic_keeps_flowing() {
     for key in [OPEN_KEY, CLOSED_KEY] {
         let resp = o.chat(key).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        assert!(resp.headers().get("x-tl-degraded").is_none());
+        assert!(resp.headers().get("x-tr-degraded").is_none());
     }
     // Run controls still work; their audit entries cannot be written, and that is counted.
     let pause = o
@@ -443,5 +443,5 @@ async fn postgres_outage_refuses_config_edits_but_traffic_keeps_flowing() {
         .await
         .unwrap();
     assert_eq!(pause.status(), StatusCode::OK);
-    assert!(o.metric("tokenlens_audit_write_failures_total").await > audit_failures_before);
+    assert!(o.metric("tokenrein_audit_write_failures_total").await > audit_failures_before);
 }

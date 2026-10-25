@@ -3,7 +3,7 @@ name: release
 # Push a tag like v0.1.0 to release. The tag must match the versions in proxy/Cargo.toml,
 # sdk/python/pyproject.toml and sdk/typescript/package.json.
 #
-# - The container image always goes to ghcr.io/<owner>/tokenlens (linux/amd64 and linux/arm64).
+# - The container image always goes to ghcr.io/<owner>/tokenrein (linux/amd64 and linux/arm64).
 # - The Python SDK goes to PyPI only if the PYPI_TOKEN secret is set.
 # - The TypeScript SDK goes to npm only if the NPM_TOKEN secret is set.
 
@@ -63,7 +63,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/tokenlens
+          images: ghcr.io/${{ github.repository_owner }}/tokenrein
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -137,7 +137,7 @@ jobs:
             on && /^## \[/ { exit }
             on { print }
           ' CHANGELOG.md > notes.md
-          printf '\nImage: `ghcr.io/%s/tokenlens:%s`\n' "${{ github.repository_owner }}" "$VERSION" >> notes.md
+          printf '\nImage: `ghcr.io/%s/tokenrein:%s`\n' "${{ github.repository_owner }}" "$VERSION" >> notes.md
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |

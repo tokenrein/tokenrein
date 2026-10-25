@@ -408,7 +408,7 @@ impl Ledger {
     }
 
     /// Would a call costing up to `estimate` be allowed right now? Reserves nothing; used where
-    /// TokenLens is not in the request path (agent hooks, SDK direct mode). With `estimate` 0 it
+    /// Tokenrein is not in the request path (agent hooks, SDK direct mode). With `estimate` 0 it
     /// asks whether a budget is already used up.
     pub async fn check(
         &self,

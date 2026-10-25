@@ -1,4 +1,4 @@
-# TokenLens with Redis (budget ledger) and Postgres 17 (config history, audit log).
+# Tokenrein with Redis (budget ledger) and Postgres 17 (config history, audit log).
 #
 #   cd deploy
 #   cp .env.example .env        # then fill in the secrets
@@ -7,11 +7,11 @@
 # Agents call the proxy on :8787; the dashboard and admin API are on 127.0.0.1:8788.
 # See docs/install.md.
 
-name: tokenlens
+name: tokenrein
 
 services:
-  tokenlens:
-    image: ${TOKENLENS_IMAGE:-ghcr.io/geektuhin123/tokenlens:latest}
+  tokenrein:
+    image: ${TOKENREIN_IMAGE:-ghcr.io/geektuhin123/tokenrein:latest}
     build:
       context: ..
       dockerfile: Dockerfile
@@ -21,21 +21,21 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-    # TL_ADMIN_TOKEN, TL_SECRETS_KEY, TL_DATABASE_URL (and optional provider keys).
+    # TOKENREIN_ADMIN_TOKEN, TOKENREIN_SECRETS_KEY, TOKENREIN_DATABASE_URL (and optional provider keys).
     env_file: .env
     environment:
-      TL_REDIS_URL: redis://redis:6379
+      TOKENREIN_REDIS_URL: redis://redis:6379
       RUST_LOG: ${RUST_LOG:-info}
     ports:
-      - "${TL_PROXY_PORT:-8787}:8787"
+      - "${TOKENREIN_PROXY_PORT:-8787}:8787"
       # The admin listener carries the dashboard and admin API: keep it off public interfaces.
-      - "127.0.0.1:${TL_ADMIN_PORT:-8788}:8788"
+      - "127.0.0.1:${TOKENREIN_ADMIN_PORT:-8788}:8788"
     healthcheck:
       # The image has no shell or curl; the binary probes itself. Both listeners must answer,
       # and /readyz needs Redis and Postgres.
       test:
         - CMD
-        - /usr/local/bin/tokenlens-proxy
+        - /usr/local/bin/tokenrein
         - probe
         - http://127.0.0.1:8787/healthz
         - http://127.0.0.1:8788/readyz
@@ -64,13 +64,13 @@ services:
     image: docker.io/library/postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: tokenlens
-      POSTGRES_DB: tokenlens
+      POSTGRES_USER: tokenrein
+      POSTGRES_DB: tokenrein
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U tokenlens -d tokenlens"]
+      test: ["CMD-SHELL", "pg_isready -U tokenrein -d tokenrein"]
       interval: 5s
       timeout: 3s
       retries: 10

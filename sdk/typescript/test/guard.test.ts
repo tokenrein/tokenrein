@@ -8,7 +8,7 @@ import {
   RunKilled,
   RunPaused,
   RunStopped,
-  TokenLensError,
+  TokenreinError,
   currentRun,
   guard,
 } from '../src/index.js';
@@ -24,11 +24,13 @@ afterAll(async () => {
   await proxy.close();
 });
 beforeEach(() => {
+  // Names used before the rename are still read; keep a developer's own settings out of the tests.
+  for (const n of ['API_KEY', 'BASE_URL', 'MODE']) delete process.env[`TOKENLENS_${n}`]; // pre-rename names
   proxy.reset();
-  process.env.TOKENLENS_BASE_URL = proxy.url;
-  process.env.TOKENLENS_API_KEY = 'tl_test_key';
+  process.env.TOKENREIN_BASE_URL = proxy.url;
+  process.env.TOKENREIN_API_KEY = 'tl_test_key';
   // These tests exercise proxy mode; direct mode has its own tests.
-  process.env.TOKENLENS_MODE = 'proxy';
+  process.env.TOKENREIN_MODE = 'proxy';
 });
 
 const openaiClient = (opts: guard.GuardOptions = {}) =>
@@ -56,10 +58,10 @@ describe('configuration', () => {
     const { path, headers } = proxy.last();
     expect(path).toBe('/v1/chat/completions');
     expect(headers.authorization).toBe('Bearer tl_test_key');
-    expect(headers['x-tl-agent']).toBe('support-bot');
+    expect(headers['x-tr-agent']).toBe('support-bot');
     // Outside a run: no run headers, the proxy makes one run per request.
-    expect(headers['x-tl-run-id']).toBeUndefined();
-    expect(headers['x-tl-parent-run-id']).toBeUndefined();
+    expect(headers['x-tr-run-id']).toBeUndefined();
+    expect(headers['x-tr-parent-run-id']).toBeUndefined();
   });
 
   it('points Anthropic at the proxy and drops a provider bearer token', async () => {
@@ -70,20 +72,27 @@ describe('configuration', () => {
     expect(path).toBe('/v1/messages');
     expect(headers['x-api-key']).toBe('tl_test_key');
     expect(headers.authorization).toBeUndefined();
-    expect(headers['x-tl-agent']).toBe('writer');
+    expect(headers['x-tr-agent']).toBe('writer');
   });
 
   it('explicit options override env, and a /v1 base URL is accepted', async () => {
-    process.env.TOKENLENS_BASE_URL = 'http://127.0.0.1:1'; // would fail if used
+    process.env.TOKENREIN_BASE_URL = 'http://127.0.0.1:1'; // would fail if used
     const c = guard.openai(new OpenAI({ apiKey: 'x' }), { apiKey: 'tl_arg_key', baseURL: `${proxy.url}/v1/` });
     await chat(c);
     expect(proxy.last().path).toBe('/v1/chat/completions');
     expect(proxy.last().headers.authorization).toBe('Bearer tl_arg_key');
   });
 
+  it('still reads variables named before the rename', async () => {
+    delete process.env.TOKENREIN_API_KEY;
+    process.env.TOKENLENS_API_KEY = 'tl_old_name_key'; // pre-rename name
+    await chat(guard.openai(new OpenAI({ apiKey: 'x' })));
+    expect(proxy.requests.at(-1)!.headers.authorization).toBe('Bearer tl_old_name_key');
+  });
+
   it('fails clearly without a key or with bad ids', () => {
-    delete process.env.TOKENLENS_API_KEY;
-    expect(() => guard.openai(new OpenAI({ apiKey: 'x' }))).toThrow(/TOKENLENS_API_KEY/);
+    delete process.env.TOKENREIN_API_KEY;
+    expect(() => guard.openai(new OpenAI({ apiKey: 'x' }))).toThrow(/TOKENREIN_API_KEY/);
     expect(() => guard.openai(new OpenAI({ apiKey: 'x' }), { apiKey: 'tl', agent: 'bad/agent' })).toThrow(TypeError);
     expect(() => guard.openai({} as OpenAI, { apiKey: 'tl' })).toThrow(/client instance/);
     expect(() => guard.run('has space', () => 0)).toThrow(TypeError);
@@ -100,8 +109,8 @@ describe('configuration', () => {
     // withOptions exists on openai >= 5; older clients are just reused.
     const copy = typeof c.withOptions === 'function' ? c.withOptions({ timeout: 5000 }) : c;
     await guard.run('r1', () => chat(copy));
-    expect(proxy.last().headers['x-tl-agent']).toBe('bot');
-    expect(proxy.last().headers['x-tl-run-id']).toBe('r1');
+    expect(proxy.last().headers['x-tr-agent']).toBe('bot');
+    expect(proxy.last().headers['x-tr-run-id']).toBe('r1');
   });
 });
 
@@ -116,10 +125,10 @@ describe('run headers', () => {
     expect(out).toBe(42);
     expect(currentRun()).toBeUndefined();
     const h = proxy.last().headers;
-    expect(h['x-tl-run-id']).toBe('ticket-4812');
-    expect(Number(h['x-tl-run-budget-usd'])).toBe(5);
-    expect(h['x-tl-agent']).toBe('bot');
-    expect(h['x-tl-parent-run-id']).toBeUndefined();
+    expect(h['x-tr-run-id']).toBe('ticket-4812');
+    expect(Number(h['x-tr-run-budget-usd'])).toBe(5);
+    expect(h['x-tr-agent']).toBe('bot');
+    expect(h['x-tr-parent-run-id']).toBeUndefined();
   });
 
   it('generates a valid run id that is stable within the run', async () => {
@@ -130,7 +139,7 @@ describe('run headers', () => {
       return run.runId;
     });
     expect(id).toMatch(/^run_[0-9a-f]{32}$/);
-    expect(new Set(proxy.requests.map((r) => r.headers['x-tl-run-id']))).toEqual(new Set([id]));
+    expect(new Set(proxy.requests.map((r) => r.headers['x-tr-run-id']))).toEqual(new Set([id]));
   });
 
   it('nested runs form a tree', async () => {
@@ -148,10 +157,10 @@ describe('run headers', () => {
       await chat(c); // back in root after the child finishes
     });
     const h = proxy.requests.map((r) => r.headers);
-    expect(h.map((x) => x['x-tl-run-id'])).toEqual(['root', 'child', grandchild, 'root']);
-    expect(h.map((x) => x['x-tl-parent-run-id'])).toEqual([undefined, 'root', 'child', undefined]);
+    expect(h.map((x) => x['x-tr-run-id'])).toEqual(['root', 'child', grandchild, 'root']);
+    expect(h.map((x) => x['x-tr-parent-run-id'])).toEqual([undefined, 'root', 'child', undefined]);
     // Budgets belong to their own run only.
-    expect(h.map((x) => x['x-tl-run-budget-usd'])).toEqual(['10', '2', undefined, '10']);
+    expect(h.map((x) => x['x-tr-run-budget-usd'])).toEqual(['10', '2', undefined, '10']);
   });
 
   it('run agent applies only when the client has none', async () => {
@@ -162,7 +171,7 @@ describe('run headers', () => {
       await chat(unnamed);
       await guard.run('child', () => chat(unnamed));
     });
-    expect(proxy.requests.map((r) => r.headers['x-tl-agent'])).toEqual(['client-agent', 'run-agent', undefined]);
+    expect(proxy.requests.map((r) => r.headers['x-tr-agent'])).toEqual(['client-agent', 'run-agent', undefined]);
   });
 
   it('sends the user from the client or the run, inherited by child runs', async () => {
@@ -174,15 +183,15 @@ describe('run headers', () => {
       await guard.run('u2', () => chat(unnamed));
     });
     await chat(unnamed);
-    expect(proxy.requests.map((r) => r.headers['x-tl-user'])).toEqual(['alice', 'bob', 'bob', undefined]);
+    expect(proxy.requests.map((r) => r.headers['x-tr-user'])).toEqual(['alice', 'bob', 'bob', undefined]);
     expect(() => guard.run({ user: 'not valid' }, () => 0)).toThrow(TypeError);
   });
 
   it('explicit request headers win', async () => {
     const c = openaiClient({ agent: 'bot' });
-    await guard.run('r', () => chat(c, {}, { 'x-tl-run-id': 'manual', 'x-tl-agent': 'manual-agent' }));
-    expect(proxy.last().headers['x-tl-run-id']).toBe('manual');
-    expect(proxy.last().headers['x-tl-agent']).toBe('manual-agent');
+    await guard.run('r', () => chat(c, {}, { 'x-tr-run-id': 'manual', 'x-tr-agent': 'manual-agent' }));
+    expect(proxy.last().headers['x-tr-run-id']).toBe('manual');
+    expect(proxy.last().headers['x-tr-agent']).toBe('manual-agent');
   });
 
   it('a run cannot be its own parent', () => {
@@ -213,13 +222,13 @@ describe('run headers', () => {
       const [task, step] = tag.split('/');
       const i = Number(task!.split('-')[1]);
       if (tag.endsWith('/sub')) {
-        expect(h['x-tl-run-id']).toBe(`${task}-sub-${step}`);
-        expect(h['x-tl-parent-run-id']).toBe(task);
-        expect(h['x-tl-run-budget-usd']).toBeUndefined();
+        expect(h['x-tr-run-id']).toBe(`${task}-sub-${step}`);
+        expect(h['x-tr-parent-run-id']).toBe(task);
+        expect(h['x-tr-run-budget-usd']).toBeUndefined();
       } else {
-        expect(h['x-tl-run-id']).toBe(task);
-        expect(h['x-tl-parent-run-id']).toBeUndefined();
-        expect(Number(h['x-tl-run-budget-usd'])).toBe(i + 1);
+        expect(h['x-tr-run-id']).toBe(task);
+        expect(h['x-tr-parent-run-id']).toBeUndefined();
+        expect(Number(h['x-tr-run-budget-usd'])).toBe(i + 1);
       }
     }
     expect(currentRun()).toBeUndefined();
@@ -228,24 +237,24 @@ describe('run headers', () => {
 
 describe('error mapping', () => {
   it('402 OpenAI shape -> BudgetExceeded, still an OpenAI.APIError, not retried', async () => {
-    proxy.error = { status: 402, type: 'tokenlens_budget_exceeded', message: 'TokenLens budget exceeded for run r1' };
+    proxy.error = { status: 402, type: 'tokenrein_budget_exceeded', message: 'Tokenrein budget exceeded for run r1' };
     const c = openaiClient();
     const e = await guard.run('r1', () => caught(chat(c)));
     expect(e).toBeInstanceOf(BudgetExceeded);
-    expect(e).toBeInstanceOf(TokenLensError);
+    expect(e).toBeInstanceOf(TokenreinError);
     expect(e).toBeInstanceOf(OpenAI.APIError);
     expect(e).not.toBeInstanceOf(RunStopped);
     expect(e.runId).toBe('r1');
     expect(e.status).toBe(402);
-    expect(e.errorType).toBe('tokenlens_budget_exceeded');
-    expect(e.message).toBe('TokenLens budget exceeded for run r1');
+    expect(e.errorType).toBe('tokenrein_budget_exceeded');
+    expect(e.message).toBe('Tokenrein budget exceeded for run r1');
     expect(e.name).toBe('BudgetExceeded');
-    expect(String(e.stack)).toMatch(/^BudgetExceeded: TokenLens budget exceeded/);
+    expect(String(e.stack)).toMatch(/^BudgetExceeded: Tokenrein budget exceeded/);
     expect(proxy.requests).toHaveLength(1);
   });
 
   it('402 Anthropic shape -> BudgetExceeded', async () => {
-    proxy.error = { status: 402, type: 'tokenlens_budget_exceeded', message: 'over budget' };
+    proxy.error = { status: 402, type: 'tokenrein_budget_exceeded', message: 'over budget' };
     const c = anthropicClient();
     const e = await guard.run('r2', () => caught(message(c)));
     expect(e).toBeInstanceOf(BudgetExceeded);
@@ -260,7 +269,7 @@ describe('error mapping', () => {
   ] as const) {
     it(`403 paused and killed (${label})`, async () => {
       const c = make() as any;
-      proxy.error = { status: 403, type: 'tokenlens_run_paused', message: 'TokenLens: run r3 is paused' };
+      proxy.error = { status: 403, type: 'tokenrein_run_paused', message: 'Tokenrein: run r3 is paused' };
       const paused = await guard.run('r3', () => caught((call as any)(c)));
       expect(paused).toBeInstanceOf(RunPaused);
       expect(paused).toBeInstanceOf(RunStopped);
@@ -268,18 +277,18 @@ describe('error mapping', () => {
       expect(paused).toBeInstanceOf(Sdk.PermissionDeniedError);
       expect(paused.runId).toBe('r3');
       expect(paused.status).toBe(403);
-      expect(paused.message).toBe('TokenLens: run r3 is paused');
+      expect(paused.message).toBe('Tokenrein: run r3 is paused');
 
-      proxy.error = { status: 403, type: 'tokenlens_run_killed', message: 'TokenLens: run r3 is killed' };
+      proxy.error = { status: 403, type: 'tokenrein_run_killed', message: 'Tokenrein: run r3 is killed' };
       const killed = await guard.run('r3', () => caught((call as any)(c)));
       expect(killed).toBeInstanceOf(RunKilled);
       expect(killed).not.toBeInstanceOf(RunPaused);
-      expect(killed.errorType).toBe('tokenlens_run_killed');
+      expect(killed.errorType).toBe('tokenrein_run_killed');
     });
   }
 
   it('falls back to the proxy-generated run id', async () => {
-    proxy.error = { status: 402, type: 'tokenlens_budget_exceeded', message: 'over' };
+    proxy.error = { status: 402, type: 'tokenrein_budget_exceeded', message: 'over' };
     const e = await caught(chat(openaiClient()));
     expect(e).toBeInstanceOf(BudgetExceeded);
     expect(e.runId).toBe('req_generated');
@@ -289,15 +298,15 @@ describe('error mapping', () => {
     proxy.error = { status: 403, type: 'permission_error', message: 'nope' };
     const e = await caught(chat(openaiClient()));
     expect(e).toBeInstanceOf(OpenAI.PermissionDeniedError);
-    expect(e).not.toBeInstanceOf(TokenLensError);
+    expect(e).not.toBeInstanceOf(TokenreinError);
     proxy.error = { status: 402, type: 'billing', message: 'pay up' };
     const e2 = await caught(message(anthropicClient()));
     expect(e2).toBeInstanceOf(Anthropic.APIError);
-    expect(e2).not.toBeInstanceOf(TokenLensError);
+    expect(e2).not.toBeInstanceOf(TokenreinError);
   });
 
   it('streaming calls throw the mapped error', async () => {
-    proxy.error = { status: 402, type: 'tokenlens_budget_exceeded', message: 'over' };
+    proxy.error = { status: 402, type: 'tokenrein_budget_exceeded', message: 'over' };
     const c = openaiClient();
     const e = await caught(c.chat.completions.create({ model: 'gpt-4o-mini', messages: MSG, stream: true }));
     expect(e).toBeInstanceOf(BudgetExceeded);
@@ -356,6 +365,6 @@ describe('re-wrapping', () => {
       await chat(c);
       expect(run.calls).toBe(1);
     });
-    expect(proxy.last().headers['x-tl-agent']).toBe('second');
+    expect(proxy.last().headers['x-tr-agent']).toBe('second');
   });
 });

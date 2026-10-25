@@ -1,4 +1,4 @@
-// TokenLens dashboard: Activity page.
+// Tokenrein dashboard: Activity page.
 "use strict";
 
 function renderEvents() {

@@ -5,7 +5,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// A throwaway redis-server on a free port, killed on drop. Returns None (skip) when redis-server is
-/// not installed, unless TL_REQUIRE_REDIS is set (CI), in which case it panics.
+/// not installed, unless TOKENREIN_REQUIRE_REDIS is set (CI), in which case it panics.
 pub struct RedisServer {
     child: Child,
     pub url: String,
@@ -34,8 +34,8 @@ impl RedisServer {
             .spawn();
         let mut child = match spawned {
             Ok(c) => c,
-            Err(_) if std::env::var_os("TL_REQUIRE_REDIS").is_some() => {
-                panic!("redis-server is not installed but TL_REQUIRE_REDIS is set")
+            Err(_) if std::env::var_os("TOKENREIN_REQUIRE_REDIS").is_some() => {
+                panic!("redis-server is not installed but TOKENREIN_REQUIRE_REDIS is set")
             }
             Err(_) => {
                 eprintln!("skipping: redis-server not found on PATH");
@@ -65,8 +65,8 @@ impl Drop for RedisServer {
 }
 
 /// A throwaway Postgres cluster (initdb + postgres) on a free port, deleted on drop. Binaries come
-/// from TL_PG_BIN, PATH, or the usual Homebrew / Debian locations. Returns None (skip) when they
-/// are not installed, unless TL_REQUIRE_POSTGRES is set (CI), in which case it panics.
+/// from TOKENREIN_PG_BIN, PATH, or the usual Homebrew / Debian locations. Returns None (skip) when they
+/// are not installed, unless TOKENREIN_REQUIRE_POSTGRES is set (CI), in which case it panics.
 pub struct PostgresServer {
     child: Child,
     dir: std::path::PathBuf,
@@ -76,7 +76,7 @@ pub struct PostgresServer {
 
 fn pg_bin_dir() -> Option<std::path::PathBuf> {
     let has_initdb = |d: &std::path::Path| d.join("initdb").is_file();
-    if let Some(d) = std::env::var_os("TL_PG_BIN") {
+    if let Some(d) = std::env::var_os("TOKENREIN_PG_BIN") {
         return Some(d.into());
     }
     if let Some(path) = std::env::var_os("PATH")
@@ -103,8 +103,10 @@ fn pg_bin_dir() -> Option<std::path::PathBuf> {
 impl PostgresServer {
     pub fn start() -> Option<Self> {
         let Some(bin) = pg_bin_dir() else {
-            if std::env::var_os("TL_REQUIRE_POSTGRES").is_some() {
-                panic!("Postgres binaries (initdb) not found but TL_REQUIRE_POSTGRES is set");
+            if std::env::var_os("TOKENREIN_REQUIRE_POSTGRES").is_some() {
+                panic!(
+                    "Postgres binaries (initdb) not found but TOKENREIN_REQUIRE_POSTGRES is set"
+                );
             }
             eprintln!("skipping: Postgres (initdb) not found");
             return None;

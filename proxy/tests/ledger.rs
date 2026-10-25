@@ -2,8 +2,8 @@ mod common;
 
 use std::sync::Arc;
 
-use tokenlens_proxy::config::Mode;
-use tokenlens_proxy::ledger::{Keys, Ledger, LimitSpec, Reservation, Scope, Settlement, unix_now};
+use tokenrein::config::Mode;
+use tokenrein::ledger::{Keys, Ledger, LimitSpec, Reservation, Scope, Settlement, unix_now};
 
 async fn ledger() -> Option<(common::RedisServer, Ledger)> {
     let server = common::RedisServer::start()?;

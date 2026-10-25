@@ -77,7 +77,7 @@ fn db(st: &AppState) -> Result<&sqlx::PgPool, Response> {
     st.db.as_ref().map(|d| d.pool()).ok_or_else(|| {
         err(
             StatusCode::CONFLICT,
-            "people and sign-in need a database: set TL_DATABASE_URL on the proxy",
+            "people and sign-in need a database: set TOKENREIN_DATABASE_URL on the proxy",
         )
     })
 }

@@ -1,13 +1,13 @@
 /**
- * Direct mode: the wrapped client calls its provider itself; TokenLens gets usage only.
+ * Direct mode: the wrapped client calls its provider itself; Tokenrein gets usage only.
  *
- * Before each call the SDK asks TokenLens whether the run may continue (`POST /v1/check`);
+ * Before each call the SDK asks Tokenrein whether the run may continue (`POST /v1/check`);
  * after each response it reads the token usage (also from streams) and reports it in the
  * background (`POST /v1/usage`). Prompts and responses never leave the process. Problems
- * reaching TokenLens never break a call: checks fail open and reports are dropped after retries.
+ * reaching Tokenrein never break a call: checks fail open and reports are dropped after retries.
  */
 
-import { BUDGET_EXCEEDED, BudgetExceeded, RUN_KILLED, RUN_PAUSED, RunKilled, RunPaused, TokenLensError } from './errors.js';
+import { BUDGET_EXCEEDED, BudgetExceeded, RUN_KILLED, RUN_PAUSED, RunKilled, RunPaused, TokenreinError } from './errors.js';
 
 const HOST_PROVIDERS: Record<string, string> = {
   'api.openai.com': 'openai',
@@ -128,7 +128,7 @@ export interface Verdict {
   run_id?: string;
 }
 
-/** Talks to TokenLens: budget checks and batched usage reports. */
+/** Talks to Tokenrein: budget checks and batched usage reports. */
 export class Reporter {
   /** Enforced limits that recent reports said are used up: label -> time noted. */
   readonly over = new Map<string, number>();
@@ -151,7 +151,7 @@ export class Reporter {
     });
   }
 
-  /** Fails open when TokenLens can't be reached. */
+  /** Fails open when Tokenrein can't be reached. */
   async check(body: Record<string, unknown>): Promise<Verdict | undefined> {
     let res: Response;
     try {
@@ -160,7 +160,7 @@ export class Reporter {
       return undefined;
     }
     if (res.status === 401) {
-      throw new TokenLensError('TokenLens rejected the API key (TOKENLENS_API_KEY)', { errorType: 'tokenlens_unauthorized', status: 401 });
+      throw new TokenreinError('Tokenrein rejected the API key (TOKENREIN_API_KEY)', { errorType: 'tokenrein_unauthorized', status: 401 });
     }
     if (!res.ok) return undefined;
     try {
@@ -231,8 +231,8 @@ export async function flush(): Promise<void> {
   await Promise.all([...reporters.values()].map((r) => r.flush()));
 }
 
-export function verdictError(v: Verdict, runId: string | undefined): TokenLensError {
-  const message = v.reason ?? 'TokenLens refused the call';
+export function verdictError(v: Verdict, runId: string | undefined): TokenreinError {
+  const message = v.reason ?? 'Tokenrein refused the call';
   const id = v.run_id ?? runId;
   if (v.run_state === 'killed') return new RunKilled(message, { runId: id, errorType: RUN_KILLED });
   if (v.run_state === 'paused') return new RunPaused(message, { runId: id, errorType: RUN_PAUSED });

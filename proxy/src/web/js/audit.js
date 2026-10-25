@@ -1,4 +1,4 @@
-// TokenLens dashboard: Audit log page.
+// Tokenrein dashboard: Audit log page.
 "use strict";
 
 const AUDIT_ACTIONS = {
@@ -62,7 +62,7 @@ function renderAudit() {
       <div class="mono" style="word-break:break-all;margin-top:4px">${esc(e.target || "–")}</div>
       <div class="muted">${e.org ? `org ${esc(e.org)}` : "all orgs"}</div></td>
     <td style="min-width:240px">${auditChanges(e)}</td></tr>`).join("");
-  const note = a.durable ? "" : `<div class="alert">This proxy has no database, so it keeps only the last 10,000 entries (in Redis). Set <span class="mono">TL_DATABASE_URL</span> to a Postgres database to keep the full history.</div>`;
+  const note = a.durable ? "" : `<div class="alert">This proxy has no database, so it keeps only the last 10,000 entries (in Redis). Set <span class="mono">TOKENREIN_DATABASE_URL</span> to a Postgres database to keep the full history.</div>`;
   el.innerHTML = `${note}<div class="card">
     <div class="card-h">
       <input type="search" data-audit-q placeholder="Filter by person, action or target" aria-label="Filter audit log" value="${esc(S.auditQuery)}" style="min-width:240px">
@@ -108,7 +108,7 @@ document.addEventListener("click", async e => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const url = URL.createObjectURL(await res.blob());
       const a = document.createElement("a");
-      a.href = url; a.download = `tokenlens-audit-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.href = url; a.download = `tokenrein-audit-${new Date().toISOString().slice(0, 10)}.csv`;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (err) { toast("Download failed: " + err.message, true); }

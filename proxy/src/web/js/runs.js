@@ -1,4 +1,4 @@
-// TokenLens dashboard: Runs, Agents and the single-run page.
+// Tokenrein dashboard: Runs, Agents and the single-run page.
 "use strict";
 
 function runTable(runs, flat) {

@@ -3,7 +3,7 @@ requires = ["hatchling>=1.18"]
 build-backend = "hatchling.build"
 
 [project]
-name = "tokenlens"
+name = "tokenrein"
 version = "0.1.0"
 description = "Budgets, run tracing and spend reports for AI agents: wrap your OpenAI or Anthropic client in one line"
 readme = "README.md"
@@ -23,7 +23,7 @@ anthropic = ["anthropic>=0.30"]
 test = ["openai>=1.0", "anthropic>=0.30", "pytest>=8", "pytest-asyncio>=0.23"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/tokenlens"]
+packages = ["src/tokenrein"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -82,7 +82,7 @@ pub struct ServerConfig {
     pub admin_token_env: String,
     /// Env var holding the 32-byte hex key that encrypts provider API keys saved from the dashboard.
     /// During a key rotation, `<this>_PREVIOUS` holds the old key: saved keys are still opened
-    /// with it until `tokenlens-proxy rotate-secrets-key` re-encrypts them.
+    /// with it until `tokenrein rotate-secrets-key` re-encrypts them.
     #[serde(default = "default_secrets_key_env")]
     pub secrets_key_env: String,
     #[serde(default = "default_upstream_timeout")]
@@ -100,10 +100,10 @@ fn default_admin_listen() -> String {
     "127.0.0.1:8788".into()
 }
 fn default_admin_token_env() -> String {
-    "TL_ADMIN_TOKEN".into()
+    "TOKENREIN_ADMIN_TOKEN".into()
 }
 fn default_secrets_key_env() -> String {
-    "TL_SECRETS_KEY".into()
+    "TOKENREIN_SECRETS_KEY".into()
 }
 fn default_upstream_timeout() -> u64 {
     600
@@ -156,7 +156,7 @@ impl Default for DatabaseConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AuthConfig {
-    /// The dashboard's address as people reach it (`https://tokenlens.example.com`). Needed for
+    /// The dashboard's address as people reach it (`https://tokenrein.example.com`). Needed for
     /// single sign-on (the identity provider sends people back here) and full setup links;
     /// `https://` also marks session cookies Secure.
     #[serde(default)]
@@ -194,7 +194,7 @@ fn default_true() -> bool {
 }
 
 fn default_database_url_env() -> String {
-    "TL_DATABASE_URL".into()
+    "TOKENREIN_DATABASE_URL".into()
 }
 fn default_database_max_connections() -> u32 {
     10
@@ -348,26 +348,31 @@ pub struct Config {
 
 /// Settings a container can set from the environment instead of editing the config file.
 pub const ENV_OVERRIDES: &[(&str, &str)] = &[
-    ("TL_LISTEN", "server.listen"),
-    ("TL_ADMIN_LISTEN", "server.admin_listen"),
-    ("TL_REDIS_URL", "redis.url"),
-    ("TL_DATABASE_MAX_CONNECTIONS", "database.max_connections"),
+    ("TOKENREIN_LISTEN", "server.listen"),
+    ("TOKENREIN_ADMIN_LISTEN", "server.admin_listen"),
+    ("TOKENREIN_REDIS_URL", "redis.url"),
+    (
+        "TOKENREIN_DATABASE_MAX_CONNECTIONS",
+        "database.max_connections",
+    ),
 ];
 
 impl Config {
     /// Applies [`ENV_OVERRIDES`]; unset or empty variables leave the file's value.
     fn apply_env_overrides(&mut self, env: &dyn Fn(&str) -> Option<String>) {
         let get = |name: &str| env(name).filter(|v| !v.trim().is_empty());
-        if let Some(v) = get("TL_LISTEN") {
+        if let Some(v) = get("TOKENREIN_LISTEN") {
             self.server.listen = v;
         }
-        if let Some(v) = get("TL_ADMIN_LISTEN") {
+        if let Some(v) = get("TOKENREIN_ADMIN_LISTEN") {
             self.server.admin_listen = v;
         }
-        if let Some(v) = get("TL_REDIS_URL") {
+        if let Some(v) = get("TOKENREIN_REDIS_URL") {
             self.redis.url = v;
         }
-        if let Some(n) = get("TL_DATABASE_MAX_CONNECTIONS").and_then(|v| v.trim().parse().ok()) {
+        if let Some(n) =
+            get("TOKENREIN_DATABASE_MAX_CONNECTIONS").and_then(|v| v.trim().parse().ok())
+        {
             self.database.max_connections = n;
         }
     }
@@ -379,7 +384,21 @@ pub type EnvFn = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 /// The process environment, where any variable `NAME` can instead be given as `NAME_FILE`: the
 /// path of a file holding the value (Docker and Kubernetes secrets). `NAME` wins if both are set.
 pub fn process_env(name: &str) -> Option<String> {
-    env_or_file(name, |n| std::env::var(n).ok())
+    env_or_file(name, |n| std::env::var(n).ok()).or_else(|| legacy_env(name))
+}
+
+/// Before the product was renamed, server variables started with `TL_` (e.g. `TL_ADMIN_TOKEN`).
+/// They are still read, with a warning, until v1.1.
+fn legacy_env(name: &str) -> Option<String> {
+    static WARNED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    let old = format!("TL_{}", name.strip_prefix("TOKENREIN_")?);
+    let value = env_or_file(&old, |n| std::env::var(n).ok())?;
+    let mut warned = WARNED.lock().unwrap_or_else(|e| e.into_inner());
+    if !warned.contains(&old) {
+        tracing::warn!(old = %old, new = %name, "deprecated environment variable; rename it before v1.1");
+        warned.push(old);
+    }
+    Some(value)
 }
 
 fn env_or_file(name: &str, var: impl Fn(&str) -> Option<String>) -> Option<String> {
@@ -688,7 +707,7 @@ pub fn sha256_hex(s: &str) -> String {
 
 pub fn generate_virtual_key() -> (String, String) {
     let key = format!(
-        "tl_{}{}",
+        "tr_{}{}",
         uuid::Uuid::new_v4().simple(),
         uuid::Uuid::new_v4().simple()
     );
@@ -723,7 +742,7 @@ mod tests {
         agent_daily = { limit_usd = 10.0 }
         [[orgs.projects]]
         id = "bot"
-        virtual_key_hashes = ["EFECD1D2D2C5A6C4F93F91CE03F782928BD1301C1A243EF8894FA84E868B285E"]
+        virtual_key_hashes = ["9CBE3BABAAD4BEB8958EB61B5459917880673DC29DEC664C1B40D6A689B2B55A"]
         [orgs.projects.budgets]
         run = { limit_usd = 0.5, mode = "check" }
     "#;
@@ -731,7 +750,7 @@ mod tests {
     #[test]
     fn loads_and_indexes_keys() {
         let rt = Resolved::from_toml(BASE, env).unwrap();
-        let hash = sha256_hex("tl_dev_support_bot_key_change_me");
+        let hash = sha256_hex("tr_dev_support_bot_key_change_me");
         assert_eq!(rt.keys.get(&hash), Some(&(0, 0)));
         assert_eq!(
             rt.upstream_base(Provider::OpenAI),
@@ -767,7 +786,7 @@ mod tests {
         const SK: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
         let with_secret = |name: &str| match name {
             "OPENAI_API_KEY" => Some("sk-env".to_string()),
-            "TL_SECRETS_KEY" => Some(SK.to_string()),
+            "TOKENREIN_SECRETS_KEY" => Some(SK.to_string()),
             _ => None,
         };
         let rt = Resolved::from_toml(BASE, with_secret).unwrap();
@@ -800,7 +819,12 @@ mod tests {
         assert_eq!(no_secret.provider_key(0, Provider::OpenAI), Some("sk-test"));
         let st = no_secret.provider_status(0, Provider::OpenAI).unwrap();
         assert_eq!(st.source, Some("environment"));
-        assert!(st.error.as_deref().unwrap().contains("TL_SECRETS_KEY"));
+        assert!(
+            st.error
+                .as_deref()
+                .unwrap()
+                .contains("TOKENREIN_SECRETS_KEY")
+        );
     }
 
     #[test]
@@ -814,10 +838,10 @@ mod tests {
     #[test]
     fn env_overrides_server_and_redis_settings() {
         let rt = Resolved::from_toml(BASE, |name| match name {
-            "TL_LISTEN" => Some("0.0.0.0:8787".into()),
-            "TL_ADMIN_LISTEN" => Some("0.0.0.0:8788".into()),
-            "TL_REDIS_URL" => Some("redis://redis:6379/2".into()),
-            "TL_DATABASE_MAX_CONNECTIONS" => Some("25".into()),
+            "TOKENREIN_LISTEN" => Some("0.0.0.0:8787".into()),
+            "TOKENREIN_ADMIN_LISTEN" => Some("0.0.0.0:8788".into()),
+            "TOKENREIN_REDIS_URL" => Some("redis://redis:6379/2".into()),
+            "TOKENREIN_DATABASE_MAX_CONNECTIONS" => Some("25".into()),
             _ => None,
         })
         .unwrap();
@@ -826,7 +850,8 @@ mod tests {
         assert_eq!(rt.cfg.redis.url, "redis://redis:6379/2");
         assert_eq!(rt.cfg.database.max_connections, 25);
         // Empty values keep the file's settings.
-        let rt = Resolved::from_toml(BASE, |name| (name == "TL_LISTEN").then(String::new)).unwrap();
+        let rt = Resolved::from_toml(BASE, |name| (name == "TOKENREIN_LISTEN").then(String::new))
+            .unwrap();
         assert_eq!(rt.cfg.server.listen, "127.0.0.1:0");
     }
 
@@ -841,23 +866,23 @@ mod tests {
             let path = path.clone();
             let direct = direct.map(str::to_string);
             move |n: &str| match n {
-                "TL_ADMIN_TOKEN" => direct.clone(),
-                "TL_ADMIN_TOKEN_FILE" => Some(path.clone()),
-                "TL_MISSING_FILE" => Some("/nonexistent/tokenlens".into()),
+                "TOKENREIN_ADMIN_TOKEN" => direct.clone(),
+                "TOKENREIN_ADMIN_TOKEN_FILE" => Some(path.clone()),
+                "TOKENREIN_MISSING_FILE" => Some("/nonexistent/tokenrein".into()),
                 _ => None,
             }
         };
         assert_eq!(
-            env_or_file("TL_ADMIN_TOKEN", vars(None)).as_deref(),
+            env_or_file("TOKENREIN_ADMIN_TOKEN", vars(None)).as_deref(),
             Some("from-the-file")
         );
         // The variable itself wins over the file.
         assert_eq!(
-            env_or_file("TL_ADMIN_TOKEN", vars(Some("direct"))).as_deref(),
+            env_or_file("TOKENREIN_ADMIN_TOKEN", vars(Some("direct"))).as_deref(),
             Some("direct")
         );
-        assert_eq!(env_or_file("TL_MISSING", vars(None)), None);
-        assert_eq!(env_or_file("TL_UNSET", vars(None)), None);
+        assert_eq!(env_or_file("TOKENREIN_MISSING", vars(None)), None);
+        assert_eq!(env_or_file("TOKENREIN_UNSET", vars(None)), None);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -1,15 +1,15 @@
 [package]
-name = "tokenlens-proxy"
+name = "tokenrein"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [lib]
-name = "tokenlens_proxy"
+name = "tokenrein"
 path = "src/lib.rs"
 
 [[bin]]
-name = "tokenlens-proxy"
+name = "tokenrein"
 path = "src/main.rs"
 
 [dependencies]

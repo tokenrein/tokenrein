@@ -1,0 +1,37 @@
+# Default config built into the container image (/etc/tokenrein/tokenrein.toml).
+#
+# Everything a container usually changes can be set from the environment instead of editing
+# this file:
+#   TOKENREIN_LISTEN, TOKENREIN_ADMIN_LISTEN       listen addresses (defaults below)
+#   TOKENREIN_REDIS_URL                     budget ledger, e.g. redis://redis:6379
+#   TOKENREIN_DATABASE_URL                  Postgres for config history and the audit log
+#   TOKENREIN_ADMIN_TOKEN                   admin API / dashboard token (16+ characters)
+#   TOKENREIN_SECRETS_KEY                   64 hex characters; encrypts provider keys saved in the dashboard
+#   OPENAI_API_KEY, ANTHROPIC_API_KEY  optional; keys can also be saved per org in the dashboard
+# Any of them can be read from a file instead: TOKENREIN_ADMIN_TOKEN_FILE=/run/secrets/admin_token.
+#
+# Orgs, projects, virtual keys and budgets are managed from the dashboard and stored in Postgres
+# (or Redis), so none are listed here. To use your own file, mount it and set TOKENREIN_CONFIG.
+
+[server]
+listen = "0.0.0.0:8787"
+admin_listen = "0.0.0.0:8788"
+admin_token_env = "TOKENREIN_ADMIN_TOKEN"
+secrets_key_env = "TOKENREIN_SECRETS_KEY"
+upstream_timeout_secs = 600
+default_max_output_tokens = 4096
+
+[redis]
+url = "redis://127.0.0.1:6379"
+
+[database]
+url_env = "TOKENREIN_DATABASE_URL"
+max_connections = 10
+
+[providers.openai]
+base_url = "https://api.openai.com"
+api_key_env = "OPENAI_API_KEY"
+
+[providers.anthropic]
+base_url = "https://api.anthropic.com"
+api_key_env = "ANTHROPIC_API_KEY"

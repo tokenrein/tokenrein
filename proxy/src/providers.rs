@@ -581,10 +581,10 @@ mod tests {
 
     #[test]
     fn error_bodies_match_provider_shapes() {
-        let o = error_body(Api::OpenAIChat, "tokenlens_budget_exceeded", "x");
-        assert_eq!(o["error"]["type"], "tokenlens_budget_exceeded");
-        let a = error_body(Api::AnthropicMessages, "tokenlens_budget_exceeded", "x");
+        let o = error_body(Api::OpenAIChat, "tokenrein_budget_exceeded", "x");
+        assert_eq!(o["error"]["type"], "tokenrein_budget_exceeded");
+        let a = error_body(Api::AnthropicMessages, "tokenrein_budget_exceeded", "x");
         assert_eq!(a["type"], "error");
-        assert_eq!(a["error"]["type"], "tokenlens_budget_exceeded");
+        assert_eq!(a["error"]["type"], "tokenrein_budget_exceeded");
     }
 }

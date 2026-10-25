@@ -1,9 +1,9 @@
-# Default values for the TokenLens chart. See docs/install.md.
+# Default values for the Tokenrein chart. See docs/install.md.
 
 replicaCount: 2
 
 image:
-  repository: ghcr.io/geektuhin123/tokenlens
+  repository: ghcr.io/geektuhin123/tokenrein
   # Defaults to the chart's appVersion.
   tag: ""
   pullPolicy: IfNotPresent
@@ -12,15 +12,15 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
-# The proxy's TOML config, mounted at /etc/tokenlens/tokenlens.toml. Listen addresses, the Redis
+# The proxy's TOML config, mounted at /etc/tokenrein/tokenrein.toml. Listen addresses, the Redis
 # URL and the secrets below are set by the chart from the environment and override this file.
 # Orgs, projects, keys and budgets are managed in the dashboard and stored in Postgres.
 config: |
   [server]
   listen = "0.0.0.0:8787"
   admin_listen = "0.0.0.0:8788"
-  admin_token_env = "TL_ADMIN_TOKEN"
-  secrets_key_env = "TL_SECRETS_KEY"
+  admin_token_env = "TOKENREIN_ADMIN_TOKEN"
+  secrets_key_env = "TOKENREIN_SECRETS_KEY"
   upstream_timeout_secs = 600
   default_max_output_tokens = 4096
 
@@ -28,7 +28,7 @@ config: |
   url = "redis://127.0.0.1:6379"
 
   [database]
-  url_env = "TL_DATABASE_URL"
+  url_env = "TOKENREIN_DATABASE_URL"
   max_connections = 10
 
   [providers.openai]
@@ -40,19 +40,19 @@ config: |
   api_key_env = "ANTHROPIC_API_KEY"
 
 secrets:
-  # An existing Secret holding TL_ADMIN_TOKEN, TL_SECRETS_KEY and, when a database is used,
-  # TL_DATABASE_URL (plus TL_POSTGRES_PASSWORD for the bundled Postgres, and
-  # TL_SECRETS_KEY_PREVIOUS while rotating). Recommended for production.
+  # An existing Secret holding TOKENREIN_ADMIN_TOKEN, TOKENREIN_SECRETS_KEY and, when a database is used,
+  # TOKENREIN_DATABASE_URL (plus TOKENREIN_POSTGRES_PASSWORD for the bundled Postgres, and
+  # TOKENREIN_SECRETS_KEY_PREVIOUS while rotating). Recommended for production.
   existingSecret: ""
   # Without existingSecret the chart creates the Secret from these values. Empty values are
   # generated on first install and kept on upgrades. The Secret is kept on uninstall: without
-  # TL_SECRETS_KEY, provider keys saved in the dashboard cannot be decrypted.
+  # TOKENREIN_SECRETS_KEY, provider keys saved in the dashboard cannot be decrypted.
   adminToken: ""
   # 64 hex characters (openssl rand -hex 32).
   secretsKey: ""
   # Set during a key rotation; see docs/operations.md.
   previousSecretsKey: ""
-  # With existingSecret and mountAsFiles: set while the Secret holds TL_SECRETS_KEY_PREVIOUS.
+  # With existingSecret and mountAsFiles: set while the Secret holds TOKENREIN_SECRETS_KEY_PREVIOUS.
   rotating: false
   # Mount the Secret as files and pass TL_*_FILE instead of environment variables.
   mountAsFiles: false
@@ -81,7 +81,7 @@ externalRedis:
   url: ""
   # Or take the URL from a Secret (when it holds a password).
   existingSecret: ""
-  existingSecretKey: TL_REDIS_URL
+  existingSecretKey: TOKENREIN_REDIS_URL
 
 # Bundled single-node Postgres 17, for evaluation. In production use a managed Postgres
 # (externalDatabase) with backups.
@@ -99,7 +99,7 @@ postgresql:
     limits: { memory: 1Gi }
 
 externalDatabase:
-  # Use a Postgres you run. Its URL goes in the Secret as TL_DATABASE_URL: either in
+  # Use a Postgres you run. Its URL goes in the Secret as TOKENREIN_DATABASE_URL: either in
   # secrets.existingSecret, or set url here and the chart puts it in the Secret it creates.
   enabled: false
   url: ""

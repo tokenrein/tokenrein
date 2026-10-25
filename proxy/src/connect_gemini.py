@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Connect Gemini CLI on this machine to TokenLens (or disconnect it).
+"""Connect Gemini CLI on this machine to Tokenrein (or disconnect it).
 
 Turns on Gemini CLI's built-in OpenTelemetry export in ~/.gemini/settings.json, so every session
-reports its model calls (model, tokens) to TokenLens, and adds command hooks that stop the next
+reports its model calls (model, tokens) to Tokenrein, and adds command hooks that stop the next
 prompt or tool call when an admin pauses the run or an enforced budget is used up. The hooks run
-~/.tokenlens/hook.py, which this script writes. The settings file is backed up first.
+~/.tokenrein/hook.py, which this script writes. The settings file is backed up first.
 Standard library only.
 
-    python3 gemini.py --key tl_... --url http://127.0.0.1:8787
+    python3 gemini.py --key tr_... --url http://127.0.0.1:8787
     python3 gemini.py --remove
 """
 
-# @tokenlens-common@
+# @tokenrein-common@
 
 TOOL = "gemini"
-HOOK_NAME = "tokenlens-budget"
+HOOK_NAME = "tokenrein-budget"
 HOOK_EVENTS = ["BeforeAgent", "BeforeTool", "SessionEnd"]
 OUR_TELEMETRY = ["enabled", "target", "otlpEndpoint", "otlpProtocol", "otlpHeaders", "logPrompts"]
 OTEL_PATH = "/v1/otel"
@@ -64,10 +64,10 @@ def main():
         changed = strip(settings)
         changed = remove_hook(TOOL) or changed
         if not changed:
-            print("TokenLens is not configured in %s; nothing to do." % path)
+            print("Tokenrein is not configured in %s; nothing to do." % path)
             return 0
         write_json(path, settings)
-        print("Removed TokenLens from %s. New Gemini CLI sessions won't report to it." % path)
+        print("Removed Tokenrein from %s. New Gemini CLI sessions won't report to it." % path)
         return 0
 
     url = validate(p, a)
@@ -78,14 +78,14 @@ def main():
     if foreign and telemetry.get("enabled", True):
         print(
             "Not changed: Gemini CLI already sends its telemetry elsewhere (see \"telemetry\" in %s). "
-            "It exports to one place; remove that setting first if TokenLens should receive it." % path,
+            "It exports to one place; remove that setting first if Tokenrein should receive it." % path,
             file=sys.stderr,
         )
         return 1
     strip(settings)
-    headers = {"Authorization": "Bearer " + a.key, "x-tl-agent": a.agent}
+    headers = {"Authorization": "Bearer " + a.key, "x-tr-agent": a.agent}
     if a.user:
-        headers["x-tl-user"] = a.user
+        headers["x-tr-user"] = a.user
     telemetry = settings.setdefault("telemetry", {})
     telemetry.update(
         {
@@ -106,7 +106,7 @@ def main():
             "type": "command",
             "command": hook_command(TOOL),
             "timeout": 5000,
-            "description": "TokenLens: stop when the run is paused or a budget is used up",
+            "description": "Tokenrein: stop when the run is paused or a budget is used up",
         }
         group = {"hooks": [handler]}
         if event == "BeforeTool":
@@ -114,7 +114,7 @@ def main():
         hooks.setdefault(event, []).append(group)
     write_json(path, settings)
 
-    print("Connected. New Gemini CLI sessions report to TokenLens at %s." % url)
+    print("Connected. New Gemini CLI sessions report to Tokenrein at %s." % url)
     print("Start a new session (or restart Gemini CLI); it shows up as run gemini-<session id>.")
     print("Undo: run this script again with --remove (or restore the backup above).")
     return 0

@@ -1,4 +1,4 @@
-// TokenLens dashboard: sign-in, navigation, data refresh and start-up (loaded last).
+// Tokenrein dashboard: sign-in, navigation, data refresh and start-up (loaded last).
 "use strict";
 
 // --- auth ---
@@ -22,11 +22,11 @@ async function showLogin(message) {
   const tokenOnly = !cfg.sso && !cfg.password_login;
   $("#token-login").classList.toggle("hide", setup || !cfg.admin_token);
   $("#token-login").open = tokenOnly;
-  $("#login-title").textContent = setup ? "Set your password" : "Sign in to TokenLens";
+  $("#login-title").textContent = setup ? "Set your password" : "Sign in to Tokenrein";
   const help = $("#login-help");
   help.classList.toggle("hide", !(cfg.database && cfg.users === 0 && !setup));
   help.innerHTML = cfg.database && cfg.users === 0
-    ? `No accounts yet. Run <span class="mono">tokenlens-proxy create-owner you@company.com</span> on the server for a link to set the first password, or sign in with the admin token and add people under People &amp; access.`
+    ? `No accounts yet. Run <span class="mono">tokenrein create-owner you@company.com</span> on the server for a link to set the first password, or sign in with the admin token and add people under People &amp; access.`
     : "";
   const focus = setup ? "#setup-password" : cfg.password_login ? "#email" : "#token";
   $(focus)?.focus();

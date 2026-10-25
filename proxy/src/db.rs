@@ -1,6 +1,6 @@
 //! Postgres: the system of record for the managed config (every version is kept) and the admin
 //! audit log. Optional: without a database URL both live in Redis, which is fine for trying
-//! TokenLens out but keeps only the current config and the last audit entries.
+//! Tokenrein out but keeps only the current config and the last audit entries.
 //!
 //! Redis stays the hot path either way (budgets, run state, live activity); nothing here runs
 //! per request.

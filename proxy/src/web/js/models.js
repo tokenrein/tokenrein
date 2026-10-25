@@ -1,4 +1,4 @@
-// TokenLens dashboard: Models & prices page.
+// Tokenrein dashboard: Models & prices page.
 "use strict";
 
 // --- Models & prices ---
@@ -7,7 +7,7 @@ function renderModels() {
   const m = S.models;
   const edit = !!S.me?.instance_admin;
   if (!m) { $("#models").innerHTML = '<p class="muted">Loading…</p>'; return; }
-  $("#models-sub").textContent = `Prices TokenLens uses to turn tokens into dollars, per million tokens. Built-in prices were last checked ${m.verified_as_of}; check them against your provider's price page before relying on them for billing.`;
+  $("#models-sub").textContent = `Prices Tokenrein uses to turn tokens into dollars, per million tokens. Built-in prices were last checked ${m.verified_as_of}; check them against your provider's price page before relying on them for billing.`;
   const providers = [...new Set(m.rows.map(r => r.provider))].sort();
   const q = S.modelFilter.toLowerCase();
   const rows = m.rows.filter(r => (!S.modelProvider || r.provider === S.modelProvider) && (!q || r.model.includes(q) || r.provider.includes(q)));

@@ -1,7 +1,7 @@
 //! Encryption for provider API keys saved from the dashboard.
 //!
 //! Keys are sealed with AES-256-GCM under a 32-byte secret from the environment
-//! (`TL_SECRETS_KEY` by default), so a copy of Redis alone does not reveal them. The org and
+//! (`TOKENREIN_SECRETS_KEY` by default), so a copy of Redis alone does not reveal them. The org and
 //! provider are bound in as associated data, so a sealed key cannot be moved to another org.
 
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
@@ -67,13 +67,13 @@ impl SecretBox {
 
 /// The associated data for an org's provider key.
 pub fn context(org: &str, provider: &str) -> String {
-    format!("tokenlens/provider-key/{org}/{provider}")
+    format!("tokenrein/provider-key/{org}/{provider}")
 }
 
 /// The associated data for an org's key to another service (e.g. a Cursor Admin API key), so it
 /// cannot be swapped with a provider key.
 pub fn connector_context(org: &str, service: &str) -> String {
-    format!("tokenlens/connector-key/{org}/{service}")
+    format!("tokenrein/connector-key/{org}/{service}")
 }
 
 #[cfg(test)]

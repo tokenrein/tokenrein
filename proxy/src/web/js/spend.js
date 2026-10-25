@@ -1,4 +1,4 @@
-// TokenLens dashboard: Spend page.
+// Tokenrein dashboard: Spend page.
 "use strict";
 
 // --- Spend ---

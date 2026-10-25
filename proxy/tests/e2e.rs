@@ -10,11 +10,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use serde_json::{Value, json};
-use tokenlens_proxy::config::{Resolved, sha256_hex};
-use tokenlens_proxy::ledger::Keys;
-use tokenlens_proxy::pricing::Catalog;
-use tokenlens_proxy::providers::{Provider, Usage};
-use tokenlens_proxy::{AppState, admin, build_state, proxy};
+use tokenrein::config::{Resolved, sha256_hex};
+use tokenrein::ledger::Keys;
+use tokenrein::pricing::Catalog;
+use tokenrein::providers::{Provider, Usage};
+use tokenrein::{AppState, admin, build_state, proxy};
 
 const KEY: &str = "tl_test_bot_key_0001";
 const SHADOW_KEY: &str = "tl_test_shadow_key_0001";
@@ -185,7 +185,7 @@ impl Harness {
         self.http
             .post(format!("{}/v1/chat/completions", self.proxy))
             .bearer_auth(KEY)
-            .header("x-tl-run-id", run)
+            .header("x-tr-run-id", run)
             .json(&body)
     }
 
@@ -248,8 +248,8 @@ async fn openai_request_is_forwarded_and_actual_cost_is_recorded() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert_eq!(resp.headers()["x-tl-run-id"], "run-a");
-    assert!(resp.headers().contains_key("x-tl-request-id"));
+    assert_eq!(resp.headers()["x-tr-run-id"], "run-a");
+    assert!(resp.headers().contains_key("x-tr-request-id"));
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["choices"][0]["message"]["content"], "Hello");
 
@@ -314,7 +314,7 @@ async fn anthropic_stream_uses_provider_auth_and_settles() {
         .http
         .post(format!("{}/v1/messages", h.proxy))
         .header("x-api-key", KEY)
-        .header("x-tl-run-id", "run-c")
+        .header("x-tr-run-id", "run-c")
         .json(&json!({"model": "claude-haiku-4-5", "max_tokens": 500, "stream": true, "messages": hi()}))
         .send()
         .await
@@ -344,20 +344,20 @@ async fn over_budget_returns_402_in_each_provider_shape_without_calling_upstream
     };
     let resp = h
         .chat("run-b", json!({"model": "gpt-4o-mini", "messages": hi()}))
-        .header("x-tl-run-budget-usd", "0.0001")
+        .header("x-tr-run-budget-usd", "0.0001")
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 402);
     let body: Value = resp.json().await.unwrap();
-    assert_eq!(body["error"]["type"], "tokenlens_budget_exceeded");
+    assert_eq!(body["error"]["type"], "tokenrein_budget_exceeded");
 
     let resp = h
         .http
         .post(format!("{}/v1/messages", h.proxy))
         .header("x-api-key", KEY)
-        .header("x-tl-run-id", "run-b2")
-        .header("x-tl-run-budget-usd", "0.0001")
+        .header("x-tr-run-id", "run-b2")
+        .header("x-tr-run-budget-usd", "0.0001")
         .json(&json!({"model": "claude-haiku-4-5", "max_tokens": 500, "messages": hi()}))
         .send()
         .await
@@ -366,7 +366,7 @@ async fn over_budget_returns_402_in_each_provider_shape_without_calling_upstream
     let body: Value = resp.json().await.unwrap();
     assert_eq!(
         (body["type"].as_str(), body["error"]["type"].as_str()),
-        (Some("error"), Some("tokenlens_budget_exceeded"))
+        (Some("error"), Some("tokenrein_budget_exceeded"))
     );
     assert_eq!(h.upstream.count(), 0);
 }
@@ -378,7 +378,7 @@ async fn child_spend_counts_against_the_parent_run_budget() {
     };
     let parent = h
         .chat("p", json!({"model": "gpt-4o-mini", "messages": hi()}))
-        .header("x-tl-run-budget-usd", "0.001")
+        .header("x-tr-run-budget-usd", "0.001")
         .send()
         .await
         .unwrap();
@@ -389,7 +389,7 @@ async fn child_spend_counts_against_the_parent_run_budget() {
             "c",
             json!({"model": "gpt-4o-mini", "max_tokens": max_tokens, "messages": hi()}),
         )
-        .header("x-tl-parent-run-id", "p")
+        .header("x-tr-parent-run-id", "p")
     };
     assert_eq!(child(200).send().await.unwrap().status(), 200);
     let (parent_spent, _) = h.run_budget("p").await;
@@ -428,7 +428,7 @@ async fn shadow_mode_allows_and_warns() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    let warning = resp.headers()["x-tl-warning"].to_str().unwrap().to_string();
+    let warning = resp.headers()["x-tr-warning"].to_str().unwrap().to_string();
     assert!(warning.contains("run:"), "{warning}");
 }
 
@@ -439,7 +439,7 @@ async fn pause_resume_and_kill_apply_to_the_run_and_its_children() {
     };
     let child_call = || {
         h.chat("child-1", json!({"model": "gpt-4o-mini", "messages": hi()}))
-            .header("x-tl-parent-run-id", "r9")
+            .header("x-tr-parent-run-id", "r9")
     };
     let call = || h.chat("r9", json!({"model": "gpt-4o-mini", "messages": hi()}));
 
@@ -448,7 +448,7 @@ async fn pause_resume_and_kill_apply_to_the_run_and_its_children() {
     assert_eq!(resp.status(), 403);
     assert_eq!(
         resp.json::<Value>().await.unwrap()["error"]["type"],
-        "tokenlens_run_paused"
+        "tokenrein_run_paused"
     );
     assert_eq!(child_call().send().await.unwrap().status(), 403);
 
@@ -461,7 +461,7 @@ async fn pause_resume_and_kill_apply_to_the_run_and_its_children() {
     assert_eq!(resp.status(), 403);
     assert_eq!(
         resp.json::<Value>().await.unwrap()["error"]["type"],
-        "tokenlens_run_killed"
+        "tokenrein_run_killed"
     );
     assert_eq!(h.admin("r9", "resume").await, 409);
 
@@ -507,7 +507,7 @@ async fn anthropic_calls_carry_the_org_workspace_unless_the_client_sends_one() {
             .http
             .post(format!("{}/v1/messages", h.proxy))
             .header("x-api-key", KEY)
-            .header("x-tl-run-id", "run-ws");
+            .header("x-tr-run-id", "run-ws");
         if let Some(ws) = workspace {
             req = req.header("anthropic-workspace-id", ws);
         }
@@ -535,4 +535,33 @@ async fn anthropic_calls_carry_the_org_workspace_unless_the_client_sends_one() {
     let (provider, headers, _) = h.upstream.last();
     assert_eq!(provider, "openai");
     assert!(headers.get("anthropic-workspace-id").is_none());
+}
+
+#[tokio::test]
+async fn headers_named_before_the_rename_still_work() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    // x-tl-* (pre-rename names) are read as x-tr-*: here a run id and a budget that is too small.
+    let resp = h
+        .http
+        .post(format!("{}/v1/chat/completions", h.proxy))
+        .bearer_auth(KEY)
+        .header("x-tl-run-id", "old-run")
+        .header("x-tl-run-budget-usd", "0.0001")
+        .json(&json!({"model": "gpt-4o-mini", "messages": hi()}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 402);
+    assert_eq!(resp.headers()["x-tr-run-id"], "old-run");
+    // When both are sent, the new name wins.
+    let resp = h
+        .chat("new-run", json!({"model": "gpt-4o-mini", "messages": hi()}))
+        .header("x-tl-run-id", "old-run-2")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["x-tr-run-id"], "new-run");
 }

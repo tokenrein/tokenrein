@@ -1,21 +1,22 @@
 /**
- * Wrap OpenAI / Anthropic SDK clients for TokenLens.
+ * Wrap OpenAI / Anthropic SDK clients for Tokenrein.
  *
  * Two modes:
  *  - **direct** (default): the client keeps calling its provider. Before each call it asks
- *    TokenLens whether the run may continue; after each response it reports token usage in the
+ *    Tokenrein whether the run may continue; after each response it reports token usage in the
  *    background. Works with any provider the `openai` SDK reaches (Gemini, Groq, Mistral,
  *    DeepSeek, OpenRouter, Ollama, ...). See `direct.ts`.
- *  - **proxy**: the client calls the TokenLens proxy, which checks every call before sending it.
+ *  - **proxy**: the client calls the Tokenrein proxy, which checks every call before sending it.
  *
  * In proxy mode the guarded client is a `withOptions()` copy of the caller's client whose prototype is
  * swapped for a subclass that:
- *  - adds the `x-tl-*` headers of the current run to every request it builds, and counts
+ *  - adds the `x-tr-*` headers of the current run to every request it builds, and counts
  *    the call against any local `maxCalls` cap;
- *  - re-labels the proxy's 402/403 responses as TokenLens errors.
+ *  - re-labels the proxy's 402/403 responses as Tokenrein errors.
  * Later `withOptions()` copies construct the same subclass, so they stay guarded.
  */
 
+import { envVar } from './env.js';
 import {
   type TokenUsage,
   type Verdict,
@@ -31,22 +32,22 @@ import { currentRun, validateId, validateUser } from './run.js';
 export const DEFAULT_BASE_URL = 'http://127.0.0.1:8787';
 
 export interface GuardOptions {
-  /** Agent name sent as `x-tl-agent` (per-agent daily budget). */
+  /** Agent name sent as `x-tr-agent` (per-agent daily budget). */
   agent?: string;
-  /** Person or service the agent works for, sent as `x-tl-user` (spend reports). */
+  /** Person or service the agent works for, sent as `x-tr-user` (spend reports). */
   user?: string;
-  /** TokenLens virtual key; defaults to `process.env.TOKENLENS_API_KEY`. */
+  /** Tokenrein virtual key; defaults to `process.env.TOKENREIN_API_KEY`. */
   apiKey?: string;
-  /** TokenLens URL; defaults to `process.env.TOKENLENS_BASE_URL` or `http://127.0.0.1:8787`. */
+  /** Tokenrein URL; defaults to `process.env.TOKENREIN_BASE_URL` or `http://127.0.0.1:8787`. */
   baseURL?: string;
   /**
-   * `'direct'` (default, or `process.env.TOKENLENS_MODE`): the client keeps calling its provider;
-   * TokenLens checks each call first and receives token usage afterwards, never prompts.
-   * `'proxy'`: calls go through the TokenLens proxy, which checks every call before sending it.
+   * `'direct'` (default, or `process.env.TOKENREIN_MODE`): the client keeps calling its provider;
+   * Tokenrein checks each call first and receives token usage afterwards, never prompts.
+   * `'proxy'`: calls go through the Tokenrein proxy, which checks every call before sending it.
    */
   mode?: 'direct' | 'proxy';
   /**
-   * Direct mode only. Ask TokenLens before each call (default). `false` skips the round trip
+   * Direct mode only. Ask Tokenrein before each call (default). `false` skips the round trip
    * and only stops runs that previous usage reports showed are over an enforced limit.
    */
   check?: boolean;
@@ -73,18 +74,18 @@ interface BuiltRequest {
 type ClientClass = (new (...args: any[]) => any) & { [UNGUARDED]?: ClientClass };
 
 /** On a guarded class: the SDK class it extends (so re-wrapping does not stack guards). */
-const UNGUARDED = Symbol('tokenlens.unguarded');
+const UNGUARDED = Symbol('tokenrein.unguarded');
 
 export function resolveBaseURL(baseURL?: string): string {
-  let url = (baseURL || process.env.TOKENLENS_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
+  let url = (baseURL || envVar('BASE_URL') || DEFAULT_BASE_URL).replace(/\/+$/, '');
   // Accept either the proxy root or its /v1 URL.
   if (url.endsWith('/v1')) url = url.slice(0, -'/v1'.length);
   return url;
 }
 
 export function resolveApiKey(apiKey?: string): string {
-  const key = apiKey || process.env.TOKENLENS_API_KEY;
-  if (!key) throw new TypeError('TokenLens virtual key missing: pass apiKey or set TOKENLENS_API_KEY');
+  const key = apiKey || envVar('API_KEY');
+  if (!key) throw new TypeError('Tokenrein virtual key missing: pass apiKey or set TOKENREIN_API_KEY');
   return key;
 }
 
@@ -117,9 +118,9 @@ function tlHeaders(agent: string | undefined, user: string | undefined): Record<
   const run = currentRun();
   const h: Record<string, string> = run ? run.headers() : {};
   const name = agent ?? run?.agent;
-  if (name) h['x-tl-agent'] = name;
+  if (name) h['x-tr-agent'] = name;
   const who = user ?? run?.user;
-  if (who) h['x-tl-user'] = who;
+  if (who) h['x-tr-user'] = who;
   return h;
 }
 
@@ -141,7 +142,7 @@ function guardedClass(
     }
     if (stripBearer) {
       // The proxy reads `Authorization: Bearer` before `x-api-key`; never forward a provider
-      // token (authToken, ANTHROPIC_AUTH_TOKEN, credential providers) in place of the TokenLens key.
+      // token (authToken, ANTHROPIC_AUTH_TOKEN, credential providers) in place of the Tokenrein key.
       deleteHeader(req.headers, 'authorization');
     }
     const first = !opts.retryCount && !(typeof options === 'object' && options !== null && counted.has(options));
@@ -170,7 +171,7 @@ function guardedClass(
     makeStatusError(status: number, error: unknown, message: string | undefined, headers: HeaderBag): Error {
       const err: Error = super.makeStatusError(status, error, message, headers);
       // The proxy echoes the run id; fall back to the one this request carried.
-      const runId = getHeader(headers, 'x-tl-run-id') ?? currentRun()?.runId;
+      const runId = getHeader(headers, 'x-tr-run-id') ?? currentRun()?.runId;
       return relabel(err, status, error, runId);
     }
   };
@@ -237,7 +238,7 @@ function denyIfOver(cfg: DirectConfig): void {
       (kind === 'agent_daily' && agent !== undefined && rest.endsWith(`/${agent}`)) ||
       kind === 'project_monthly' ||
       kind === 'org_monthly';
-    if (hit) throw verdictError({ allowed: false, reason: `TokenLens: the ${label} budget is used up` }, run?.runId);
+    if (hit) throw verdictError({ allowed: false, reason: `Tokenrein: the ${label} budget is used up` }, run?.runId);
   }
 }
 
@@ -263,10 +264,10 @@ async function* bodyChunks(body: any): AsyncGenerator<Uint8Array> {
 /** A provider-shaped error response; the SDK raises it and `makeStatusError` relabels it. */
 function refusal(v: Verdict, kind: 'openai' | 'anthropic'): Response {
   const type = v.run_state === 'killed' ? RUN_KILLED : v.run_state === 'paused' ? RUN_PAUSED : BUDGET_EXCEEDED;
-  const error = { type, message: v.reason ?? 'TokenLens refused the call' };
+  const error = { type, message: v.reason ?? 'Tokenrein refused the call' };
   const body = kind === 'anthropic' ? { type: 'error', error } : { error: { ...error, code: type, param: null } };
   const headers: Record<string, string> = { 'content-type': 'application/json' };
-  if (v.run_id) headers['x-tl-run-id'] = v.run_id;
+  if (v.run_id) headers['x-tr-run-id'] = v.run_id;
   return new Response(JSON.stringify(body), { status: v.run_state ? 403 : 402, headers });
 }
 
@@ -362,14 +363,14 @@ function directClass(Base: ClientClass): ClientClass {
 
     makeStatusError(status: number, error: unknown, message: string | undefined, headers: HeaderBag): Error {
       const err: Error = super.makeStatusError(status, error, message, headers);
-      const runId = getHeader(headers, 'x-tl-run-id') ?? currentRun()?.runId;
+      const runId = getHeader(headers, 'x-tr-run-id') ?? currentRun()?.runId;
       return relabel(err, status, error, runId);
     }
   };
 }
 
 interface DirectWrapOptions {
-  tokenlensURL: string;
+  tokenreinURL: string;
   apiKey: string;
   agent: string | undefined;
   user: string | undefined;
@@ -389,7 +390,7 @@ export function wrapDirect<T>(client: T, o: DirectWrapOptions, kind: 'openai' | 
     user: o.user,
     provider: providerFor(String(c.baseURL ?? ''), o.defaultProvider),
     check: o.check,
-    reporter: reporterFor(o.tokenlensURL, o.apiKey),
+    reporter: reporterFor(o.tokenreinURL, o.apiKey),
   };
   const inner: typeof fetch = (c.fetch ?? globalThis.fetch).bind(globalThis);
   const fetchOverride = { fetch: observingFetch(inner, cfg, kind) };

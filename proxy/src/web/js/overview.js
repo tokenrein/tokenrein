@@ -1,4 +1,4 @@
-// TokenLens dashboard: Overview page, Get started checklist and the Check-mode review.
+// Tokenrein dashboard: Overview page, Get started checklist and the Check-mode review.
 "use strict";
 
 function renderOverview() {
@@ -34,41 +34,41 @@ function renderOverview() {
 }
 
 // --- Get started ---
-const GS_HIDE = "tokenlens.getstarted.hidden.";
+const GS_HIDE = "tokenrein.getstarted.hidden.";
 function snippet(kind, project) {
   const base = proxyUrl();
-  const key = "tl_…  # the key you created for " + project;
-  if (kind === "python") return `pip install "tokenlens[anthropic]"
-export TOKENLENS_BASE_URL=${base}
-export TOKENLENS_API_KEY=tl_…   # the key you created for ${project}
+  const key = "tr_…  # the key you created for " + project;
+  if (kind === "python") return `pip install "tokenrein[anthropic]"
+export TOKENREIN_BASE_URL=${base}
+export TOKENREIN_API_KEY=tr_…   # the key you created for ${project}
 
 from anthropic import Anthropic
-from tokenlens import guard
+from tokenrein import guard
 client = guard.anthropic(Anthropic(), agent="my-agent", user="you")
 with guard.run("first-run"):
     client.messages.create(model="claude-haiku-4-5", max_tokens=50,
                            messages=[{"role": "user", "content": "Say hi"}])`;
-  if (kind === "typescript") return `npm install @tokenlens/sdk @anthropic-ai/sdk
-export TOKENLENS_BASE_URL=${base}
-export TOKENLENS_API_KEY=tl_…   # the key you created for ${project}
+  if (kind === "typescript") return `npm install @tokenrein/sdk @anthropic-ai/sdk
+export TOKENREIN_BASE_URL=${base}
+export TOKENREIN_API_KEY=tr_…   # the key you created for ${project}
 
 import Anthropic from '@anthropic-ai/sdk';
-import { guard } from '@tokenlens/sdk';
+import { guard } from '@tokenrein/sdk';
 const client = guard.anthropic(new Anthropic(), { agent: 'my-agent', user: 'you' });
 await guard.run('first-run', () =>
   client.messages.create({ model: 'claude-haiku-4-5', max_tokens: 50,
     messages: [{ role: 'user', content: 'Say hi' }] }));`;
   if (kind === "any") return `# Any OpenAI / Anthropic SDK or HTTP client: change two things.
 base URL:  ${base}        (OpenAI SDKs: ${base}/v1)
-API key:   tl_…           (the key you created for ${project})
+API key:   tr_…           (the key you created for ${project})
 
 # Optional headers
-x-tl-agent: my-agent      x-tl-user: you
-x-tl-run-id: first-run    x-tl-run-budget-usd: 1`;
+x-tr-agent: my-agent      x-tr-user: you
+x-tr-run-id: first-run    x-tr-run-budget-usd: 1`;
   return `curl ${base}/v1/messages \\
-  -H "x-api-key: tl_…" -H "anthropic-version: 2023-06-01" \\
+  -H "x-api-key: tr_…" -H "anthropic-version: 2023-06-01" \\
   -H "content-type: application/json" \\
-  -H "x-tl-agent: my-agent" -H "x-tl-run-id: first-run" \\
+  -H "x-tr-agent: my-agent" -H "x-tr-run-id: first-run" \\
   -d '{"model":"claude-haiku-4-5","max_tokens":50,"messages":[{"role":"user","content":"Say hi"}]}'`;
 }
 function gsSteps(org) {
@@ -82,10 +82,10 @@ function gsSteps(org) {
   return [
     { done: providerOk, title: "Connect a provider",
       doneText: "Provider key saved.",
-      body: `<p class="help" style="margin:0">Save your Anthropic or OpenAI API key. TokenLens uses it to call the provider; your agents never see it.</p>
+      body: `<p class="help" style="margin:0">Save your Anthropic or OpenAI API key. Tokenrein uses it to call the provider; your agents never see it.</p>
         <div><button class="btn primary sm" data-goto-settings="providers">Add a provider key</button></div>` },
     { done: hasKey, title: "Create a project key",
-      body: `<p class="help" style="margin:0">Agents authenticate with a TokenLens key per project, so you can see and limit each project separately.</p>
+      body: `<p class="help" style="margin:0">Agents authenticate with a Tokenrein key per project, so you can see and limit each project separately.</p>
         <div><button class="btn primary sm" data-goto-settings="keys">Create a key</button></div>` },
     { done: traffic, title: "Connect your agent",
       doneText: first ? `First request received from <b>${esc(first.agent)}</b> (${esc(first.model)}).` : "Requests are arriving.",

@@ -20,7 +20,7 @@ _USER_RE = re.compile(r"^[A-Za-z0-9._@+-]{1,128}$")
 # Guards call counters; runs may be shared across threads (asyncio.to_thread copies the context).
 _calls_lock = threading.Lock()
 
-_current: contextvars.ContextVar[Optional["Run"]] = contextvars.ContextVar("tokenlens_run", default=None)
+_current: contextvars.ContextVar[Optional["Run"]] = contextvars.ContextVar("tokenrein_run", default=None)
 
 
 def validate_user(value: str) -> str:
@@ -40,7 +40,7 @@ def new_run_id() -> str:
 
 
 class Run:
-    """One agent run. Created by :func:`tokenlens.guard.run`; read it with :func:`current_run`."""
+    """One agent run. Created by :func:`tokenrein.guard.run`; read it with :func:`current_run`."""
 
     def __init__(
         self,
@@ -96,7 +96,7 @@ class Run:
             for r in chain:
                 if r.max_calls is not None and r._calls >= r.max_calls:
                     raise LocalCapExceeded(
-                        f"TokenLens local cap: run {r.run_id} reached max_calls={r.max_calls}; request not sent",
+                        f"Tokenrein local cap: run {r.run_id} reached max_calls={r.max_calls}; request not sent",
                         run_id=r.run_id,
                         error_type=LOCAL_CAP_EXCEEDED,
                     )
@@ -104,11 +104,11 @@ class Run:
                 r._calls += 1
 
     def headers(self) -> "dict[str, str]":
-        h = {"x-tl-run-id": self.run_id}
+        h = {"x-tr-run-id": self.run_id}
         if self.budget_usd is not None:
-            h["x-tl-run-budget-usd"] = repr(float(self.budget_usd))
+            h["x-tr-run-budget-usd"] = repr(float(self.budget_usd))
         if self.parent is not None:
-            h["x-tl-parent-run-id"] = self.parent.run_id
+            h["x-tr-parent-run-id"] = self.parent.run_id
         return h
 
     def __repr__(self) -> str:
@@ -116,7 +116,7 @@ class Run:
 
 
 class RunScope:
-    """Context manager returned by :func:`tokenlens.guard.run`. Works with ``with`` and ``async with``."""
+    """Context manager returned by :func:`tokenrein.guard.run`. Works with ``with`` and ``async with``."""
 
     def __init__(
         self,

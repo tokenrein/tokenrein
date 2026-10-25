@@ -12,8 +12,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
-use tokenlens_proxy::config::{Resolved, sha256_hex};
-use tokenlens_proxy::{AppState, admin, build_state, control, proxy};
+use tokenrein::config::{Resolved, sha256_hex};
+use tokenrein::{AppState, admin, build_state, control, proxy};
 
 const CONFIG_KEY: &str = "tl_config_key_0001";
 const ADMIN_TOKEN: &str = "admin-token-0123456789";
@@ -150,13 +150,13 @@ impl H {
             .http
             .post(format!("{}/v1/chat/completions", self.proxy))
             .bearer_auth(key)
-            .header("x-tl-run-id", run)
-            .header("x-tl-agent", "planner");
+            .header("x-tr-run-id", run)
+            .header("x-tr-agent", "planner");
         if let Some(p) = parent {
-            req = req.header("x-tl-parent-run-id", p);
+            req = req.header("x-tr-parent-run-id", p);
         }
         if let Some(u) = user {
-            req = req.header("x-tl-user", u);
+            req = req.header("x-tr-user", u);
         }
         req.json(&json!({"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}))
             .send()
@@ -250,7 +250,7 @@ async fn keys_created_and_revoked_from_the_dashboard_apply_immediately() {
         .await;
     assert_eq!(s, StatusCode::CREATED);
     let key = created["key"].as_str().unwrap().to_string();
-    assert!(key.starts_with("tl_"));
+    assert!(key.starts_with("tr_"));
     assert!(key.starts_with(created["prefix"].as_str().unwrap()));
 
     assert_eq!(h.chat(&key, "rk", None).await, StatusCode::OK);
@@ -436,7 +436,7 @@ async fn serves_the_dashboard_page() {
     // Scripts load only from the proxy itself: no inline script can run.
     assert!(csp.contains("script-src 'self';"), "{csp}");
     let page = resp.text().await.unwrap();
-    assert!(page.contains("TokenLens Dashboard"));
+    assert!(page.contains("Tokenrein Dashboard"));
 
     // Every stylesheet and script the page links to is served, with the right type.
     let links: Vec<&str> = page
@@ -511,7 +511,7 @@ async fn provider_keys_saved_in_the_dashboard_are_used_and_never_returned() {
     assert_eq!(
         other
             .rt()
-            .provider_key(0, tokenlens_proxy::providers::Provider::OpenAI),
+            .provider_key(0, tokenrein::providers::Provider::OpenAI),
         Some(REAL)
     );
 
@@ -757,7 +757,7 @@ async fn anthropic_workspace_id_is_set_cleared_and_validated() {
     assert!(h.get("/admin/overview").await["orgs"][0]["anthropic_workspace_id"].is_null());
 }
 
-// --- TokenLens out of the request path: reported usage, checks, Claude Code ---
+// --- Tokenrein out of the request path: reported usage, checks, Claude Code ---
 
 impl H {
     async fn ingest(&self, path: &str, body: Value) -> (StatusCode, Value) {

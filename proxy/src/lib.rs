@@ -42,7 +42,7 @@ pub async fn build_state(rt: config::Resolved) -> Result<Arc<AppState>> {
     Ok(state)
 }
 
-/// `tokenlens-proxy rotate-secrets-key`: connect to the stores in `rt` and re-encrypt saved
+/// `tokenrein rotate-secrets-key`: connect to the stores in `rt` and re-encrypt saved
 /// provider keys under the current secrets key (see [`control::rotate_secrets_key`]).
 pub async fn rotate_secrets_key(rt: config::Resolved) -> Result<Vec<String>> {
     let state = build_state(rt).await?;
@@ -56,10 +56,10 @@ pub async fn rotate_secrets_key(rt: config::Resolved) -> Result<Vec<String>> {
     Ok(resealed)
 }
 
-/// `tokenlens-proxy probe URL...`: a healthcheck for images without curl. Fails unless every
+/// `tokenrein probe URL...`: a healthcheck for images without curl. Fails unless every
 /// URL answers 2xx within 3 seconds.
 pub async fn probe(urls: &[String]) -> Result<()> {
-    anyhow::ensure!(!urls.is_empty(), "usage: tokenlens-proxy probe URL...");
+    anyhow::ensure!(!urls.is_empty(), "usage: tokenrein probe URL...");
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
         .build()?;

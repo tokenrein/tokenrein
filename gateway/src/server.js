@@ -67,5 +67,5 @@ app.get('/account/:email', async (req, res) => {
 app.use(express.static(join(__dirname, '..', 'public')));
 
 app.listen(PORT, () => {
-  console.log(`tokenlens gateway listening on :${PORT}`);
+  console.log(`tokenrein gateway listening on :${PORT}`);
 });

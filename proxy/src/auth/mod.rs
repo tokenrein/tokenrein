@@ -6,8 +6,8 @@
 //!
 //! - a dashboard session cookie (password or single sign-on), plus an `x-csrf-token` header on
 //!   anything that changes state;
-//! - a personal API token (`Authorization: Bearer tlu_…`), acting as its user;
-//! - the break-glass admin token (`Authorization: Bearer $TL_ADMIN_TOKEN`), acting as an
+//! - a personal API token (`Authorization: Bearer tru_…`), acting as its user;
+//! - the break-glass admin token (`Authorization: Bearer $TOKENREIN_ADMIN_TOKEN`), acting as an
 //!   instance admin. Unset it once people can sign in.
 //!
 //! Users, sessions and tokens live in Postgres; without a database only the admin token works.
@@ -34,10 +34,10 @@ use crate::audit::{Change, Entry};
 use crate::config::valid_id;
 use crate::proxy::AppState;
 
-pub const SESSION_COOKIE: &str = "tl_session";
+pub const SESSION_COOKIE: &str = "tr_session";
 pub const CSRF_HEADER: &str = "x-csrf-token";
 /// Prefix of personal API tokens.
-pub const API_TOKEN_PREFIX: &str = "tlu_";
+pub const API_TOKEN_PREFIX: &str = "tru_";
 
 /// A person's role in an org. Each role can do everything the ones below it can.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

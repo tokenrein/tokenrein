@@ -1,4 +1,4 @@
-# TokenLens — runtime spend guardrails for AI agents
+# Tokenrein — runtime spend guardrails for AI agents
 
 A drop-in proxy for OpenAI and Anthropic APIs that enforces per-run budgets
 **before** each paid call, so a looping agent is stopped instead of discovered
@@ -11,7 +11,7 @@ on the invoice. Product plan, research and go-to-market: [docs/PLAN.md](docs/PLA
 | `proxy/` | Rust data plane: the proxy, Redis budget ledger, admin API |
 | `config/dev.toml` | Local development config |
 | `docs/PLAN.md` | Implementation plan, pricing, marketing calendar |
-| `Dockerfile`, `deploy/` | Container image, Docker Compose stack (TokenLens + Redis + Postgres 17), Helm chart |
+| `Dockerfile`, `deploy/` | Container image, Docker Compose stack (Tokenrein + Redis + Postgres 17), Helm chart |
 | `docs/install.md`, `docs/operations.md` | Installing, upgrading and backing up; runbooks, metrics and alerts |
 | `.github/workflows/ci.yml` | fmt, clippy (warnings as errors), tests against real Redis and Postgres, SDK tests, dependency audits, SBOM |
 | `.github/workflows/release.yml` | On a `v*` tag: multi-arch image to GHCR, SDKs to PyPI and npm |
@@ -26,12 +26,12 @@ agent ──▶ proxy (:8787) ──reserve worst-case cost──▶ Redis (one 
             └─ settle actual cost from the usage the provider reports ──▶ Redis
 ```
 
-1. The client authenticates with a TokenLens virtual key (never the real provider key).
+1. The client authenticates with a Tokenrein virtual key (never the real provider key).
 2. The proxy estimates the worst-case cost (pessimistic input estimate + output cap; it
    injects an output cap if the request has none) and reserves it atomically on every
    budget scope, or on none.
 3. Over an **enforce** budget → `402` with a provider-shaped error body (SDKs don't
-   auto-retry 402). Over a **check** budget → allowed with an `x-tl-warning` header
+   auto-retry 402). Over a **check** budget → allowed with an `x-tr-warning` header
    (shadow mode). Paused or killed run (or ancestor) → `403`.
 4. After the response (or the end of the stream), the reservation is replaced by the
    actual cost. A sweeper releases reservations whose request died.
@@ -39,7 +39,7 @@ agent ──▶ proxy (:8787) ──reserve worst-case cost──▶ Redis (one 
 ## Deploy it
 
 For a team install, run the container image with Redis and Postgres: Docker Compose
-(`deploy/docker-compose.yml`) or Kubernetes (`deploy/helm/tokenlens`). See
+(`deploy/docker-compose.yml`) or Kubernetes (`deploy/helm/tokenrein`). See
 [docs/install.md](docs/install.md) and, for running it, [docs/operations.md](docs/operations.md).
 
 ## Run it locally
@@ -54,52 +54,52 @@ redis-server --daemonize yes
 Once, create the two proxy secrets and keep them (e.g. in `.env`, which is gitignored):
 
 ```bash
-printf 'TL_ADMIN_TOKEN=%s\nTL_SECRETS_KEY=%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > .env
+printf 'TOKENREIN_ADMIN_TOKEN=%s\nTL_SECRETS_KEY=%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > .env
 ```
 
 Then start the proxy with them:
 
 ```bash
-set -a; source .env; set +a; cargo run -p tokenlens-proxy --release
+set -a; source .env; set +a; cargo run -p tokenrein --release
 ```
 
-Open the dashboard at http://127.0.0.1:8788/, sign in with `TL_ADMIN_TOKEN`, and save your
+Open the dashboard at http://127.0.0.1:8788/, sign in with `TOKENREIN_ADMIN_TOKEN`, and save your
 OpenAI / Anthropic keys under Keys & limits (or put `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` in
-`.env` instead). Use the same `TL_SECRETS_KEY` on every restart: keys saved in the dashboard can
+`.env` instead). Use the same `TOKENREIN_SECRETS_KEY` on every restart: keys saved in the dashboard can
 only be decrypted with it.
 
 Point any OpenAI or Anthropic SDK at the proxy:
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://127.0.0.1:8787/v1", api_key="tl_dev_support_bot_key_change_me",
-                default_headers={"x-tl-agent": "support-bot", "x-tl-run-id": "ticket-4812"})
+client = OpenAI(base_url="http://127.0.0.1:8787/v1", api_key="tr_dev_support_bot_key_change_me",
+                default_headers={"x-tr-agent": "support-bot", "x-tr-run-id": "ticket-4812"})
 ```
 
 Create a real customer key (store only the hash in config):
 
 ```bash
-cargo run -p tokenlens-proxy -- gen-key
+cargo run -p tokenrein -- gen-key
 ```
 
 ## Without the proxy
 
-TokenLens doesn't have to sit in the request path. Agents and SDKs can call providers directly
-and report usage to TokenLens, which charges the same budgets and feeds the same dashboard. All
-of these use a TokenLens key (`Authorization: Bearer tl_…`) on the `:8787` listener:
+Tokenrein doesn't have to sit in the request path. Agents and SDKs can call providers directly
+and report usage to Tokenrein, which charges the same budgets and feeds the same dashboard. All
+of these use a Tokenrein key (`Authorization: Bearer tr_…`) on the `:8787` listener:
 
 | Endpoint | Used by | What it does |
 |---|---|---|
 | `POST /v1/usage` | SDK direct mode, any client | Report calls after they happen: `{"events": [{run_id, parent_run_id, agent, user, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd?, duration_ms}]}`. Priced from the model list unless `cost_usd` is given. Returns the enforced limits now used up |
 | `POST /v1/check` | SDK direct mode, agent hooks | "May this run make another call?" (`run_id`, optional `estimate_usd` or `model` + `max_output_tokens`). Answers `allowed` plus a reason; paused or killed runs and used-up enforced budgets are refused |
-| `POST /v1/otel/v1/logs` | Claude Code, Codex CLI, Gemini CLI telemetry | OpenTelemetry logs over HTTP/JSON. Each model call becomes a call on the session's run (`cc-…`, `codex-…`, `gemini-…`; sub-agents on `…-sub`), with model, tokens, cost (Claude Code's own; priced by TokenLens for the others) and the user's email |
+| `POST /v1/otel/v1/logs` | Claude Code, Codex CLI, Gemini CLI telemetry | OpenTelemetry logs over HTTP/JSON. Each model call becomes a call on the session's run (`cc-…`, `codex-…`, `gemini-…`; sub-agents on `…-sub`), with model, tokens, cost (Claude Code's own; priced by Tokenrein for the others) and the user's email |
 | `POST /v1/otel/v1/traces`, `/v1/otel/v1/metrics` | Gemini CLI telemetry | Accepted and dropped (Gemini CLI sends them next to its logs) |
 | `POST /v1/hooks/{claude-code,codex,gemini,cursor}` | The agents' hooks | Blocks the next prompt or tool call (and, where the agent allows it, sub-agent or model call) when the session's run is paused, killed or over an enforced budget, answering in each agent's own format; fails open if the ledger is down |
 
 Enforcement here happens between calls: the call that crosses a limit has already been made,
 and the next one is refused. Use the proxy when you need every call checked before it is sent.
 
-**Claude Code** needs no code: add to `~/.claude/settings.json` (replace `tl_…` with a key from
+**Claude Code** needs no code: add to `~/.claude/settings.json` (replace `tr_…` with a key from
 the dashboard):
 
 ```json
@@ -109,14 +109,14 @@ the dashboard):
     "OTEL_LOGS_EXPORTER": "otlp",
     "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL": "http/json",
     "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "http://127.0.0.1:8787/v1/otel/v1/logs",
-    "OTEL_EXPORTER_OTLP_LOGS_HEADERS": "Authorization=Bearer tl_…,x-tl-agent=claude-code",
-    "TOKENLENS_API_KEY": "tl_…"
+    "OTEL_EXPORTER_OTLP_LOGS_HEADERS": "Authorization=Bearer tr_…,x-tr-agent=claude-code",
+    "TOKENREIN_API_KEY": "tr_…"
   },
   "hooks": {
     "UserPromptSubmit": [{"hooks": [{"type": "http", "url": "http://127.0.0.1:8787/v1/hooks/claude-code",
-      "headers": {"Authorization": "Bearer $TOKENLENS_API_KEY"}, "allowedEnvVars": ["TOKENLENS_API_KEY"], "timeout": 5}]}],
+      "headers": {"Authorization": "Bearer $TOKENREIN_API_KEY"}, "allowedEnvVars": ["TOKENREIN_API_KEY"], "timeout": 5}]}],
     "PreToolUse": [{"matcher": "*", "hooks": [{"type": "http", "url": "http://127.0.0.1:8787/v1/hooks/claude-code",
-      "headers": {"Authorization": "Bearer $TOKENLENS_API_KEY"}, "allowedEnvVars": ["TOKENLENS_API_KEY"], "timeout": 5}]}]
+      "headers": {"Authorization": "Bearer $TOKENREIN_API_KEY"}, "allowedEnvVars": ["TOKENREIN_API_KEY"], "timeout": 5}]}]
   }
 }
 ```
@@ -128,16 +128,16 @@ New sessions then report every model call; this works with a Claude subscription
 dashboard's Connect page (pick a project, create a key):
 
 ```bash
-curl -fsSL http://127.0.0.1:8788/connect/codex.py | python3 - --key tl_… --url http://127.0.0.1:8787
-curl -fsSL http://127.0.0.1:8788/connect/gemini.py | python3 - --key tl_… --url http://127.0.0.1:8787
-curl -fsSL http://127.0.0.1:8788/connect/cursor.py | python3 - --key tl_… --url http://127.0.0.1:8787
+curl -fsSL http://127.0.0.1:8788/connect/codex.py | python3 - --key tr_… --url http://127.0.0.1:8787
+curl -fsSL http://127.0.0.1:8788/connect/gemini.py | python3 - --key tr_… --url http://127.0.0.1:8787
+curl -fsSL http://127.0.0.1:8788/connect/cursor.py | python3 - --key tr_… --url http://127.0.0.1:8787
 ```
 
 Each script backs up the files it changes and is undone with `--remove`; the Codex and Gemini
 CLI scripts refuse to replace another OpenTelemetry collector. Codex and Gemini CLI turn on their own OpenTelemetry export
 (`~/.codex/config.toml`, `~/.gemini/settings.json`) and get command hooks; Codex runs new hooks
-only after you trust them with `/hooks`. Their hooks run `~/.tokenlens/hook.py`, which forwards
-the hook event to TokenLens and lets everything through if TokenLens can't be reached. Cursor
+only after you trust them with `/hooks`. Their hooks run `~/.tokenrein/hook.py`, which forwards
+the hook event to Tokenrein and lets everything through if Tokenrein can't be reached. Cursor
 gets hooks only (`~/.cursor/hooks.json`): it has no local telemetry, so a team admin can import
 its usage (model, tokens, cost per call) hourly from Cursor's Admin API by saving an Admin API
 key on the Connect page (stored encrypted, like provider keys). Runs are named `codex-<session>`,
@@ -154,12 +154,12 @@ you add an override.
 
 | Header | Meaning |
 |---|---|
-| `Authorization: Bearer tl_…` or `x-api-key: tl_…` | TokenLens virtual key |
-| `x-tl-run-id` | Run (task) id; defaults to one run per request |
-| `x-tl-parent-run-id` | Parent run for sub-agents — child spend counts against every ancestor's budget. Send it on every call of the child run |
-| `x-tl-agent` | Agent name for the per-agent daily budget (default `default`) |
-| `x-tl-user` | Optional: the person or service the agent works for, for spend reports by user (not sent upstream) |
-| `x-tl-run-budget-usd` | Budget for this run, fixed on first use and capped by `max_run_usd`; enforced unless the org's run policy says otherwise |
+| `Authorization: Bearer tr_…` or `x-api-key: tr_…` | Tokenrein virtual key |
+| `x-tr-run-id` | Run (task) id; defaults to one run per request |
+| `x-tr-parent-run-id` | Parent run for sub-agents — child spend counts against every ancestor's budget. Send it on every call of the child run |
+| `x-tr-agent` | Agent name for the per-agent daily budget (default `default`) |
+| `x-tr-user` | Optional: the person or service the agent works for, for spend reports by user (not sent upstream) |
+| `x-tr-run-budget-usd` | Budget for this run, fixed on first use and capped by `max_run_usd`; enforced unless the org's run policy says otherwise |
 
 ## Budgets and modes
 
@@ -167,7 +167,7 @@ Set in config at org level and overridden per project: `org_monthly`,
 `project_monthly`, `agent_daily`, `run`, `max_run_usd`. Each budget has a mode:
 `skip`, `check` (default — shadow mode: allow and warn) or `enforce`. Each org has
 a `fail_mode`: `open` (default — keep serving if Redis is unreachable, flagged
-`x-tl-degraded`) or `closed` (`503`).
+`x-tr-degraded`) or `closed` (`503`).
 
 Unknown models are reserved and charged at the provider's most expensive
 built-in price until you add a `[[pricing]]` override. Built-in prices were last
@@ -175,7 +175,7 @@ checked in 2025-11 — **verify them before charging customers.**
 
 ## Dashboard
 
-Open **http://127.0.0.1:8788/** (the admin listener) and sign in with `TL_ADMIN_TOKEN`.
+Open **http://127.0.0.1:8788/** (the admin listener) and sign in with `TOKENREIN_ADMIN_TOKEN`.
 
 New installs get a **Get started** checklist on the Overview, which stays until every step is
 done (or you hide it):
@@ -195,8 +195,8 @@ Setup pages:
   command**, and run the one-line command it gives on the machine with Claude Code (it edits
   `~/.claude/settings.json` with a backup; `--remove` undoes it). *Your app*: the SDK snippet
   (direct mode). *Any tool with a base URL*: the proxy address for strict mode.
-- **Keys & limits**: provider keys, projects, TokenLens keys, budgets and packs.
-- **Models & prices**: every model TokenLens can price (search, filter by provider), models
+- **Keys & limits**: provider keys, projects, Tokenrein keys, budgets and packs.
+- **Models & prices**: every model Tokenrein can price (search, filter by provider), models
   used recently that have no price, and your own prices or overrides (US dollars per million
   tokens; stored with the managed config, applied within seconds).
 
@@ -227,15 +227,15 @@ request; a run's limit is fixed when the run starts, so a new run policy applies
 
 The real OpenAI / Anthropic keys can come from two places; a key saved in the dashboard wins:
 
-1. **Dashboard** (Keys & limits → Provider API keys), per org. Needs `TL_SECRETS_KEY` on the
+1. **Dashboard** (Keys & limits → Provider API keys), per org. Needs `TOKENREIN_SECRETS_KEY` on the
    proxy: 64 hex characters (`openssl rand -hex 32`). Keys are encrypted with it (AES-256-GCM,
    bound to the org and provider) before they are stored in Redis, are never returned by the API
-   (only the last 4 characters), and every instance needs the same `TL_SECRETS_KEY` to use them.
+   (only the last 4 characters), and every instance needs the same `TOKENREIN_SECRETS_KEY` to use them.
    If it is missing or changed, the proxy falls back to the environment and the dashboard says why.
 2. **Environment variables** named by `api_key_env` in the config (or an org's `provider_key_env`).
 
 The proxy starts without any provider key, so you can add them from the dashboard; calls to a
-provider with no key get `400 tokenlens_provider_not_configured` until one is set.
+provider with no key get `400 tokenrein_provider_not_configured` until one is set.
 
 **Anthropic workspace ID.** Personal or service-account Anthropic keys that span several
 workspaces need an `anthropic-workspace-id` header on every call. Set the org's workspace ID
@@ -245,8 +245,8 @@ org's Claude calls. A client that sends its own `anthropic-workspace-id` header 
 
 ## Config history and audit log
 
-Set `TL_DATABASE_URL` to a Postgres database (`postgres://user:password@host/db`; the env var
-name and pool size can be changed under `[database]` in the config) and TokenLens keeps:
+Set `TOKENREIN_DATABASE_URL` to a Postgres database (`postgres://user:password@host/db`; the env var
+name and pool size can be changed under `[database]` in the config) and Tokenrein keeps:
 
 - **Every version of the managed config** (orgs, projects, keys, budgets, prices), with who saved
   it. The schema is created and upgraded automatically at start-up. When you add a database to
@@ -270,7 +270,7 @@ or both.
 1. Create the first account on the server; it prints a one-time link to set the password:
 
    ```bash
-   cargo run -p tokenlens-proxy --release -- create-owner you@company.com
+   cargo run -p tokenrein --release -- create-owner you@company.com
    ```
 
 2. Add people under **People & access**, per org, with a role:
@@ -287,11 +287,11 @@ or both.
    hours) to set a password. Orgs a person has no role in don't show up for them at all.
 
 3. For single sign-on, set `auth.public_url` in the config to the dashboard's address, register
-   TokenLens with your identity provider using the redirect URI shown under People & access
+   Tokenrein with your identity provider using the redirect URI shown under People & access
    (`<public_url>/auth/sso/callback`), and fill in the issuer, client ID and secret there. Options:
    allowed email domains, create accounts on first sign-in (with a default org and role), and
    **roles from groups** (`group = org:role`, synced at every sign-in). The client secret is
-   encrypted with `TL_SECRETS_KEY` (or read from an env var you name). Set
+   encrypted with `TOKENREIN_SECRETS_KEY` (or read from an env var you name). Set
    `auth.password_login = false` to require single sign-on.
 
 Security details: passwords are hashed with argon2id (at least 12 characters, not containing the
@@ -300,17 +300,17 @@ per address. Sessions are HttpOnly, SameSite=Lax cookies (Secure when `public_ur
 stored as hashes in Postgres; they end after `auth.session_hours` (12) or `auth.idle_minutes`
 (120) without use, and every change needs the session's `x-csrf-token` header. Single sign-on
 uses the authorization code flow with PKCE, checks the ID token's signature, issuer, audience,
-expiry and nonce, and refuses unverified emails. Personal **API tokens** (`tlu_…`, 1-365 days)
+expiry and nonce, and refuses unverified emails. Personal **API tokens** (`tru_…`, 1-365 days)
 act as their owner for scripts. Sign-ins, failed sign-ins, role changes, tokens and single
 sign-on changes are all in the audit log.
 
-The admin token (`TL_ADMIN_TOKEN`) still works as an instance admin; keep it as a break-glass
+The admin token (`TOKENREIN_ADMIN_TOKEN`) still works as an instance admin; keep it as a break-glass
 key or unset it once people can sign in. Without a database it is the only way in.
 
 ## Admin API (`:8788`)
 
-Authenticate with `Authorization: Bearer tlu_…` (a personal API token), a dashboard session, or
-`Authorization: Bearer $TL_ADMIN_TOKEN`. Each endpoint needs a role in the org it names (viewer
+Authenticate with `Authorization: Bearer tru_…` (a personal API token), a dashboard session, or
+`Authorization: Bearer $TOKENREIN_ADMIN_TOKEN`. Each endpoint needs a role in the org it names (viewer
 to read, approver for run actions, admin to change things); `/admin/orgs` (create), `/admin/pricing`,
 `/admin/users` and `/admin/sso` need an instance admin.
 
@@ -390,7 +390,7 @@ against a throwaway home directory, the audit log with and without Postgres, rol
 CSRF, lockout, API tokens and single sign-on with group roles), plus operations: Prometheus
 metrics, admin security headers, secrets key rotation, and what keeps working while Redis or
 Postgres is down. Integration tests skip if `redis-server` or Postgres (`initdb`) is missing unless
-`TL_REQUIRE_REDIS=1` / `TL_REQUIRE_POSTGRES=1` (both set in CI).
+`TOKENREIN_REQUIRE_REDIS=1` / `TOKENREIN_REQUIRE_POSTGRES=1` (both set in CI).
 
 Local smoke run of the release binary (Apple Silicon laptop, Redis on the same
 machine, sequential requests to a stub upstream): proxy overhead before the
@@ -401,7 +401,7 @@ expected cost exactly. This is not a production load test.
 
 - Loop detectors (identical-call repeats, spend velocity, run structure, retry storms)
 - Slack / email alerts with Resume / Raise / Kill
-- KMS instead of `TL_SECRETS_KEY` for provider keys; SCIM provisioning; Stripe
+- KMS instead of `TOKENREIN_SECRETS_KEY` for provider keys; SCIM provisioning; Stripe
 - Event pipeline to ClickHouse (stdout today), replay simulation, shadow-mode report
 - Responses API: context size of a `previous_response_id` the proxy never saw is
   assumed to be 32k tokens

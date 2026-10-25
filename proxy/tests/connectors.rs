@@ -13,8 +13,8 @@ use axum::routing::post;
 use axum::{Json, Router};
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
-use tokenlens_proxy::config::{Resolved, sha256_hex};
-use tokenlens_proxy::{AppState, admin, build_state, control, proxy};
+use tokenrein::config::{Resolved, sha256_hex};
+use tokenrein::{AppState, admin, build_state, control, proxy};
 
 const KEY: &str = "tl_connectors_key_0001";
 const ADMIN_TOKEN: &str = "admin-token-0123456789";
@@ -304,7 +304,7 @@ fn codex_logs(conversation: &str) -> Value {
     prompt.extend([i("prompt_length", 42), s("prompt", "[REDACTED]")]);
     json!({"resourceLogs": [{
         "resource": {"attributes": [
-            s("service.name", "codex_cli_rs"), s("service.version", "0.130.0"), s("env", "tokenlens")
+            s("service.name", "codex_cli_rs"), s("service.version", "0.130.0"), s("env", "tokenrein")
         ]},
         "scopeLogs": [{"scope": {"name": "codex_otel"}, "logRecords": [
             {"timeUnixNano": "1792641600000000000", "attributes": prompt},
@@ -655,7 +655,7 @@ impl Home {
         std::fs::read_dir(self.path(dir))
             .map(|d| {
                 d.flatten()
-                    .filter(|e| e.file_name().to_string_lossy().contains(".bak-tokenlens-"))
+                    .filter(|e| e.file_name().to_string_lossy().contains(".bak-tokenrein-"))
                     .count()
             })
             .unwrap_or(0)
@@ -770,7 +770,7 @@ async fn codex_connect_script() {
         .as_str()
         .unwrap()
         .to_string();
-    assert!(cmd.contains(".tokenlens/hook.py"));
+    assert!(cmd.contains(".tokenrein/hook.py"));
     let event = json!({"session_id": "thr_9", "hook_event_name": "PreToolUse", "cwd": "/repo",
                        "turn_id": "t1", "tool_name": "Bash", "tool_input": {"command": "ls"}});
     assert_eq!(run_hook(&home, &cmd, event.clone()).await, json!({}));
@@ -781,7 +781,7 @@ async fn codex_connect_script() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(home.path(".tokenlens/codex.json"))
+        let mode = std::fs::metadata(home.path(".tokenrein/codex.json"))
             .unwrap()
             .permissions()
             .mode();
@@ -793,8 +793,8 @@ async fn codex_connect_script() {
     assert_eq!(home.read(".codex/config.toml"), original);
     let hooks: Value = serde_json::from_str(&home.read(".codex/hooks.json")).unwrap();
     assert_eq!(hooks, json!({}));
-    assert!(!home.path(".tokenlens/codex.json").exists());
-    assert!(!home.path(".tokenlens/hook.py").exists());
+    assert!(!home.path(".tokenrein/codex.json").exists());
+    assert!(!home.path(".tokenrein/hook.py").exists());
     assert!(home.backups(".codex") >= 2);
 
     // Another OpenTelemetry collector is left alone.
@@ -836,7 +836,7 @@ async fn gemini_connect_script() {
     assert_eq!(t["target"], "local");
     assert_eq!(t["otlpProtocol"], "http");
     assert_eq!(t["otlpEndpoint"], format!("{}/v1/otel", h.proxy));
-    assert_eq!(t["otlpHeaders"]["x-tl-user"], "ana@example.com");
+    assert_eq!(t["otlpHeaders"]["x-tr-user"], "ana@example.com");
     assert_eq!(t["logPrompts"], false);
     assert_eq!(settings["general"]["vimMode"], true);
     // The user's own hook stays; ours is added next to it.
@@ -890,9 +890,9 @@ async fn cursor_connect_script() {
         run_hook(&home, &cmd, event.clone()).await,
         json!({"continue": true})
     );
-    // TokenLens unreachable: the hook lets everything through, in Cursor's format.
-    let cfg_path = home.path(".tokenlens/cursor.json");
-    let mut cfg: Value = serde_json::from_str(&home.read(".tokenlens/cursor.json")).unwrap();
+    // Tokenrein unreachable: the hook lets everything through, in Cursor's format.
+    let cfg_path = home.path(".tokenrein/cursor.json");
+    let mut cfg: Value = serde_json::from_str(&home.read(".tokenrein/cursor.json")).unwrap();
     cfg["url"] = json!("http://127.0.0.1:9");
     std::fs::write(&cfg_path, cfg.to_string()).unwrap();
     let mut tool = event.clone();

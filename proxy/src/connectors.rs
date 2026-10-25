@@ -1,7 +1,7 @@
 //! Connectors for coding agents beyond Claude Code:
 //!
 //! - `GET /connect/{codex,gemini,cursor}.py`: stdlib installers that point the agent's own
-//!   telemetry and hooks at TokenLens (see docs/connectors.md).
+//!   telemetry and hooks at Tokenrein (see docs/connectors.md).
 //! - The optional Cursor usage import: a team's usage events, read from Cursor's Admin API
 //!   (`POST /teams/filtered-usage-events`) with an Admin API key saved encrypted like provider
 //!   keys, charged to one project's budgets. Runs hourly and on demand.
@@ -42,8 +42,8 @@ pub fn connect_script(tool: &str) -> Option<String> {
         "cursor" => CONNECT_CURSOR,
         _ => return None,
     };
-    let common = CONNECT_COMMON.replace("@tokenlens-hook@", CONNECT_HOOK);
-    Some(body.replacen("# @tokenlens-common@\n", &common, 1))
+    let common = CONNECT_COMMON.replace("@tokenrein-hook@", CONNECT_HOOK);
+    Some(body.replacen("# @tokenrein-common@\n", &common, 1))
 }
 
 fn script_response(tool: &str) -> Response {
@@ -549,7 +549,7 @@ mod tests {
         for tool in ["codex", "gemini", "cursor"] {
             let s = connect_script(tool).unwrap();
             assert!(s.starts_with("#!/usr/bin/env python3"));
-            assert!(!s.contains("@tokenlens-"), "{tool}: placeholder left");
+            assert!(!s.contains("@tokenrein-"), "{tool}: placeholder left");
             assert!(s.contains("def install_hook"));
             assert!(s.contains("/v1/hooks/"));
         }

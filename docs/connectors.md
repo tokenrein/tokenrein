@@ -1,9 +1,9 @@
 # Coding-agent connectors
 
-TokenLens tracks and stops coding agents without sitting in their request path. Each connector
+Tokenrein tracks and stops coding agents without sitting in their request path. Each connector
 uses what the agent already has: its OpenTelemetry export for usage (model, tokens, user) and
 its hooks to refuse the next prompt or tool call when a run is paused or killed, or an enforced
-budget is used up. This page lists the exact fields TokenLens relies on, and where each is
+budget is used up. This page lists the exact fields Tokenrein relies on, and where each is
 documented, so the mappers can be checked when the agents change.
 
 Checked against the agents' docs and source on 2026-10-22.
@@ -15,16 +15,16 @@ Checked against the agents' docs and source on 2026-10-22.
 | Gemini CLI | OTLP logs, `gemini_cli.api_response` | command hooks | `gemini-<session.id>` (`-sub` for sub-agents) | `/connect/gemini.py` |
 | Cursor | Admin API usage events (team plans) | command hooks | `cursor-<conversation_id>` | `/connect/cursor.py` |
 
-All endpoints are on the proxy listener (`:8787`) and take a TokenLens key
-(`Authorization: Bearer tl_…`). `x-tl-agent` and `x-tl-user` headers override the agent name
+All endpoints are on the proxy listener (`:8787`) and take a Tokenrein key
+(`Authorization: Bearer tr_…`). `x-tr-agent` and `x-tr-user` headers override the agent name
 (default: `claude-code`, `codex`, `gemini-cli`, `cursor`) and the user.
 
 Codex CLI, Gemini CLI and Cursor only run *command* hooks (no HTTP hooks), so their connect
-scripts install `~/.tokenlens/hook.py` (Python standard library). The agent runs
-`python3 ~/.tokenlens/hook.py <tool>` with the hook event on stdin; it posts the event to
-`/v1/hooks/<tool>` with the key from `~/.tokenlens/<tool>.json` (mode 0600) and prints
-TokenLens's answer. If TokenLens can't be reached in 4 seconds it prints the agent's "allow"
-answer: a TokenLens outage never stops anyone's agent. The server also fails open when its
+scripts install `~/.tokenrein/hook.py` (Python standard library). The agent runs
+`python3 ~/.tokenrein/hook.py <tool>` with the hook event on stdin; it posts the event to
+`/v1/hooks/<tool>` with the key from `~/.tokenrein/<tool>.json` (mode 0600) and prints
+Tokenrein's answer. If Tokenrein can't be reached in 4 seconds it prints the agent's "allow"
+answer: a Tokenrein outage never stops anyone's agent. The server also fails open when its
 ledger is down.
 
 ## OpenAI Codex CLI
@@ -39,9 +39,9 @@ and [`events/shared.rs`](https://github.com/openai/codex/blob/main/codex-rs/otel
 
 ```toml
 [otel]
-environment = "tokenlens"
+environment = "tokenrein"
 log_user_prompt = false
-exporter = { otlp-http = { endpoint = "http://127.0.0.1:8787/v1/otel/v1/logs", protocol = "json", headers = { "Authorization" = "Bearer tl_…", "x-tl-agent" = "codex" } } }
+exporter = { otlp-http = { endpoint = "http://127.0.0.1:8787/v1/otel/v1/logs", protocol = "json", headers = { "Authorization" = "Bearer tr_…", "x-tr-agent" = "codex" } } }
 ```
 
 - Resource `service.name` is Codex's originator (e.g. `codex_cli_rs`); records are recognised by
@@ -52,10 +52,10 @@ exporter = { otlp-http = { endpoint = "http://127.0.0.1:8787/v1/otel/v1/logs", p
   one model response: `input_token_count`, `output_token_count`, `cached_token_count`,
   `cache_write_token_count`, `reasoning_token_count`, `tool_token_count` (the total). Some are
   formatted as strings; both are accepted.
-- OpenAI counts cached input inside `input_token_count`, so TokenLens charges
+- OpenAI counts cached input inside `input_token_count`, so Tokenrein charges
   `input_token_count − cached_token_count` at the input price and `cached_token_count` at the
   cached price. Reasoning tokens are already inside `output_token_count`.
-- Codex sends no cost; TokenLens prices the tokens (also for ChatGPT sign-ins, as an estimate).
+- Codex sends no cost; Tokenrein prices the tokens (also for ChatGPT sign-ins, as an estimate).
   `codex.turn_cost` (`usage.estimated_usd`, per turn) is not used, so calls are not counted twice.
 - `codex.conversation_starts`, `codex.user_prompt`, `codex.tool_decision` and
   `codex.tool_result` only mark the session as active. Failed responses (no token counts) and
@@ -90,12 +90,12 @@ Source: [`telemetry/types.ts`](https://github.com/google-gemini/gemini-cli/blob/
 
 ```json
 {"telemetry": {"enabled": true, "target": "local", "otlpEndpoint": "http://127.0.0.1:8787/v1/otel",
-  "otlpProtocol": "http", "otlpHeaders": {"Authorization": "Bearer tl_…", "x-tl-agent": "gemini-cli"},
+  "otlpProtocol": "http", "otlpHeaders": {"Authorization": "Bearer tr_…", "x-tr-agent": "gemini-cli"},
   "logPrompts": false}}
 ```
 
 - With `otlpProtocol: "http"` Gemini CLI appends `/v1/logs`, `/v1/traces` and `/v1/metrics` to
-  the endpoint and sends OTLP/JSON. TokenLens reads the logs; traces and metrics are accepted and
+  the endpoint and sends OTLP/JSON. Tokenrein reads the logs; traces and metrics are accepted and
   dropped.
 - Resource `service.name = "gemini-cli"`; events are named `gemini_cli.*`.
 - Every event carries `session.id` (the run), `installation.id`, `user.email` (when signed in),
@@ -105,10 +105,10 @@ Source: [`telemetry/types.ts`](https://github.com/google-gemini/gemini-cli/blob/
   (`candidatesTokenCount`), `cached_content_token_count`, `thoughts_token_count`,
   `tool_token_count`, `total_token_count`, `prompt_id`, `role` (`main`, `subagent`,
   `utility_…`).
-- Cached content is inside the prompt count, so TokenLens charges
+- Cached content is inside the prompt count, so Tokenrein charges
   `input_token_count − cached_content_token_count` as input and the cached part at the cached
   price. Thinking tokens are billed as output: output = `output_token_count +
-  thoughts_token_count`. Gemini CLI sends no cost; TokenLens prices the tokens.
+  thoughts_token_count`. Gemini CLI sends no cost; Tokenrein prices the tokens.
 - Each response is also logged as `gen_ai.client.inference.operation.details` (with
   `gen_ai.usage.*`); that copy is ignored so nothing is counted twice.
 - `role = "subagent"` calls go to the child run `gemini-<session>-sub`.
@@ -150,7 +150,7 @@ wire them yourself; the connect script doesn't, because `preToolUse` already cov
 
 **Usage.** Cursor has no local telemetry export. Teams can import usage from the Admin API: save
 an Admin API key on the Connect page (or `PUT /admin/orgs/{org}/connectors/cursor
-{"project", "api_key"}` on the admin listener). It is encrypted with `TL_SECRETS_KEY` like
+{"project", "api_key"}` on the admin listener). It is encrypted with `TOKENREIN_SECRETS_KEY` like
 provider keys, bound to the org, and never returned.
 
 - `POST https://api.cursor.com/teams/filtered-usage-events`, Basic auth with the key as the user
@@ -174,5 +174,5 @@ provider keys, bound to the org, and never returned.
 - Codex and Gemini report tokens, not cost: unknown models are charged at the provider's most
   expensive price until you add one under Models & prices.
 - Cursor without a team Admin API key: conversations are tracked and can be paused, but their
-  spend is not known to TokenLens.
+  spend is not known to Tokenrein.
 - Cloud agents (Cursor background agents, Codex cloud) don't run user-level hooks.

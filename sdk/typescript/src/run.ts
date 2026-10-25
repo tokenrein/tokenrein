@@ -34,12 +34,12 @@ export function newRunId(): string {
 export interface RunOptions {
   /** Run id (1-128 of `A-Z a-z 0-9 . _ -`). Generated when omitted. */
   runId?: string;
-  /** Budget for this run (`x-tl-run-budget-usd`), fixed by the proxy on first use. */
+  /** Budget for this run (`x-tr-run-budget-usd`), fixed by the proxy on first use. */
   budgetUsd?: number;
   /** Agent name for clients wrapped without `agent`. Not inherited by child runs. */
   agent?: string;
   /**
-   * Person or service the run works for (`x-tl-user`), for spend reports by user. Inherited by
+   * Person or service the run works for (`x-tr-user`), for spend reports by user. Inherited by
    * child runs; a client's own `user` takes precedence.
    */
   user?: string;
@@ -97,7 +97,7 @@ export class Run {
     for (const r of chain) {
       if (r.maxCalls !== undefined && r.#calls >= r.maxCalls) {
         throw new LocalCapExceeded(
-          `TokenLens local cap: run ${r.runId} reached maxCalls=${r.maxCalls}; request not sent`,
+          `Tokenrein local cap: run ${r.runId} reached maxCalls=${r.maxCalls}; request not sent`,
           { runId: r.runId, errorType: LOCAL_CAP_EXCEEDED },
         );
       }
@@ -106,9 +106,9 @@ export class Run {
   }
 
   headers(): Record<string, string> {
-    const h: Record<string, string> = { 'x-tl-run-id': this.runId };
-    if (this.budgetUsd !== undefined) h['x-tl-run-budget-usd'] = String(this.budgetUsd);
-    if (this.parent) h['x-tl-parent-run-id'] = this.parent.runId;
+    const h: Record<string, string> = { 'x-tr-run-id': this.runId };
+    if (this.budgetUsd !== undefined) h['x-tr-run-budget-usd'] = String(this.budgetUsd);
+    if (this.parent) h['x-tr-parent-run-id'] = this.parent.runId;
     return h;
   }
 }
@@ -121,7 +121,7 @@ export function currentRun(): Run | undefined {
 /**
  * Run `fn` inside a new run. Every request made by a guarded client inside `fn` (including
  * in awaited promises, timers and child tasks it starts) carries the run's headers. Runs
- * nest: a run started inside another sends `x-tl-parent-run-id`.
+ * nest: a run started inside another sends `x-tr-parent-run-id`.
  *
  * Returns whatever `fn` returns (a promise if `fn` is async).
  */

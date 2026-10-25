@@ -39,7 +39,7 @@ const DECISIONS: [&str; 7] = [
 
 const PROVIDERS: [&str; 3] = ["openai", "anthropic", "other"];
 
-/// Seconds. Pre-upstream overhead is the time TokenLens adds before the upstream call.
+/// Seconds. Pre-upstream overhead is the time Tokenrein adds before the upstream call.
 const OVERHEAD_BUCKETS: &[f64] = &[
     0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25,
 ];
@@ -186,19 +186,19 @@ pub fn render(config_version: u64) -> String {
 
     header(
         &mut out,
-        "tokenlens_build_info",
+        "tokenrein_build_info",
         "gauge",
-        "TokenLens proxy version.",
+        "Tokenrein proxy version.",
     );
     let _ = writeln!(
         out,
-        "tokenlens_build_info{{version=\"{}\"}} 1",
+        "tokenrein_build_info{{version=\"{}\"}} 1",
         env!("CARGO_PKG_VERSION")
     );
 
     header(
         &mut out,
-        "tokenlens_decisions_total",
+        "tokenrein_decisions_total",
         "counter",
         "Requests by guardrail decision.",
     );
@@ -206,7 +206,7 @@ pub fn render(config_version: u64) -> String {
         for (d, decision) in DECISIONS.iter().enumerate() {
             let _ = writeln!(
                 out,
-                "tokenlens_decisions_total{{path=\"{path}\",decision=\"{decision}\"}} {}",
+                "tokenrein_decisions_total{{path=\"{path}\",decision=\"{decision}\"}} {}",
                 load(&m.decisions[p][d])
             );
         }
@@ -214,72 +214,72 @@ pub fn render(config_version: u64) -> String {
 
     header(
         &mut out,
-        "tokenlens_pre_upstream_seconds",
+        "tokenrein_pre_upstream_seconds",
         "histogram",
-        "Time TokenLens adds before calling the provider.",
+        "Time Tokenrein adds before calling the provider.",
     );
     m.overhead
-        .render(&mut out, "tokenlens_pre_upstream_seconds", "");
+        .render(&mut out, "tokenrein_pre_upstream_seconds", "");
 
     header(
         &mut out,
-        "tokenlens_upstream_seconds",
+        "tokenrein_upstream_seconds",
         "histogram",
         "Provider response time, to the end of the body.",
     );
     for (i, provider) in PROVIDERS.iter().enumerate() {
         m.upstream[i].render(
             &mut out,
-            "tokenlens_upstream_seconds",
+            "tokenrein_upstream_seconds",
             &format!("provider=\"{provider}\""),
         );
     }
 
     header(
         &mut out,
-        "tokenlens_ledger_errors_total",
+        "tokenrein_ledger_errors_total",
         "counter",
         "Budget ledger (Redis) calls that failed.",
     );
     let _ = writeln!(
         out,
-        "tokenlens_ledger_errors_total {}",
+        "tokenrein_ledger_errors_total {}",
         load(&m.ledger_errors)
     );
 
     header(
         &mut out,
-        "tokenlens_activity_events_dropped_total",
+        "tokenrein_activity_events_dropped_total",
         "counter",
         "Dashboard activity events that were dropped.",
     );
     let _ = writeln!(
         out,
-        "tokenlens_activity_events_dropped_total{{reason=\"queue_full\"}} {}\n\
-         tokenlens_activity_events_dropped_total{{reason=\"write_failed\"}} {}",
+        "tokenrein_activity_events_dropped_total{{reason=\"queue_full\"}} {}\n\
+         tokenrein_activity_events_dropped_total{{reason=\"write_failed\"}} {}",
         load(&m.activity_dropped_queue_full),
         load(&m.activity_dropped_write_failed)
     );
 
     header(
         &mut out,
-        "tokenlens_audit_write_failures_total",
+        "tokenrein_audit_write_failures_total",
         "counter",
         "Audit log entries that could not be written.",
     );
     let _ = writeln!(
         out,
-        "tokenlens_audit_write_failures_total {}",
+        "tokenrein_audit_write_failures_total {}",
         load(&m.audit_write_failures)
     );
 
     header(
         &mut out,
-        "tokenlens_config_version",
+        "tokenrein_config_version",
         "gauge",
         "Version of the managed config this process is serving.",
     );
-    let _ = writeln!(out, "tokenlens_config_version {config_version}");
+    let _ = writeln!(out, "tokenrein_config_version {config_version}");
     out
 }
 
@@ -323,11 +323,11 @@ mod tests {
         let other = out
             .lines()
             .find(|l| {
-                l.starts_with("tokenlens_decisions_total{path=\"ingest\",decision=\"other\"}")
+                l.starts_with("tokenrein_decisions_total{path=\"ingest\",decision=\"other\"}")
             })
             .unwrap();
         assert!(!other.ends_with(" 0"));
-        assert!(!out.contains("tokenlens_upstream_seconds_count{provider=\"other\"} 0\n"));
-        assert!(out.contains("tokenlens_config_version 7\n"));
+        assert!(!out.contains("tokenrein_upstream_seconds_count{provider=\"other\"} 0\n"));
+        assert!(out.contains("tokenrein_config_version 7\n"));
     }
 }

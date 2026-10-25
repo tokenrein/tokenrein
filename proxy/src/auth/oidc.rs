@@ -357,7 +357,7 @@ fn check_id_token(
 ) -> Result<serde_json::Map<String, Value>> {
     let header = jsonwebtoken::decode_header(token).context("the ID token is malformed")?;
     if !ALGORITHMS.contains(&header.alg) {
-        bail!("the ID token uses an algorithm TokenLens does not accept");
+        bail!("the ID token uses an algorithm Tokenrein does not accept");
     }
     let jwk = match &header.kid {
         Some(kid) => p.jwks.find(kid),
@@ -444,11 +444,11 @@ pub async fn provision(st: &AppState, cfg: &SsoConfig, id: &Identity) -> Result<
     let db = st.db.as_ref().ok_or_else(|| anyhow!("no database"))?;
     let pool = db.pool();
     let (user_id, created) = match store::user_by_email(pool, &id.email).await? {
-        Some((_, true)) => bail!("your TokenLens account is disabled"),
+        Some((_, true)) => bail!("your Tokenrein account is disabled"),
         Some((uid, false)) => (uid, false),
         None if cfg.auto_create => store::upsert_user(pool, &id.email, &id.name).await?,
         None => bail!(
-            "{} has no TokenLens account yet; ask an admin to add you",
+            "{} has no Tokenrein account yet; ask an admin to add you",
             id.email
         ),
     };

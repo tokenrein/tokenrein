@@ -1,5 +1,5 @@
 {{- if .Values.redis.enabled }}
-{{- $name := include "tokenlens.redisHost" . }}
+{{- $name := include "tokenrein.redisHost" . }}
 # Single-node Redis for evaluation. Budgets and run state live here: it persists to disk
 # (appendonly) and never evicts keys.
 apiVersion: v1
@@ -7,11 +7,11 @@ kind: Service
 metadata:
   name: {{ $name }}
   labels:
-    {{- include "tokenlens.labels" . | nindent 4 }}
+    {{- include "tokenrein.labels" . | nindent 4 }}
     app.kubernetes.io/component: redis
 spec:
   selector:
-    app.kubernetes.io/name: {{ include "tokenlens.name" . }}
+    app.kubernetes.io/name: {{ include "tokenrein.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/component: redis
   ports:
@@ -24,20 +24,20 @@ kind: StatefulSet
 metadata:
   name: {{ $name }}
   labels:
-    {{- include "tokenlens.labels" . | nindent 4 }}
+    {{- include "tokenrein.labels" . | nindent 4 }}
     app.kubernetes.io/component: redis
 spec:
   serviceName: {{ $name }}
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "tokenlens.name" . }}
+      app.kubernetes.io/name: {{ include "tokenrein.name" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/component: redis
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: {{ include "tokenlens.name" . }}
+        app.kubernetes.io/name: {{ include "tokenrein.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: redis
     spec:

@@ -220,8 +220,8 @@ async fn edit_managed<T>(
 }
 
 /// Re-encrypts every provider key saved from the dashboard under the current secrets key
-/// (`TL_SECRETS_KEY`). Keys sealed under the previous one are opened with
-/// `TL_SECRETS_KEY_PREVIOUS`; keys already under the current key are left alone. Nothing is saved
+/// (`TOKENREIN_SECRETS_KEY`). Keys sealed under the previous one are opened with
+/// `TOKENREIN_SECRETS_KEY_PREVIOUS`; keys already under the current key are left alone. Nothing is saved
 /// unless every key can be opened. Returns the `org/provider` pairs that were re-encrypted.
 pub async fn rotate_secrets_key(state: &AppState, actor: &str) -> Result<Vec<String>> {
     let _guard = state.control_edit.lock().await;

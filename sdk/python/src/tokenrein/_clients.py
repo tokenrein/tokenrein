@@ -1,25 +1,26 @@
-"""Wrap OpenAI / Anthropic SDK clients for TokenLens.
+"""Wrap OpenAI / Anthropic SDK clients for Tokenrein.
 
 Two modes:
 
 * **direct** (default): the client keeps calling its provider. Before each call it asks
-  TokenLens whether the run may continue; after each response it reports token usage in the
+  Tokenrein whether the run may continue; after each response it reports token usage in the
   background. Works with any provider the ``openai`` SDK can reach (Gemini, Groq, Mistral,
-  DeepSeek, OpenRouter, Ollama, ...). See :mod:`tokenlens._direct`.
-* **proxy**: the client calls the TokenLens proxy, which checks every call before forwarding it.
+  DeepSeek, OpenRouter, Ollama, ...). See :mod:`tokenrein._direct`.
+* **proxy**: the client calls the Tokenrein proxy, which checks every call before forwarding it.
 
 In proxy mode the wrapped client is a copy of the caller's client (``with_options``) whose class is
 swapped for a cached subclass that:
 
-* adds the ``x-tl-*`` headers of the current run to every request it builds, and counts
+* adds the ``x-tr-*`` headers of the current run to every request it builds, and counts
   the call against any local ``max_calls`` cap;
-* turns the proxy's 402/403 responses into :mod:`tokenlens.errors` exceptions that also
+* turns the proxy's 402/403 responses into :mod:`tokenrein.errors` exceptions that also
   subclass the SDK's own error, so existing ``except openai.APIStatusError`` still works.
 """
 
 from __future__ import annotations
 
 import copy
+import warnings
 
 import asyncio
 import inspect
@@ -39,7 +40,7 @@ _GUARDED: Dict[type, type] = {}
 
 
 def resolve_base_url(base_url: Optional[str]) -> str:
-    url = (base_url or os.environ.get("TOKENLENS_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
+    url = (base_url or env("BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
     # Accept either the proxy root or its /v1 URL.
     if url.endswith("/v1"):
         url = url[: -len("/v1")]
@@ -47,9 +48,9 @@ def resolve_base_url(base_url: Optional[str]) -> str:
 
 
 def resolve_api_key(api_key: Optional[str]) -> str:
-    key = api_key or os.environ.get("TOKENLENS_API_KEY")
+    key = api_key or env("API_KEY")
     if not key:
-        raise ValueError("TokenLens virtual key missing: pass api_key=... or set TOKENLENS_API_KEY")
+        raise ValueError("Tokenrein virtual key missing: pass api_key=... or set TOKENREIN_API_KEY")
     return key
 
 
@@ -61,9 +62,9 @@ def _tl_headers(agent: Optional[str], user: Optional[str]) -> Dict[str, str]:
         agent = agent or run.agent
         user = user or run.user
     if agent:
-        h["x-tl-agent"] = agent
+        h["x-tr-agent"] = agent
     if user:
-        h["x-tl-user"] = user
+        h["x-tr-user"] = user
     return h
 
 
@@ -82,7 +83,7 @@ def _guarded_class(base: type, *, strip_bearer: bool) -> type:
                 request.headers[name] = value
         if strip_bearer:
             # The proxy reads 'Authorization: Bearer' before 'x-api-key'; never forward a
-            # provider token (e.g. ANTHROPIC_AUTH_TOKEN) in place of the TokenLens key.
+            # provider token (e.g. ANTHROPIC_AUTH_TOKEN) in place of the Tokenrein key.
             request.headers.pop("authorization", None)
         run = _current.get()
         if run is not None and kwargs.get("retries_taken", 0) == 0:
@@ -121,6 +122,19 @@ def _guarded_class(base: type, *, strip_bearer: bool) -> type:
     return cls
 
 
+
+def env(name: str) -> Optional[str]:
+    """``TOKENREIN_<name>`` from the environment, or the name used before the product was renamed
+    (read with a deprecation warning until v1.1)."""
+    value = os.environ.get("TOKENREIN_" + name)
+    if value:
+        return value
+    old = "TOKENLENS_" + name  # pre-rename name
+    value = os.environ.get(old)
+    if value:
+        warnings.warn(f"{old} is deprecated; set TOKENREIN_{name}", DeprecationWarning, stacklevel=3)
+    return value or None
+
 # Anthropic client credentials other than the API key.
 _PROVIDER_CREDENTIALS = ("auth_token", "credentials")
 
@@ -140,7 +154,7 @@ def wrap(
         validate_user(user)
     source = client
     if strip_bearer:
-        # The proxy only needs the TokenLens key. Newer Anthropic SDKs refuse a client with more
+        # The proxy only needs the Tokenrein key. Newer Anthropic SDKs refuse a client with more
         # than one credential, and a copy keeps the original's, so drop them on a shallow copy
         # first (the caller's client is left as it is).
         held = [a for a in _PROVIDER_CREDENTIALS if getattr(client, a, None) is not None]
@@ -228,7 +242,7 @@ def _deny_if_over(client: Any) -> None:
         )
         if hit:
             raise errors.BudgetExceeded(
-                f"TokenLens: the {label} budget is used up",
+                f"Tokenrein: the {label} budget is used up",
                 run_id=rid,
                 error_type=errors.BUDGET_EXCEEDED,
             )
@@ -387,7 +401,7 @@ def _direct_class(base: type) -> type:
 def wrap_direct(
     client: Any,
     *,
-    tokenlens_url: str,
+    tokenrein_url: str,
     api_key: str,
     agent: Optional[str],
     user: Optional[str],
@@ -404,7 +418,7 @@ def wrap_direct(
     guarded.__class__ = _direct_class(base)
     guarded._tl_agent = agent
     guarded._tl_user = user
-    guarded._tl_reporter = _direct.reporter_for(tokenlens_url, api_key)
+    guarded._tl_reporter = _direct.reporter_for(tokenrein_url, api_key)
     guarded._tl_provider = _direct.provider_for(str(client.base_url), default_provider)
     guarded._tl_check = check
     guarded._tl_source = getattr(client, "_tl_source", None) or client

@@ -1,11 +1,11 @@
-# Local development config for the TokenLens proxy.
+# Local development config for the Tokenrein proxy.
 # Needs OPENAI_API_KEY and ANTHROPIC_API_KEY in the environment (remove a provider block to skip it).
-# Make customer keys with: cargo run -p tokenlens-proxy -- gen-key
+# Make customer keys with: cargo run -p tokenrein -- gen-key
 
 [server]
 listen = "127.0.0.1:8787"
 admin_listen = "127.0.0.1:8788"
-admin_token_env = "TL_ADMIN_TOKEN"
+admin_token_env = "TOKENREIN_ADMIN_TOKEN"
 upstream_timeout_secs = 600
 default_max_output_tokens = 4096
 
@@ -13,15 +13,15 @@ default_max_output_tokens = 4096
 url = "redis://127.0.0.1:6379"
 
 # Optional: Postgres keeps every config version and the audit log (otherwise both stay in Redis).
-# The URL is read from this env var, e.g. TL_DATABASE_URL=postgres://tokenlens:...@localhost/tokenlens
+# The URL is read from this env var, e.g. TOKENREIN_DATABASE_URL=postgres://tokenrein:...@localhost/tokenrein
 # [database]
-# url_env = "TL_DATABASE_URL"
+# url_env = "TOKENREIN_DATABASE_URL"
 # max_connections = 10
 
 # Optional: people sign in with their own accounts (needs the database). public_url is the
 # dashboard's address as people reach it; single sign-on sends them back there.
 # [auth]
-# public_url = "https://tokenlens.example.com"
+# public_url = "https://tokenrein.example.com"
 # session_hours = 12
 # idle_minutes = 120
 # password_login = true
@@ -55,5 +55,5 @@ max_run_usd = 10.0
 
 [[orgs.projects]]
 id = "support-bot"
-# sha256 of the dev-only key "tl_dev_support_bot_key_change_me"; never use it outside local dev.
-virtual_key_hashes = ["efecd1d2d2c5a6c4f93f91ce03f782928bd1301c1a243ef8894fa84e868b285e"]
+# sha256 of the dev-only key "tr_dev_support_bot_key_change_me"; never use it outside local dev.
+virtual_key_hashes = ["9cbe3babaad4beb8958eb61b5459917880673dc29dec664c1b40d6a689b2b55a"]

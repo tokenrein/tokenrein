@@ -1,20 +1,20 @@
 use std::net::SocketAddr;
 
 use anyhow::{Context, Result};
-use tokenlens_proxy::{admin, build_state, config, control, proxy, spawn_sweeper};
+use tokenrein::{admin, build_state, config, control, proxy, spawn_sweeper};
 use tracing_subscriber::EnvFilter;
 
 const USAGE: &str = "usage:
-  tokenlens-proxy               run the proxy (config path from TL_CONFIG, default config/dev.toml)
-  tokenlens-proxy gen-key       print a new virtual key and the sha256 hash to put in config
-  tokenlens-proxy hash-key KEY  print the sha256 hash of an existing virtual key
-  tokenlens-proxy create-owner EMAIL
+  tokenrein               run the proxy (config path from TOKENREIN_CONFIG, default config/dev.toml)
+  tokenrein gen-key       print a new virtual key and the sha256 hash to put in config
+  tokenrein hash-key KEY  print the sha256 hash of an existing virtual key
+  tokenrein create-owner EMAIL
                                 make EMAIL an instance admin and print a one-time link to set
                                 their password (needs the database URL; same config as the proxy)
-  tokenlens-proxy rotate-secrets-key
+  tokenrein rotate-secrets-key
                                 re-encrypt provider keys saved from the dashboard from
-                                TL_SECRETS_KEY_PREVIOUS (old) to TL_SECRETS_KEY (new)
-  tokenlens-proxy probe URL...  exit 0 if every URL answers 2xx (container healthchecks)
+                                TOKENREIN_SECRETS_KEY_PREVIOUS (old) to TOKENREIN_SECRETS_KEY (new)
+  tokenrein probe URL...  exit 0 if every URL answers 2xx (container healthchecks)
 
 Any environment variable can also be read from a file named by <NAME>_FILE.";
 
@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
         }
         Some("rotate-secrets-key") => {
             let rt = config::Resolved::load(&config_path(), config::process_env)?;
-            let resealed = tokenlens_proxy::rotate_secrets_key(rt).await?;
+            let resealed = tokenrein::rotate_secrets_key(rt).await?;
             if resealed.is_empty() {
                 println!("nothing to do: every saved provider key already uses the current key");
             } else {
@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
             }
             return Ok(());
         }
-        Some("probe") => return tokenlens_proxy::probe(&args[2..]).await,
+        Some("probe") => return tokenrein::probe(&args[2..]).await,
         Some("help" | "--help" | "-h") => {
             println!("{USAGE}");
             return Ok(());
@@ -88,7 +88,7 @@ async fn main() -> Result<()> {
         tracing::warn!(
             env = %rt.cfg.database.url_env,
             "no database: config history and the audit log are kept in Redis only (fine for \
-             trying TokenLens out; set a Postgres URL for production)"
+             trying Tokenrein out; set a Postgres URL for production)"
         );
     }
     let state = build_state(rt).await?;
@@ -107,7 +107,7 @@ async fn main() -> Result<()> {
     let admin_listener = tokio::net::TcpListener::bind(admin_listen)
         .await
         .with_context(|| format!("binding {admin_listen}"))?;
-    tracing::info!(%listen, %admin_listen, config = %path, dashboard = %format!("http://{admin_listen}/"), "tokenlens proxy started");
+    tracing::info!(%listen, %admin_listen, config = %path, dashboard = %format!("http://{admin_listen}/"), "tokenrein proxy started");
 
     let proxy_server = axum::serve(proxy_listener, proxy::router(state.clone()))
         .with_graceful_shutdown(shutdown_signal());
@@ -123,7 +123,7 @@ async fn main() -> Result<()> {
 
 /// Make `email` an instance admin and print a link to set their password.
 async fn create_owner(email: &str) -> Result<()> {
-    use tokenlens_proxy::auth::store;
+    use tokenrein::auth::store;
     let email = email.trim().to_lowercase();
     anyhow::ensure!(
         email.contains('@') && !email.contains(char::is_whitespace),
@@ -136,7 +136,7 @@ async fn create_owner(email: &str) -> Result<()> {
             rt.cfg.database.url_env
         )
     })?;
-    let db = tokenlens_proxy::db::Db::connect(&url, 2).await?;
+    let db = tokenrein::db::Db::connect(&url, 2).await?;
     let pool = db.pool();
     let (id, created) = store::upsert_user(pool, &email, "").await?;
     store::set_instance_admin(pool, id, true).await?;
@@ -158,7 +158,7 @@ async fn create_owner(email: &str) -> Result<()> {
 }
 
 fn config_path() -> String {
-    std::env::var("TL_CONFIG").unwrap_or_else(|_| "config/dev.toml".into())
+    config::process_env("TOKENREIN_CONFIG").unwrap_or_else(|| "config/dev.toml".into())
 }
 
 async fn shutdown_signal() {

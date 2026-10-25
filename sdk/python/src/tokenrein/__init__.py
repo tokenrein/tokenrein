@@ -1,4 +1,4 @@
-"""TokenLens: runtime spend guardrails for AI agents."""
+"""Tokenrein: runtime spend guardrails for AI agents."""
 
 from . import guard
 from .guard import flush
@@ -9,7 +9,7 @@ from .errors import (
     RunKilled,
     RunPaused,
     RunStopped,
-    TokenLensError,
+    TokenreinError,
 )
 
 __version__ = "0.1.0"
@@ -19,7 +19,7 @@ __all__ = [
     "flush",
     "Run",
     "current_run",
-    "TokenLensError",
+    "TokenreinError",
     "BudgetExceeded",
     "LocalCapExceeded",
     "RunStopped",

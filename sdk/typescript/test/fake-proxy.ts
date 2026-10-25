@@ -1,4 +1,4 @@
-/** A fake TokenLens proxy that records request headers and can answer with proxy errors. */
+/** A fake Tokenrein proxy that records request headers and can answer with proxy errors. */
 
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -51,7 +51,7 @@ export class FakeProxy {
         const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {};
         const path = req.url ?? '';
         this.requests.push({ path, headers: req.headers, body });
-        const runId = (req.headers['x-tl-run-id'] as string | undefined) ?? 'req_generated';
+        const runId = (req.headers['x-tr-run-id'] as string | undefined) ?? 'req_generated';
         const reply = () => {
           const status = this.error ? this.error.status : 200;
           const payload = this.error
@@ -61,7 +61,7 @@ export class FakeProxy {
               : OPENAI_OK;
           res.writeHead(status, {
             'content-type': 'application/json',
-            'x-tl-run-id': runId,
+            'x-tr-run-id': runId,
             'retry-after-ms': '1',
           });
           res.end(JSON.stringify(payload));

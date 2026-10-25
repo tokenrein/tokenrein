@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
-use tokenlens_proxy::config::Resolved;
-use tokenlens_proxy::{AppState, admin, build_state, control};
+use tokenrein::config::Resolved;
+use tokenrein::{AppState, admin, build_state, control};
 
 const ADMIN_TOKEN: &str = "admin-token-0123456789";
 const SECRETS_KEY: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";

@@ -1,4 +1,4 @@
-# --- Shared by the TokenLens connect scripts (inserted where each script is served) ---
+# --- Shared by the Tokenrein connect scripts (inserted where each script is served) ---
 
 import argparse
 import json
@@ -11,40 +11,42 @@ import time
 import urllib.error
 import urllib.request
 
-# The hook every command-hook agent runs; see connect_hook.py in the TokenLens source.
-HOOK_PY = r'''@tokenlens-hook@'''
+# The hook every command-hook agent runs; see connect_hook.py in the Tokenrein source.
+HOOK_PY = r'''@tokenrein-hook@'''
 NAME_RE = re.compile(r"^[A-Za-z0-9._@+-]{1,128}$")
 
 
-def tokenlens_dir():
-    return os.path.join(os.path.expanduser("~"), ".tokenlens")
+def tokenrein_dir():
+    return os.path.join(os.path.expanduser("~"), ".tokenrein")
 
 
 def hook_command(tool):
     """The command the agent runs; absolute paths, because hooks may run with a bare PATH."""
-    script = os.path.join(tokenlens_dir(), "hook.py")
+    script = os.path.join(tokenrein_dir(), "hook.py")
     return "%s %s %s" % (shlex.quote(sys.executable or "python3"), shlex.quote(script), tool)
 
 
 def is_our_command(cmd):
-    return isinstance(cmd, str) and "/.tokenlens/hook.py" in cmd
+    # Installs made before the rename used ~/.tokenlens (pre-rename name).
+    old = "/.tokenlens/hook.py"  # pre-rename name
+    return isinstance(cmd, str) and ("/.tokenrein/hook.py" in cmd or old in cmd)
 
 
 def base_args(description, tool, agent):
     p = argparse.ArgumentParser(description=description)
-    p.add_argument("--key", help="TokenLens key (tl_...) from the dashboard")
-    p.add_argument("--url", default="http://127.0.0.1:8787", help="TokenLens URL (the :8787 listener)")
-    p.add_argument("--agent", default=agent, help="agent name shown in TokenLens")
+    p.add_argument("--key", help="Tokenrein key (tr_...) from the dashboard")
+    p.add_argument("--url", default="http://127.0.0.1:8787", help="Tokenrein URL (the :8787 listener)")
+    p.add_argument("--agent", default=agent, help="agent name shown in Tokenrein")
     p.add_argument("--user", help="optional user name or email to attribute spend to")
-    p.add_argument("--remove", action="store_true", help="undo: remove TokenLens from %s" % tool)
+    p.add_argument("--remove", action="store_true", help="undo: remove Tokenrein from %s" % tool)
     p.add_argument("--skip-check", action="store_true", help="don't test the key first")
     return p
 
 
 def validate(p, a):
     """Check --key/--agent/--user and the key itself. Returns the URL without a trailing slash."""
-    if not a.key or not a.key.startswith("tl_") or not re.match(r"^[A-Za-z0-9_-]+$", a.key):
-        p.error("--key tl_... is required (create one in the TokenLens dashboard)")
+    if not a.key or not a.key.startswith(("tr_", "tl_")) or not re.match(r"^[A-Za-z0-9_-]+$", a.key):
+        p.error("--key tr_... is required (create one in the Tokenrein dashboard)")
     if not NAME_RE.match(a.agent):
         p.error("--agent must be 1-128 letters, digits, '.', '_', '-', '@' or '+'")
     if a.user and not NAME_RE.match(a.user):
@@ -71,9 +73,9 @@ def check_key(url, key):
         with urllib.request.urlopen(req, timeout=5) as r:
             return r.status == 200, ""
     except urllib.error.HTTPError as e:
-        return False, "TokenLens rejected the key (HTTP %d)" % e.code
+        return False, "Tokenrein rejected the key (HTTP %d)" % e.code
     except OSError as e:
-        return False, "cannot reach TokenLens at %s (%s)" % (url, e)
+        return False, "cannot reach Tokenrein at %s (%s)" % (url, e)
 
 
 def read_text(path):
@@ -103,10 +105,10 @@ def backup(path):
     if not os.path.exists(path):
         return None
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    copy = "%s.bak-tokenlens-%s" % (path, stamp)
+    copy = "%s.bak-tokenrein-%s" % (path, stamp)
     n = 1
     while os.path.exists(copy):
-        copy = "%s.bak-tokenlens-%s-%d" % (path, stamp, n)
+        copy = "%s.bak-tokenrein-%s-%d" % (path, stamp, n)
         n += 1
     shutil.copy2(path, copy)
     print("Backup: " + copy)
@@ -117,7 +119,7 @@ def write_text(path, text, mode=0o600):
     """Replace the file atomically, after saving a backup of it."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     backup(path)
-    tmp = path + ".tmp-tokenlens"
+    tmp = path + ".tmp-tokenrein"
     with open(tmp, "w") as f:
         f.write(text)
     os.chmod(tmp, mode)
@@ -129,8 +131,8 @@ def write_json(path, doc):
 
 
 def install_hook(tool, url, key, agent, user):
-    """Write ~/.tokenlens/hook.py and the tool's settings for it (URL and key, owner-only)."""
-    d = tokenlens_dir()
+    """Write ~/.tokenrein/hook.py and the tool's settings for it (URL and key, owner-only)."""
+    d = tokenrein_dir()
     os.makedirs(d, mode=0o700, exist_ok=True)
     with open(os.path.join(d, "hook.py"), "w") as f:
         f.write(HOOK_PY)
@@ -146,7 +148,7 @@ def install_hook(tool, url, key, agent, user):
 
 def remove_hook(tool):
     """Delete the tool's hook settings, and the hook once no tool uses it."""
-    d = tokenlens_dir()
+    d = tokenrein_dir()
     removed = False
     path = os.path.join(d, tool + ".json")
     if os.path.exists(path):

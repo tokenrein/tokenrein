@@ -1,15 +1,15 @@
-// TokenLens dashboard: state, formatting helpers and the admin API client.
+// Tokenrein dashboard: state, formatting helpers and the admin API client.
 "use strict";
 
-const TOKEN_KEY = "tokenlens.admin_token";
-const ORG_KEY = "tokenlens.org";
-const TAB_KEY = "tokenlens.tab";
+const TOKEN_KEY = "tokenrein.admin_token";
+const ORG_KEY = "tokenrein.org";
+const TAB_KEY = "tokenrein.tab";
 const MODES = { enforce: "Enforce: block the call", check: "Check: allow and warn", skip: "Skip: track spend only" };
 const POLICIES = [
   ["org_monthly", "Org per month", "All spend in this org, per calendar month (UTC)."],
   ["project_monthly", "Project per month", "Each project, per calendar month (UTC)."],
   ["agent_daily", "Agent per day", "Each agent name within a project, per day (UTC)."],
-  ["run", "Run (default)", "Each run, unless the caller sends x-tl-run-budget-usd. Fixed when a run starts."],
+  ["run", "Run (default)", "Each run, unless the caller sends x-tr-run-budget-usd. Fixed when a run starts."],
 ];
 
 const S = { token: null, org: null, overview: null, runs: [], agents: [], events: [], tab: "overview", timer: null, editing: false,

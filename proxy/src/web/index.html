@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TokenLens Dashboard</title>
+<title>Tokenrein Dashboard</title>
 <link rel="stylesheet" href="/assets/app.css">
 <script src="/assets/js/core.js" defer></script>
 <script src="/assets/js/overview.js" defer></script>
@@ -20,8 +20,8 @@
 <body>
 
 <section id="login" class="card login hide" aria-labelledby="login-title">
-  <div class="brand"><span class="dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></span>TokenLens</div>
-  <h1 id="login-title">Sign in to TokenLens</h1>
+  <div class="brand"><span class="dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></span>Tokenrein</div>
+  <h1 id="login-title">Sign in to Tokenrein</h1>
   <div class="err" id="login-err" role="alert"></div>
   <a class="btn primary wide hide" id="sso-btn" href="/auth/sso/start">Sign in with single sign-on</a>
   <div class="or hide" id="login-or"><span>or</span></div>
@@ -31,14 +31,14 @@
     <button class="btn primary" type="submit">Sign in</button>
   </form>
   <form id="setup-form" class="hide">
-    <p class="sub">Choose a password for your TokenLens account: at least 12 characters, not your email.</p>
+    <p class="sub">Choose a password for your Tokenrein account: at least 12 characters, not your email.</p>
     <label class="field"><span>Your name <span class="muted">(optional)</span></span><input id="setup-name" type="text" autocomplete="name"></label>
     <label class="field">New password <input id="setup-password" type="password" autocomplete="new-password" minlength="12" required></label>
     <button class="btn primary" type="submit">Set password and sign in</button>
   </form>
   <details class="more hide" id="token-login"><summary>Use the admin token</summary>
     <form id="login-form">
-      <p class="help">The value of <span class="mono">TL_ADMIN_TOKEN</span> on the proxy. It stays in this browser tab only.</p>
+      <p class="help">The value of <span class="mono">TOKENREIN_ADMIN_TOKEN</span> on the proxy. It stays in this browser tab only.</p>
       <label class="field">Admin token <input id="token" type="password" autocomplete="off" required></label>
       <button class="btn" type="submit">Sign in with the token</button>
     </form>
@@ -49,7 +49,7 @@
 <div id="app" class="hide shell">
   <aside class="side">
     <div class="side-top">
-      <div class="brand"><span class="dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></span>TokenLens</div>
+      <div class="brand"><span class="dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></span>Tokenrein</div>
       <label class="org-pick">Org
         <select id="org" aria-label="Organisation"></select>
       </label>
@@ -115,7 +115,7 @@
 
     <section data-view="spend" class="hide">
       <h1>Spend</h1>
-      <p class="sub">Cost of requests through the proxy, by day and broken down by model, user, project and agent. Users come from the <span class="mono">x-tl-user</span> header (or the SDKs' <span class="mono">user</span> option).</p>
+      <p class="sub">Cost of requests through the proxy, by day and broken down by model, user, project and agent. Users come from the <span class="mono">x-tr-user</span> header (or the SDKs' <span class="mono">user</span> option).</p>
       <div class="card">
         <div class="card-h"><h2 id="spend-title">Cost per day</h2>
           <div class="toolbar">
@@ -139,7 +139,7 @@
 
     <section data-view="models" class="hide">
       <h1>Models &amp; prices</h1>
-      <p class="sub" id="models-sub">Prices TokenLens uses to turn tokens into dollars, per million tokens.</p>
+      <p class="sub" id="models-sub">Prices Tokenrein uses to turn tokens into dollars, per million tokens.</p>
       <div id="models"></div>
     </section>
 

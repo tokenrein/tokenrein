@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Connect OpenAI Codex CLI on this machine to TokenLens (or disconnect it).
+"""Connect OpenAI Codex CLI on this machine to Tokenrein (or disconnect it).
 
 Turns on Codex's built-in OpenTelemetry log export in ~/.codex/config.toml, so every session
-reports its model calls (model, tokens) to TokenLens, and adds command hooks to
+reports its model calls (model, tokens) to Tokenrein, and adds command hooks to
 ~/.codex/hooks.json that stop the next prompt or tool call when an admin pauses the run or an
-enforced budget is used up. The hooks run ~/.tokenlens/hook.py, which this script writes.
+enforced budget is used up. The hooks run ~/.tokenrein/hook.py, which this script writes.
 Both Codex files are backed up first. Standard library only.
 
-    python3 codex.py --key tl_... --url http://127.0.0.1:8787
+    python3 codex.py --key tr_... --url http://127.0.0.1:8787
     python3 codex.py --remove
 """
 
-# @tokenlens-common@
+# @tokenrein-common@
 
 TOOL = "codex"
 HOOK_EVENTS = ["UserPromptSubmit", "PreToolUse", "SessionEnd"]
-BEGIN = "# >>> TokenLens (added by the TokenLens connect script; undo with --remove)"
-END = "# <<< TokenLens"
+BEGIN = "# >>> Tokenrein (added by the Tokenrein connect script; undo with --remove)"
+END = "# <<< Tokenrein"
 OTEL_TABLE = re.compile(r"^\s*(\[\[?\s*otel\s*[\].]|otel\s*[.=])", re.M)
 
 
@@ -43,15 +43,15 @@ def toml_str(s):
 
 
 def otel_block(url, key, agent, user):
-    headers = [("Authorization", "Bearer " + key), ("x-tl-agent", agent)]
+    headers = [("Authorization", "Bearer " + key), ("x-tr-agent", agent)]
     if user:
-        headers.append(("x-tl-user", user))
+        headers.append(("x-tr-user", user))
     h = ", ".join("%s = %s" % (toml_str(k), toml_str(v)) for k, v in headers)
     return "\n".join(
         [
             BEGIN,
             "[otel]",
-            'environment = "tokenlens"',
+            'environment = "tokenrein"',
             "log_user_prompt = false",
             "exporter = { otlp-http = { endpoint = %s, protocol = \"json\", headers = { %s } } }"
             % (toml_str(url + "/v1/otel/v1/logs"), h),
@@ -88,9 +88,9 @@ def main():
             changed = True
         changed = remove_hook(TOOL) or changed
         if not changed:
-            print("TokenLens is not configured for Codex in %s; nothing to do." % home)
+            print("Tokenrein is not configured for Codex in %s; nothing to do." % home)
         else:
-            print("Removed TokenLens from Codex. New Codex sessions won't report to it.")
+            print("Removed Tokenrein from Codex. New Codex sessions won't report to it.")
         return 0
 
     url = validate(p, a)
@@ -98,7 +98,7 @@ def main():
     if OTEL_TABLE.search(base):
         print(
             "Not changed: %s already has an [otel] section (another OpenTelemetry collector). "
-            "Codex exports logs to one place; remove that section first if TokenLens should "
+            "Codex exports logs to one place; remove that section first if Tokenrein should "
             "receive them." % config_path,
             file=sys.stderr,
         )
@@ -117,8 +117,8 @@ def main():
         hooks.setdefault(event, []).append(group)
     write_json(hooks_path, hooks_doc)
 
-    print("Connected. New Codex sessions report to TokenLens at %s." % url)
-    print("Start Codex and run /hooks once to review and trust the TokenLens hooks (Codex skips new hooks until you do).")
+    print("Connected. New Codex sessions report to Tokenrein at %s." % url)
+    print("Start Codex and run /hooks once to review and trust the Tokenrein hooks (Codex skips new hooks until you do).")
     print("Each session shows up as run codex-<session id>.")
     print("Undo: run this script again with --remove (or restore the backups above).")
     return 0

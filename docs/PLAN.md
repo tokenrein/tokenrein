@@ -1,6 +1,6 @@
-# TokenLens — Runtime spend guardrails for AI agents
+# Tokenrein — Runtime spend guardrails for AI agents
 
-Implementation plan + go-to-market. Working name "TokenLens" — rename before
+Implementation plan + go-to-market. Working name "Tokenrein" — rename before
 launch (run a trademark + domain check first).
 
 **One-line product:** a drop-in proxy that enforces per-run budgets and kills
@@ -111,8 +111,8 @@ Org ──▶ Project ──▶ Environment (prod/staging) ──▶ Agent ─�
             policies inherit downward; a lower level may override
 ```
 
-- **Run** = one task execution. Identified by `X-TL-Run-Id` (SDK sets it);
-  sub-agents send `X-TL-Parent-Run-Id`, forming a run tree. Budgets on a run
+- **Run** = one task execution. Identified by `X-TR-Run-Id` (SDK sets it);
+  sub-agents send `X-TR-Parent-Run-Id`, forming a run tree. Budgets on a run
   cover its whole subtree.
 - **Policy** = `{scope, kind, mode, params, actions}`. Kinds:
   `budget.run`, `budget.agent.daily`, `budget.project.monthly`,
@@ -127,8 +127,8 @@ Org ──▶ Project ──▶ Environment (prod/staging) ──▶ Agent ─�
 
 ```
  Agent (any framework, any language)
-   │  base_url → https://proxy.tokenlens.dev   api_key → tl_live_… (virtual key)
-   │  headers: X-TL-Run-Id, X-TL-Parent-Run-Id, X-TL-Agent, X-TL-Project
+   │  base_url → https://proxy.tokenrein.dev   api_key → tr_live_… (virtual key)
+   │  headers: X-TR-Run-Id, X-TR-Parent-Run-Id, X-TR-Agent, X-TR-Project
    ▼
 ┌───────────────────── DATA PLANE (Rust, stateless, multi-AZ) ───────────────────┐
 │ 1 authenticate virtual key  → org config from in-memory cache (pushed on change)│
@@ -194,7 +194,7 @@ provider-shaped error event.
 **Responses that block must not trigger SDK auto-retries.** OpenAI and
 Anthropic SDKs retry 429s automatically. Use **402** (budget exhausted) and
 **403** (run paused/killed) with a provider-shaped JSON error body
-(`type: "tokenlens_budget_exceeded" | "tokenlens_run_paused"`, `run_id`,
+(`type: "tokenrein_budget_exceeded" | "tokenrein_run_paused"`, `run_id`,
 `resume_url`) so SDKs raise a clean exception. Throttle = server-side delay,
 not an error.
 
@@ -212,7 +212,7 @@ Lua call where possible.
 | `loop.no_progress` (Phase 3) | tool results unchanged across iterations while context grows | 4 consecutive iterations |
 | `loop.near_duplicate` (Phase 3) | SimHash of last user/tool message, Hamming ≤ 3 | ≥6× in 10 min |
 
-Action ladder per policy: **warn** (response header `X-TL-Warning` + alert) →
+Action ladder per policy: **warn** (response header `X-TR-Warning` + alert) →
 **throttle** (token bucket delay) → **pause** (all calls in the run tree get 403
 until a human resumes) → **kill** (permanent 403 for that run).
 
@@ -283,7 +283,7 @@ month, TTL by plan.
 Python and TypeScript, open source (Apache-2.0):
 
 ```python
-from tokenlens import guard
+from tokenrein import guard
 client = guard.openai(OpenAI(), agent="support-bot")   # sets base_url + key
 with guard.run("ticket-4812", budget_usd=5):            # run id + run budget
     agent.invoke(...)
@@ -370,7 +370,7 @@ Marketplace; natural-language policies; Turbot endpoint-policy integration.
 ### Repository layout
 
 ```
-tokenlens/
+tokenrein/
   proxy/           Rust data plane
   detector/        Rust window detectors + ingest worker
   control-plane/   Next.js dashboard + API + Stripe (evolves from gateway/)
@@ -413,7 +413,7 @@ beta — our Free tier must be genuinely useful to compete with "free".
   3. *We never store your prompts.* (privacy)
   4. *Any framework, any language, two lines.* (ease)
 - **Proof asset:** a 60-second video — an agent starts looping, spend ticks up,
-  TokenLens pauses it, Slack asks "Resume / Raise / Kill", one click.
+  Tokenrein pauses it, Slack asks "Resume / Raise / Kill", one click.
 
 ### 9.2 Distribution engine (the Turbot playbook, scaled down)
 1. **Open source the SDK + local guard** (Apache-2.0): useful on its own
@@ -459,7 +459,7 @@ once, and reply to every comment. Don't post the same text in multiple places.
 
 | Week | Where | What to post / do | Goal |
 |---|---|---|---|
-| 7 (Tue/Wed, 8–9am PT) | **Hacker News** | `Show HN: TokenLens – per-run budgets and a kill switch for looping AI agents`. First comment: why a proxy, how the ledger avoids overshoot, what's open source, honest limits, free tier. Stay in comments all day | Biggest single spike |
+| 7 (Tue/Wed, 8–9am PT) | **Hacker News** | `Show HN: Tokenrein – per-run budgets and a kill switch for looping AI agents`. First comment: why a proxy, how the ledger avoids overshoot, what's open source, honest limits, free tier. Stay in comments all day | Biggest single spike |
 | 7 (same day) | X, LinkedIn, waitlist email | "We're live" thread + demo video; email waitlist with free-tier link | Convert waitlist |
 | 8 (Tue, 12:01am PT) | **Product Hunt** | Launch page with demo video, 3 screenshots, maker comment telling the $47k story; tell your network you launched (ask for feedback, not votes) | Second spike, backlinks |
 | 8 | r/AI_Agents, r/LangChain, r/SaaS, r/OpenAI, r/ClaudeAI | One tailored post per sub (respect showcase flair/days): technical for AI subs, founder story for r/SaaS | Targeted signups |

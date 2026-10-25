@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
-# The tokenlens-proxy binary on a distroless, non-root runtime image.
-#   podman build -t tokenlens:dev .     (or docker build)
+# The tokenrein binary on a distroless, non-root runtime image.
+#   podman build -t tokenrein:dev .     (or docker build)
 
 ARG RUST_VERSION=1.96
 
@@ -12,23 +12,23 @@ COPY proxy/Cargo.toml proxy/Cargo.toml
 RUN mkdir -p proxy/src \
     && echo 'fn main() {}' > proxy/src/main.rs \
     && touch proxy/src/lib.rs \
-    && cargo build --release --locked -p tokenlens-proxy \
-    && rm -rf proxy/src target/release/deps/tokenlens_proxy-* target/release/deps/libtokenlens_proxy-* \
-       target/release/.fingerprint/tokenlens-proxy-*
+    && cargo build --release --locked -p tokenrein \
+    && rm -rf proxy/src target/release/deps/tokenrein-* target/release/deps/libtokenrein-* \
+       target/release/.fingerprint/tokenrein-*
 COPY proxy proxy
-RUN cargo build --release --locked -p tokenlens-proxy \
-    && install -D target/release/tokenlens-proxy /out/tokenlens-proxy
+RUN cargo build --release --locked -p tokenrein \
+    && install -D target/release/tokenrein /out/tokenrein
 
 FROM gcr.io/distroless/cc-debian12:nonroot
-LABEL org.opencontainers.image.title="tokenlens-proxy" \
+LABEL org.opencontainers.image.title="tokenrein" \
       org.opencontainers.image.description="Runtime spend guardrails for AI agents" \
-      org.opencontainers.image.source="https://github.com/geektuhin123/tokenlens" \
+      org.opencontainers.image.source="https://github.com/geektuhin123/tokenrein" \
       org.opencontainers.image.licenses="Apache-2.0"
-COPY --from=build /out/tokenlens-proxy /usr/local/bin/tokenlens-proxy
-COPY deploy/tokenlens.toml /etc/tokenlens/tokenlens.toml
-ENV TL_CONFIG=/etc/tokenlens/tokenlens.toml \
+COPY --from=build /out/tokenrein /usr/local/bin/tokenrein
+COPY deploy/tokenrein.toml /etc/tokenrein/tokenrein.toml
+ENV TOKENREIN_CONFIG=/etc/tokenrein/tokenrein.toml \
     RUST_LOG=info
 # 8787: the proxy (agents and SDKs). 8788: admin API, dashboard, /metrics, /readyz.
 EXPOSE 8787 8788
 USER nonroot:nonroot
-ENTRYPOINT ["/usr/local/bin/tokenlens-proxy"]
+ENTRYPOINT ["/usr/local/bin/tokenrein"]

@@ -1,4 +1,4 @@
-// TokenLens dashboard: Connect page.
+// Tokenrein dashboard: Connect page.
 "use strict";
 
 // --- Connect ---
@@ -14,7 +14,7 @@ const AGENTS = [
       "Works with API keys and Claude subscriptions; nothing to install"] },
   { id: "codex", name: "OpenAI Codex CLI", script: "codex", prefix: "codex-", tag: "No code",
     files: "~/.codex/config.toml and ~/.codex/hooks.json",
-    after: "Then start Codex and run <span class=\"mono\">/hooks</span> once to trust the TokenLens hooks; Codex skips new hooks until you do.",
+    after: "Then start Codex and run <span class=\"mono\">/hooks</span> once to trust the Tokenrein hooks; Codex skips new hooks until you do.",
     checks: ["Every model call from its OpenTelemetry logs: model, tokens (cached input priced as such), user",
       "Stops the next prompt or tool call when a run is paused or an enforced limit is used up",
       "Priced at OpenAI's API rates, also for ChatGPT sign-ins"] },
@@ -39,35 +39,35 @@ function connectCommand(a, key) {
 }
 function claudeCodeSettings(key) {
   const hook = { type: "http", url: `${proxyUrl()}/v1/hooks/claude-code`, timeout: 5,
-    headers: { Authorization: "Bearer $TOKENLENS_API_KEY", "x-tl-agent": "claude-code" }, allowedEnvVars: ["TOKENLENS_API_KEY"] };
+    headers: { Authorization: "Bearer $TOKENREIN_API_KEY", "x-tr-agent": "claude-code" }, allowedEnvVars: ["TOKENREIN_API_KEY"] };
   return JSON.stringify({
     env: {
       CLAUDE_CODE_ENABLE_TELEMETRY: "1", OTEL_LOGS_EXPORTER: "otlp", OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: "http/json",
       OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: `${proxyUrl()}/v1/otel/v1/logs`,
-      OTEL_EXPORTER_OTLP_LOGS_HEADERS: `Authorization=Bearer ${key},x-tl-agent=claude-code`,
-      OTEL_LOGS_EXPORT_INTERVAL: "2000", TOKENLENS_API_KEY: key,
+      OTEL_EXPORTER_OTLP_LOGS_HEADERS: `Authorization=Bearer ${key},x-tr-agent=claude-code`,
+      OTEL_LOGS_EXPORT_INTERVAL: "2000", TOKENREIN_API_KEY: key,
     },
     hooks: Object.fromEntries(["UserPromptSubmit", "PreToolUse", "SubagentStart", "Stop", "SessionEnd"].map(e =>
       [e, [e === "PreToolUse" ? { matcher: "*", hooks: [hook] } : { hooks: [hook] }]])),
   }, null, 2);
 }
 function sdkSnippet(kind) {
-  if (kind === "python") return `pip install "tokenlens[anthropic]"
-export TOKENLENS_API_KEY=tl_…        # a key for your project
-export TOKENLENS_BASE_URL=${proxyUrl()}
+  if (kind === "python") return `pip install "tokenrein[anthropic]"
+export TOKENREIN_API_KEY=tr_…        # a key for your project
+export TOKENREIN_BASE_URL=${proxyUrl()}
 
 from anthropic import Anthropic
-from tokenlens import guard
+from tokenrein import guard
 
 client = guard.anthropic(Anthropic(), agent="support-bot")   # still calls Anthropic directly
 with guard.run("ticket-4812", budget_usd=5):                 # one task = one run
     client.messages.create(model="claude-sonnet-5-5", max_tokens=1024, messages=[...])`;
-  return `npm install @tokenlens/sdk @anthropic-ai/sdk
-export TOKENLENS_API_KEY=tl_…        # a key for your project
-export TOKENLENS_BASE_URL=${proxyUrl()}
+  return `npm install @tokenrein/sdk @anthropic-ai/sdk
+export TOKENREIN_API_KEY=tr_…        # a key for your project
+export TOKENREIN_BASE_URL=${proxyUrl()}
 
 import Anthropic from '@anthropic-ai/sdk';
-import { guard } from '@tokenlens/sdk';
+import { guard } from '@tokenrein/sdk';
 
 const client = guard.anthropic(new Anthropic(), { agent: 'support-bot' });  // calls Anthropic directly
 await guard.run({ runId: 'ticket-4812', budgetUsd: 5 }, () =>
@@ -168,7 +168,7 @@ function renderConnect() {
       <div class="card-b">
         <ul class="checks">
           <li>Wrap your existing OpenAI or Anthropic client in one line</li>
-          <li>Calls go straight to the provider; TokenLens only receives usage, never prompts</li>
+          <li>Calls go straight to the provider; Tokenrein only receives usage, never prompts</li>
           <li>Works with any OpenAI-compatible provider: Gemini, Mistral, Groq, DeepSeek, OpenRouter, Ollama…</li>
         </ul>
         <div class="snip-tabs" role="tablist">${[["python", "Python"], ["typescript", "TypeScript"]].map(([k, l]) => `<button role="tab" data-sdk-snip="${k}" aria-selected="${S.sdkSnip === k}">${l}</button>`).join("")}</div>
@@ -184,8 +184,8 @@ function renderConnect() {
           <li>Cline, Aider, Continue, OpenCode, LibreChat, n8n, or your own HTTP calls</li>
           <li>Every call is checked against budgets <b>before</b> it is sent, exact even under bursts</li>
         </ul>
-        ${cmdBlock(`Base URL:  ${proxyUrl()}      (OpenAI-style tools: ${proxyUrl()}/v1)\nAPI key:   tl_…  (a TokenLens key, not your provider key)`)}
-        <p class="help" style="margin:0">TokenLens forwards to OpenAI or Anthropic with the provider keys saved under Keys &amp; limits.</p>
+        ${cmdBlock(`Base URL:  ${proxyUrl()}      (OpenAI-style tools: ${proxyUrl()}/v1)\nAPI key:   tr_…  (a Tokenrein key, not your provider key)`)}
+        <p class="help" style="margin:0">Tokenrein forwards to OpenAI or Anthropic with the provider keys saved under Keys &amp; limits.</p>
       </div>
     </div>
   </div>`;

@@ -235,7 +235,7 @@ pub async fn password_hash(pool: &PgPool, user_id: i64) -> Result<Option<String>
 // --- Setup links (set or reset a password) ---
 
 pub async fn create_setup_token(pool: &PgPool, user_id: i64, hours: u32) -> Result<String> {
-    let token = random_token("tls_");
+    let token = random_token("trs_");
     sqlx::query(
         "INSERT INTO setup_tokens (token_hash, user_id, expires_at) \
          VALUES ($1, $2, now() + make_interval(hours => $3))",

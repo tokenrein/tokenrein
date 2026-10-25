@@ -10,13 +10,13 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
-use tokenlens_proxy::config::Resolved;
-use tokenlens_proxy::{AppState, admin, build_state, control};
+use tokenrein::config::Resolved;
+use tokenrein::{AppState, admin, build_state, control};
 
 const ADMIN_TOKEN: &str = "admin-token-0123456789";
 const SECRETS_KEY: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 const PASSWORD: &str = "a long enough passphrase";
-const PUBLIC_URL: &str = "http://tokenlens.test";
+const PUBLIC_URL: &str = "http://tokenrein.test";
 
 fn config(redis: &str) -> String {
     format!(
@@ -111,7 +111,7 @@ impl T {
         let req = self
             .http
             .request(method, format!("{}{path}", self.url))
-            .header("cookie", format!("tl_session={}", s.cookie))
+            .header("cookie", format!("tr_session={}", s.cookie))
             .header("x-csrf-token", &s.csrf);
         self.send(req, body).await
     }
@@ -187,7 +187,7 @@ fn session_cookie(resp: &reqwest::Response) -> Option<String> {
         .get_all("set-cookie")
         .iter()
         .filter_map(|v| v.to_str().ok())
-        .find_map(|c| c.strip_prefix("tl_session="))
+        .find_map(|c| c.strip_prefix("tr_session="))
         .map(|c| c.split(';').next().unwrap().to_string())
         .filter(|c| !c.is_empty())
 }
@@ -458,7 +458,7 @@ async fn api_tokens_act_as_their_user() {
     let (status, created) = t.as_user(&sess, Method::POST, "/auth/tokens", body).await;
     assert_eq!(status, StatusCode::CREATED);
     let token = created["token"].as_str().unwrap().to_string();
-    assert!(token.starts_with("tlu_"));
+    assert!(token.starts_with("tru_"));
 
     let api = |method: Method, path: &str| {
         t.http
@@ -549,7 +549,7 @@ async fn token(
     }
     let now = chrono::Utc::now().timestamp();
     let mut claims = json!({
-        "iss": idp.url, "aud": "tokenlens-client", "sub": "user-1", "iat": now, "exp": now + 300,
+        "iss": idp.url, "aud": "tokenrein-client", "sub": "user-1", "iat": now, "exp": now + 300,
         "nonce": nonce, "email": "sam@example.com", "email_verified": true, "name": "Sam Lee",
         "groups": ["tl-admins"],
     });
@@ -622,7 +622,7 @@ async fn single_sign_on_with_group_roles() {
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
     let sso = json!({
-        "enabled": true, "label": "Acme SSO", "issuer": issuer, "client_id": "tokenlens-client",
+        "enabled": true, "label": "Acme SSO", "issuer": issuer, "client_id": "tokenrein-client",
         "client_secret": "s3cret-value", "allowed_domains": ["example.com"], "auto_create": true,
         "group_roles": [{"group": "tl-admins", "org": "acme", "role": "admin"},
                         {"group": "tl-viewers", "org": "other", "role": "viewer"}],
@@ -728,7 +728,7 @@ async fn without_a_database_only_the_admin_token_works() {
     assert_eq!(resp.status(), StatusCode::CONFLICT);
     let resp = http
         .get(format!("{url}/admin/overview"))
-        .header("cookie", "tl_session=abc")
+        .header("cookie", "tr_session=abc")
         .send()
         .await
         .unwrap();
@@ -757,14 +757,12 @@ async fn the_sso_client_secret_survives_a_secrets_key_rotation() {
         })
         .unwrap()
     };
-    let resealed = tokenlens_proxy::rotate_secrets_key(resolved(true))
-        .await
-        .unwrap();
+    let resealed = tokenrein::rotate_secrets_key(resolved(true)).await.unwrap();
     assert_eq!(resealed, ["single sign-on client secret"]);
     // With only the new key, the secret opens: nothing left to re-encrypt.
     let state = build_state(resolved(false)).await.unwrap();
     control::init(&state).await.unwrap();
-    let again = tokenlens_proxy::auth::oidc::SsoConfig::rotate_secret(&state)
+    let again = tokenrein::auth::oidc::SsoConfig::rotate_secret(&state)
         .await
         .unwrap();
     assert!(!again);

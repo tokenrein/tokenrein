@@ -1,4 +1,4 @@
-"""A fake TokenLens proxy that records request headers and can answer with proxy errors."""
+"""A fake Tokenrein proxy that records request headers and can answer with proxy errors."""
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ class FakeProxy:
                     fake.requests.append({"path": self.path, "headers": headers, "body": body})
                 if fake.delay:
                     time.sleep(fake.delay)
-                run_id = headers.get("x-tl-run-id", "req_generated")
+                run_id = headers.get("x-tr-run-id", "req_generated")
                 if fake.error is not None:
                     status, kind, message = fake.error
                     payload = proxy_error(self.path, kind, message)
@@ -72,7 +72,7 @@ class FakeProxy:
                 self.send_response(status)
                 self.send_header("content-type", "application/json")
                 self.send_header("content-length", str(len(data)))
-                self.send_header("x-tl-run-id", run_id)
+                self.send_header("x-tr-run-id", run_id)
                 self.send_header("retry-after-ms", "1")
                 self.end_headers()
                 self.wfile.write(data)
@@ -88,13 +88,21 @@ class FakeProxy:
         self.server.server_close()
 
 
+@pytest.fixture(autouse=True)
+def no_pre_rename_env(monkeypatch: pytest.MonkeyPatch):
+    """The SDK still reads the variable names used before the rename; keep a developer's own
+    settings out of the tests."""
+    for name in ("API_KEY", "BASE_URL", "MODE"):
+        monkeypatch.delenv("TOKENLENS_" + name, raising=False)  # pre-rename name
+
+
 @pytest.fixture
 def proxy(monkeypatch: pytest.MonkeyPatch):
     fake = FakeProxy()
-    monkeypatch.setenv("TOKENLENS_BASE_URL", fake.url)
-    monkeypatch.setenv("TOKENLENS_API_KEY", "tl_test_key")
+    monkeypatch.setenv("TOKENREIN_BASE_URL", fake.url)
+    monkeypatch.setenv("TOKENREIN_API_KEY", "tl_test_key")
     # These tests exercise proxy mode; direct mode has its own tests.
-    monkeypatch.setenv("TOKENLENS_MODE", "proxy")
+    monkeypatch.setenv("TOKENREIN_MODE", "proxy")
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     yield fake
     fake.close()

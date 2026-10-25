@@ -1,4 +1,4 @@
-"""Direct mode: the client calls its provider; TokenLens gets a check before and usage after."""
+"""Direct mode: the client calls its provider; Tokenrein gets a check before and usage after."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ import anthropic
 import openai
 import pytest
 
-from tokenlens import BudgetExceeded, RunPaused, guard
-from tokenlens import _direct
+from tokenrein import BudgetExceeded, RunPaused, guard
+from tokenrein import _direct
 
 CHAT = {
     "id": "c1", "object": "chat.completion", "created": 0, "model": "gpt-4o-mini",
@@ -105,7 +105,7 @@ def provider_reply(path: str, body: Dict[str, Any]):
     return (200, "text/event-stream", CHAT_STREAM) if streaming else (200, "application/json", json.dumps(CHAT).encode())
 
 
-class FakeTokenLens(Server):
+class FakeTokenrein(Server):
     def __init__(self) -> None:
         self.verdict: Dict[str, Any] = {"allowed": True}
         self.over: List[str] = []
@@ -128,10 +128,10 @@ class FakeTokenLens(Server):
 
 @pytest.fixture
 def env(monkeypatch: pytest.MonkeyPatch):
-    tl, provider = FakeTokenLens(), Server(provider_reply)
-    monkeypatch.setenv("TOKENLENS_BASE_URL", tl.url)
-    monkeypatch.setenv("TOKENLENS_API_KEY", "tl_direct_key")
-    monkeypatch.delenv("TOKENLENS_MODE", raising=False)
+    tl, provider = FakeTokenrein(), Server(provider_reply)
+    monkeypatch.setenv("TOKENREIN_BASE_URL", tl.url)
+    monkeypatch.setenv("TOKENREIN_API_KEY", "tl_direct_key")
+    monkeypatch.delenv("TOKENREIN_MODE", raising=False)
     yield tl, provider
     tl.close()
     provider.close()
@@ -140,7 +140,7 @@ def env(monkeypatch: pytest.MonkeyPatch):
 MSG = [{"role": "user", "content": "hi"}]
 
 
-def test_calls_go_to_the_provider_and_usage_to_tokenlens(env):
+def test_calls_go_to_the_provider_and_usage_to_tokenrein(env):
     tl, provider = env
     client = guard.openai(openai.OpenAI(api_key="sk-provider", base_url=provider.url + "/v1"), agent="writer", user="ana@example.com")
     with guard.run("job-1", budget_usd=2):
@@ -148,7 +148,7 @@ def test_calls_go_to_the_provider_and_usage_to_tokenlens(env):
             client.chat.completions.create(model="gpt-4o-mini", messages=MSG, max_tokens=50)
     call = provider.requests[0]
     assert call["headers"]["authorization"] == "Bearer sk-provider"
-    assert not any(h.startswith("x-tl-") for h in call["headers"])
+    assert not any(h.startswith("x-tr-") for h in call["headers"])
     check = tl.checks()[0]
     assert (check["run_id"], check["parent_run_id"], check["agent"], check["user"]) == ("job-1-sub", "job-1", "writer", "ana@example.com")
     assert (check["model"], check["max_output_tokens"]) == ("gpt-4o-mini", 50)
@@ -184,7 +184,7 @@ def test_openai_streams_ask_for_usage(env):
 def test_refused_calls_never_reach_the_provider(env):
     tl, provider = env
     client = guard.openai(openai.OpenAI(api_key="sk", base_url=provider.url + "/v1"))
-    tl.verdict = {"allowed": False, "reason": "TokenLens: the run:job-2 budget is used up", "scope": "run:job-2", "run_id": "job-2"}
+    tl.verdict = {"allowed": False, "reason": "Tokenrein: the run:job-2 budget is used up", "scope": "run:job-2", "run_id": "job-2"}
     with guard.run("job-2"):
         with pytest.raises(BudgetExceeded) as e:
             client.chat.completions.create(model="gpt-4o-mini", messages=MSG)
@@ -208,7 +208,7 @@ def test_without_checks_reported_overruns_stop_the_run(env):
     assert len(provider.requests) == 1
 
 
-def test_tokenlens_down_never_breaks_calls(env, monkeypatch):
+def test_tokenrein_down_never_breaks_calls(env, monkeypatch):
     tl, provider = env
     tl.close()
     client = guard.openai(openai.OpenAI(api_key="sk", base_url=provider.url + "/v1"), api_key="tl_other")

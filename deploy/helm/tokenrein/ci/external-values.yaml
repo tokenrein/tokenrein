@@ -1,14 +1,14 @@
 # helm lint / template check: external Redis and Postgres, secrets from an existing Secret,
 # mounted as files, with autoscaling and a ServiceMonitor.
 secrets:
-  existingSecret: tokenlens-secrets
+  existingSecret: tokenrein-secrets
   mountAsFiles: true
 providerKeys:
-  existingSecret: tokenlens-provider-keys
+  existingSecret: tokenrein-provider-keys
 redis:
   enabled: false
 externalRedis:
-  existingSecret: tokenlens-redis
+  existingSecret: tokenrein-redis
 postgresql:
   enabled: false
 externalDatabase:

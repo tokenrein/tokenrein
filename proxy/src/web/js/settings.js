@@ -1,4 +1,4 @@
-// TokenLens dashboard: Keys & limits page.
+// Tokenrein dashboard: Keys & limits page.
 "use strict";
 
 // --- settings: orgs, projects, keys, budgets ---
@@ -22,7 +22,7 @@ function budgetEditor(scope, budgets, inherited, policies) {
   const inhMax = inherited ? (inherited.max_run_usd ? `Inherits ${usd(inherited.max_run_usd * 1e6)}` : "Inherits: none") : "";
   return `<div class="budgets" data-scope="${esc(scope)}">${cells}
     <div class="budget" data-policy="max_run_usd">
-      <div class="t">Max run budget</div><div class="d">Caps any x-tl-run-budget-usd a caller asks for.</div>
+      <div class="t">Max run budget</div><div class="d">Caps any x-tr-run-budget-usd a caller asks for.</div>
       <div class="inline"><input type="number" min="0" step="any" placeholder="${inherited ? "inherit" : "none"}" aria-label="Max run budget in USD" data-f="max" value="${max ?? ""}"></div>
       ${inhMax ? `<div class="inherit">${inhMax}</div>` : ""}
     </div></div>`;
@@ -44,7 +44,7 @@ function readBudgets(root) {
 
 function renderSettings() {
   const org = currentOrg();
-  const modeHelp = `<p class="help">Modes: <b>enforce</b> blocks a call that would go over (HTTP 402) · <b>check</b> lets it through and adds an <span class="mono">x-tl-warning</span> header · <b>skip</b> only tracks spend. Leave a limit blank for no limit${org ? " (or to inherit, for projects)" : ""}.</p>`;
+  const modeHelp = `<p class="help">Modes: <b>enforce</b> blocks a call that would go over (HTTP 402) · <b>check</b> lets it through and adds an <span class="mono">x-tr-warning</span> header · <b>skip</b> only tracks spend. Leave a limit blank for no limit${org ? " (or to inherit, for projects)" : ""}.</p>`;
   let html = "";
   if (org) {
     html += `<div class="card" data-org-card>
@@ -153,7 +153,7 @@ function providerKeysCard(org) {
     : `<b>Saving keys here is off.</b> Start the proxy with <span class="mono">${esc(S.overview.secrets_key_env)}</span> set to a random secret (<span class="mono">openssl rand -hex 32</span>), which encrypts the keys you save here. Until then the proxy uses the environment variables.`;
   return `<div class="card" data-providers-card>
     <div class="card-h"><h2>Provider API keys for <span class="mono">${esc(org.id)}</span></h2></div>
-    <div class="card-b"><p class="help">Your real OpenAI / Anthropic keys. The proxy uses them to call the provider; agents only ever get TokenLens keys. ${note}</p>
+    <div class="card-b"><p class="help">Your real OpenAI / Anthropic keys. The proxy uses them to call the provider; agents only ever get Tokenrein keys. ${note}</p>
     <div class="prov">${rows}</div></div></div>`;
 }
 
@@ -227,7 +227,7 @@ $("#settings").addEventListener("submit", async e => {
 function showKey(key) {
   $("#key-value").textContent = key;
   const proxy = `${location.protocol}//${location.hostname}:8787`;
-  $("#key-usage").textContent = `export TOKENLENS_API_KEY=${key}\nexport TOKENLENS_BASE_URL=${proxy}`;
+  $("#key-usage").textContent = `export TOKENREIN_API_KEY=${key}\nexport TOKENREIN_BASE_URL=${proxy}`;
   $("#key-usage").style.whiteSpace = "pre-wrap";
   $("#key-dialog").showModal();
 }

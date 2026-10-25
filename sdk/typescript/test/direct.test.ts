@@ -1,4 +1,4 @@
-/** Direct mode: the client calls its provider; TokenLens gets a check before and usage after. */
+/** Direct mode: the client calls its provider; Tokenrein gets a check before and usage after. */
 
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -94,9 +94,10 @@ beforeEach(async () => {
     if (path === '/v1/usage') return [200, 'application/json', JSON.stringify({ accepted: body.events.length, over })];
     return [404, 'application/json', '{}'];
   }).start();
-  process.env.TOKENLENS_BASE_URL = tl.url;
-  process.env.TOKENLENS_API_KEY = 'tl_direct_key';
-  delete process.env.TOKENLENS_MODE;
+  process.env.TOKENREIN_BASE_URL = tl.url;
+  process.env.TOKENREIN_API_KEY = 'tl_direct_key';
+  for (const n of ['API_KEY', 'BASE_URL', 'MODE']) delete process.env[`TOKENLENS_${n}`]; // pre-rename names
+  delete process.env.TOKENREIN_MODE;
 });
 afterEach(async () => {
   await provider.close();
@@ -104,14 +105,14 @@ afterEach(async () => {
 });
 
 describe('direct mode', () => {
-  it('calls the provider directly and reports usage to TokenLens', async () => {
+  it('calls the provider directly and reports usage to Tokenrein', async () => {
     const client = guard.openai(new OpenAI({ apiKey: 'sk-provider', baseURL: `${provider.url}/v1` }), { agent: 'writer', user: 'ana@example.com' });
     await guard.run({ runId: 'job-1', budgetUsd: 2 }, () =>
       guard.run('job-1-sub', () => client.chat.completions.create({ model: 'gpt-4o-mini', messages: MSG, max_tokens: 50 })),
     );
     const call = provider.seen[0]!;
     expect(call.headers.authorization).toBe('Bearer sk-provider');
-    expect(Object.keys(call.headers).some((h) => h.startsWith('x-tl-'))).toBe(false);
+    expect(Object.keys(call.headers).some((h) => h.startsWith('x-tr-'))).toBe(false);
     expect(checks()[0]).toMatchObject({ run_id: 'job-1-sub', parent_run_id: 'job-1', agent: 'writer', user: 'ana@example.com', model: 'gpt-4o-mini', max_output_tokens: 50 });
     const [ev] = await usage();
     expect(ev).toMatchObject({ run_id: 'job-1-sub', parent_run_id: 'job-1', input_tokens: 8, cache_read_tokens: 2, output_tokens: 5, model: 'gpt-4o-mini', source: 'typescript-sdk', stream: false });
@@ -143,7 +144,7 @@ describe('direct mode', () => {
 
   it('refused calls never reach the provider', async () => {
     const client = guard.openai(new OpenAI({ apiKey: 'sk', baseURL: `${provider.url}/v1`, maxRetries: 0 }));
-    verdict = { allowed: false, reason: 'TokenLens: the run:job-2 budget is used up', scope: 'run:job-2', run_id: 'job-2' };
+    verdict = { allowed: false, reason: 'Tokenrein: the run:job-2 budget is used up', scope: 'run:job-2', run_id: 'job-2' };
     const e = await guard.run('job-2', () => client.chat.completions.create({ model: 'gpt-4o-mini', messages: MSG })).catch((x) => x);
     expect(e).toBeInstanceOf(BudgetExceeded);
     expect(e.runId).toBe('job-2');
@@ -164,7 +165,7 @@ describe('direct mode', () => {
     expect(provider.seen).toHaveLength(1);
   });
 
-  it('TokenLens being down never breaks calls', async () => {
+  it('Tokenrein being down never breaks calls', async () => {
     await tl.close();
     const client = guard.openai(new OpenAI({ apiKey: 'sk', baseURL: `${provider.url}/v1` }), { apiKey: 'tl_other' });
     const out = await client.chat.completions.create({ model: 'gpt-4o-mini', messages: MSG });

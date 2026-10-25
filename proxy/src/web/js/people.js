@@ -1,4 +1,4 @@
-// TokenLens dashboard: People & access page (members, API tokens, users, single sign-on).
+// Tokenrein dashboard: People & access page (members, API tokens, users, single sign-on).
 "use strict";
 
 const ROLE_HELP = {
@@ -81,7 +81,7 @@ function renderPeople() {
       <td class="muted nowrap">${t.expires_at ? esc(new Date(t.expires_at).toLocaleDateString()) : "never"}</td>
       <td><div class="row-actions"><button class="btn sm danger" data-token-revoke="${t.id}" data-name="${esc(t.name)}">Revoke</button></div></td></tr>`).join("");
     html += `<div class="card"><div class="card-h"><h2>Your API tokens</h2></div>
-      <div class="card-b" style="padding-bottom:0"><p class="help">For scripts and CI: send <span class="mono">Authorization: Bearer tlu_…</span> to the admin API. A token can do what you can do, and stops working when you lose access.</p></div>
+      <div class="card-b" style="padding-bottom:0"><p class="help">For scripts and CI: send <span class="mono">Authorization: Bearer tru_…</span> to the admin API. A token can do what you can do, and stops working when you lose access.</p></div>
       <div class="table-wrap"><table>${trs ? `<thead><tr><th>Name</th><th>Token</th><th>Last used</th><th>Expires</th><th></th></tr></thead><tbody>${trs}</tbody>` : `<tr><td class="empty">No tokens.</td></tr>`}</table></div>
       <div class="card-b"><form class="inline" data-token-new>
         <input type="text" required maxlength="100" placeholder="Token name, e.g. terraform" aria-label="Token name" style="min-width:220px">
@@ -127,8 +127,8 @@ function ssoCard(s) {
   return `<div class="card" data-sso-card><div class="card-h"><h2>Single sign-on (OpenID Connect)</h2>
       <span class="badge ${c.enabled ? "b-ok" : "b-muted"}">${c.enabled ? "on" : "off"}</span></div>
     <form class="card-b sso-form" data-sso>
-      <p class="help" style="margin:0">Works with Okta, Microsoft Entra ID, Google Workspace, Auth0, Keycloak and any OpenID Connect provider. Register TokenLens as a web app there with this redirect URI:</p>
-      ${s.redirect_uri ? cmdBlock(s.redirect_uri) : `<div class="alert">Set <span class="mono">auth.public_url</span> in the proxy config to the dashboard's address (for example <span class="mono">https://tokenlens.example.com</span>) and restart it; the redirect URI is built from it.</div>`}
+      <p class="help" style="margin:0">Works with Okta, Microsoft Entra ID, Google Workspace, Auth0, Keycloak and any OpenID Connect provider. Register Tokenrein as a web app there with this redirect URI:</p>
+      ${s.redirect_uri ? cmdBlock(s.redirect_uri) : `<div class="alert">Set <span class="mono">auth.public_url</span> in the proxy config to the dashboard's address (for example <span class="mono">https://tokenrein.example.com</span>) and restart it; the redirect URI is built from it.</div>`}
       <div class="budgets">
         <label class="field">Issuer URL <input name="issuer" type="url" placeholder="https://login.example.com/oauth2/default" value="${esc(c.issuer || "")}"></label>
         <label class="field">Client ID <input name="client_id" type="text" value="${esc(c.client_id || "")}"></label>
@@ -147,7 +147,7 @@ function ssoCard(s) {
         <select name="default_role" aria-label="Default role">${roleOptions(c.default_role || "viewer", "admin")}</select>
       </div>
       <label class="field"><span>Roles from groups <span class="muted">(one per line: <span class="mono">group = org:role</span>; synced at every sign-in for the orgs listed)</span></span>
-        <textarea name="group_roles" rows="3" spellcheck="false" placeholder="tokenlens-admins = acme:admin">${esc(mappings)}</textarea></label>
+        <textarea name="group_roles" rows="3" spellcheck="false" placeholder="tokenrein-admins = acme:admin">${esc(mappings)}</textarea></label>
       <label class="field">Groups claim <input name="groups_claim" type="text" placeholder="groups" value="${esc(c.groups_claim || "")}" style="max-width:200px"></label>
       <div class="inline" style="justify-content:space-between">
         <label class="inline status"><input type="checkbox" name="enabled" ${c.enabled ? "checked" : ""}> Show “Sign in with ${esc(c.label || "single sign-on")}” on the sign-in page</label>

@@ -8,8 +8,8 @@ import anthropic
 import openai
 import pytest
 
-import tokenlens
-from tokenlens import BudgetExceeded, LocalCapExceeded, RunKilled, RunPaused, guard
+import tokenrein
+from tokenrein import BudgetExceeded, LocalCapExceeded, RunKilled, RunPaused, guard
 
 MSG = [{"role": "user", "content": "hi"}]
 
@@ -39,10 +39,10 @@ def test_openai_points_at_proxy_with_virtual_key(proxy):
     req = proxy.requests[-1]
     assert req["path"] == "/v1/chat/completions"
     assert req["headers"]["authorization"] == "Bearer tl_test_key"
-    assert req["headers"]["x-tl-agent"] == "support-bot"
+    assert req["headers"]["x-tr-agent"] == "support-bot"
     # Outside a run: no run headers, the proxy makes one run per request.
-    assert "x-tl-run-id" not in req["headers"]
-    assert "x-tl-parent-run-id" not in req["headers"]
+    assert "x-tr-run-id" not in req["headers"]
+    assert "x-tr-parent-run-id" not in req["headers"]
 
 
 def test_anthropic_points_at_proxy_and_drops_provider_bearer(proxy):
@@ -55,11 +55,11 @@ def test_anthropic_points_at_proxy_and_drops_provider_bearer(proxy):
     assert req["path"] == "/v1/messages"
     assert req["headers"]["x-api-key"] == "tl_test_key"
     assert "authorization" not in req["headers"]
-    assert req["headers"]["x-tl-agent"] == "writer"
+    assert req["headers"]["x-tr-agent"] == "writer"
 
 
 def test_explicit_args_override_env_and_v1_suffix_is_accepted(proxy, monkeypatch):
-    monkeypatch.setenv("TOKENLENS_BASE_URL", "http://127.0.0.1:1")  # would fail if used
+    monkeypatch.setenv("TOKENREIN_BASE_URL", "http://127.0.0.1:1")  # would fail if used
     client = guard.openai(openai.OpenAI(api_key="x"), api_key="tl_arg_key", base_url=proxy.url + "/v1/")
     chat(client)
     assert proxy.requests[-1]["path"] == "/v1/chat/completions"
@@ -69,13 +69,22 @@ def test_explicit_args_override_env_and_v1_suffix_is_accepted(proxy, monkeypatch
 def test_client_can_be_created_for_you(proxy):
     chat(guard.openai(agent="a"))
     message(guard.anthropic(agent="b"))
-    assert [r["headers"]["x-tl-agent"] for r in proxy.requests] == ["a", "b"]
+    assert [r["headers"]["x-tr-agent"] for r in proxy.requests] == ["a", "b"]
 
 
 def test_missing_key_is_a_clear_error(monkeypatch):
-    monkeypatch.delenv("TOKENLENS_API_KEY", raising=False)
-    with pytest.raises(ValueError, match="TOKENLENS_API_KEY"):
+    monkeypatch.delenv("TOKENREIN_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="TOKENREIN_API_KEY"):
         guard.openai(openai.OpenAI(api_key="x"))
+
+
+def test_variables_named_before_the_rename_still_work(proxy, monkeypatch):
+    monkeypatch.delenv("TOKENREIN_API_KEY")
+    monkeypatch.setenv("TOKENLENS_API_KEY", "tl_old_name_key")  # pre-rename name
+    with pytest.warns(DeprecationWarning, match="TOKENREIN_API_KEY"):
+        client = guard.openai(openai.OpenAI(api_key="x"))
+    chat(client)
+    assert proxy.requests[-1]["headers"]["authorization"] == "Bearer tl_old_name_key"
 
 
 def test_invalid_ids_and_budgets_fail_at_the_call_site():
@@ -97,8 +106,8 @@ def test_original_client_is_untouched_and_with_options_keeps_guard(proxy):
     assert isinstance(client, openai.OpenAI)
     with guard.run("r1"):
         chat(client.with_options(timeout=5))
-    assert proxy.requests[-1]["headers"]["x-tl-agent"] == "bot"
-    assert proxy.requests[-1]["headers"]["x-tl-run-id"] == "r1"
+    assert proxy.requests[-1]["headers"]["x-tr-agent"] == "bot"
+    assert proxy.requests[-1]["headers"]["x-tr-run-id"] == "r1"
 
 
 # --- run headers ---------------------------------------------------------------------------
@@ -107,14 +116,14 @@ def test_original_client_is_untouched_and_with_options_keeps_guard(proxy):
 def test_run_sets_run_id_and_budget(proxy):
     client = openai_client(agent="bot")
     with guard.run("ticket-4812", budget_usd=5) as run:
-        assert tokenlens.current_run() is run
+        assert tokenrein.current_run() is run
         chat(client)
-    assert tokenlens.current_run() is None
+    assert tokenrein.current_run() is None
     h = proxy.requests[-1]["headers"]
-    assert h["x-tl-run-id"] == "ticket-4812"
-    assert float(h["x-tl-run-budget-usd"]) == 5
-    assert h["x-tl-agent"] == "bot"
-    assert "x-tl-parent-run-id" not in h
+    assert h["x-tr-run-id"] == "ticket-4812"
+    assert float(h["x-tr-run-budget-usd"]) == 5
+    assert h["x-tr-agent"] == "bot"
+    assert "x-tr-parent-run-id" not in h
 
 
 def test_generated_run_id_is_valid_and_stable_within_the_run(proxy):
@@ -122,7 +131,7 @@ def test_generated_run_id_is_valid_and_stable_within_the_run(proxy):
     with guard.run() as run:
         chat(client)
         chat(client)
-    ids = {r["headers"]["x-tl-run-id"] for r in proxy.requests}
+    ids = {r["headers"]["x-tr-run-id"] for r in proxy.requests}
     assert ids == {run.run_id}
     assert re.fullmatch(r"run_[0-9a-f]{32}", run.run_id)
 
@@ -137,10 +146,10 @@ def test_nested_runs_form_a_tree(proxy):
                 chat(client)
         chat(client)  # back in root after the child exits
     h = [r["headers"] for r in proxy.requests]
-    assert [x["x-tl-run-id"] for x in h] == ["root", "child", grandchild.run_id, "root"]
-    assert [x.get("x-tl-parent-run-id") for x in h] == [None, "root", "child", None]
+    assert [x["x-tr-run-id"] for x in h] == ["root", "child", grandchild.run_id, "root"]
+    assert [x.get("x-tr-parent-run-id") for x in h] == [None, "root", "child", None]
     # Budgets belong to their own run only.
-    assert [x.get("x-tl-run-budget-usd") for x in h] == ["10.0", "2.0", None, "10.0"]
+    assert [x.get("x-tr-run-budget-usd") for x in h] == ["10.0", "2.0", None, "10.0"]
 
 
 def test_run_agent_applies_only_when_client_has_none(proxy):
@@ -151,15 +160,15 @@ def test_run_agent_applies_only_when_client_has_none(proxy):
         chat(unnamed)
         with guard.run("child"):
             chat(unnamed)
-    assert [r["headers"].get("x-tl-agent") for r in proxy.requests] == ["client-agent", "run-agent", None]
+    assert [r["headers"].get("x-tr-agent") for r in proxy.requests] == ["client-agent", "run-agent", None]
 
 
 def test_explicit_request_headers_win(proxy):
     client = openai_client(agent="bot")
     with guard.run("r"):
-        chat(client, extra_headers={"x-tl-run-id": "manual", "x-tl-agent": "manual-agent"})
+        chat(client, extra_headers={"x-tr-run-id": "manual", "x-tr-agent": "manual-agent"})
     h = proxy.requests[-1]["headers"]
-    assert (h["x-tl-run-id"], h["x-tl-agent"]) == ("manual", "manual-agent")
+    assert (h["x-tr-run-id"], h["x-tr-agent"]) == ("manual", "manual-agent")
 
 
 def test_run_cannot_be_its_own_parent():
@@ -201,28 +210,28 @@ async def test_async_with_and_concurrent_tasks_are_isolated(proxy):
         task, step = tag.split("/")[:2]
         i = int(task.split("-")[1])
         if tag.endswith("/sub"):
-            assert h["x-tl-run-id"] == f"{task}-sub-{step}"
-            assert h["x-tl-parent-run-id"] == task
-            assert "x-tl-run-budget-usd" not in h
+            assert h["x-tr-run-id"] == f"{task}-sub-{step}"
+            assert h["x-tr-parent-run-id"] == task
+            assert "x-tr-run-budget-usd" not in h
         else:
-            assert h["x-tl-run-id"] == task
-            assert "x-tl-parent-run-id" not in h
-            assert float(h["x-tl-run-budget-usd"]) == i + 1
-    assert tokenlens.current_run() is None
+            assert h["x-tr-run-id"] == task
+            assert "x-tr-parent-run-id" not in h
+            assert float(h["x-tr-run-budget-usd"]) == i + 1
+    assert tokenrein.current_run() is None
 
 
 async def test_run_is_visible_in_to_thread(proxy):
     client = openai_client()
     async with guard.run("threaded"):
         await asyncio.to_thread(chat, client)
-    assert proxy.requests[-1]["headers"]["x-tl-run-id"] == "threaded"
+    assert proxy.requests[-1]["headers"]["x-tr-run-id"] == "threaded"
 
 
 # --- error mapping -------------------------------------------------------------------------
 
 
 def test_402_openai_shape_maps_to_budget_exceeded(proxy):
-    proxy.error = (402, "tokenlens_budget_exceeded", "TokenLens budget exceeded for run r1")
+    proxy.error = (402, "tokenrein_budget_exceeded", "Tokenrein budget exceeded for run r1")
     client = openai_client()
     with guard.run("r1"):
         with pytest.raises(BudgetExceeded) as ei:
@@ -230,14 +239,14 @@ def test_402_openai_shape_maps_to_budget_exceeded(proxy):
     e = ei.value
     assert e.run_id == "r1"
     assert e.status_code == 402
-    assert e.error_type == "tokenlens_budget_exceeded"
-    assert e.message == "TokenLens budget exceeded for run r1"
+    assert e.error_type == "tokenrein_budget_exceeded"
+    assert e.message == "Tokenrein budget exceeded for run r1"
     assert isinstance(e, openai.APIStatusError)  # existing SDK handlers still catch it
     assert len(proxy.requests) == 1  # not retried
 
 
 def test_402_anthropic_shape_maps_to_budget_exceeded(proxy):
-    proxy.error = (402, "tokenlens_budget_exceeded", "over budget")
+    proxy.error = (402, "tokenrein_budget_exceeded", "over budget")
     with pytest.raises(BudgetExceeded) as ei:
         with guard.run("r2"):
             message(anthropic_client())
@@ -249,17 +258,17 @@ def test_402_anthropic_shape_maps_to_budget_exceeded(proxy):
 @pytest.mark.parametrize("make,call", [(openai_client, chat), (anthropic_client, message)])
 def test_403_paused_and_killed(proxy, make, call):
     client = make()
-    proxy.error = (403, "tokenlens_run_paused", "TokenLens: run r3 is paused")
+    proxy.error = (403, "tokenrein_run_paused", "Tokenrein: run r3 is paused")
     with guard.run("r3"):
         with pytest.raises(RunPaused) as paused:
             call(client)
     assert paused.value.run_id == "r3"
-    assert paused.value.message == "TokenLens: run r3 is paused"
-    assert isinstance(paused.value, tokenlens.RunStopped)
+    assert paused.value.message == "Tokenrein: run r3 is paused"
+    assert isinstance(paused.value, tokenrein.RunStopped)
     assert type(paused.value).__name__ == "RunPaused"
     assert paused.value.status_code == 403
 
-    proxy.error = (403, "tokenlens_run_killed", "TokenLens: run r3 is killed")
+    proxy.error = (403, "tokenrein_run_killed", "Tokenrein: run r3 is killed")
     with guard.run("r3"):
         with pytest.raises(RunKilled) as killed:
             call(client)
@@ -270,7 +279,7 @@ def test_403_paused_and_killed(proxy, make, call):
 
 
 def test_run_id_falls_back_to_proxy_generated_one(proxy):
-    proxy.error = (402, "tokenlens_budget_exceeded", "over")
+    proxy.error = (402, "tokenrein_budget_exceeded", "over")
     with pytest.raises(BudgetExceeded) as ei:
         chat(openai_client())
     assert ei.value.run_id == "req_generated"
@@ -280,21 +289,21 @@ def test_other_errors_are_left_to_the_sdk(proxy):
     proxy.error = (403, "permission_error", "nope")
     with pytest.raises(openai.PermissionDeniedError) as ei:
         chat(openai_client())
-    assert not isinstance(ei.value, tokenlens.TokenLensError)
+    assert not isinstance(ei.value, tokenrein.TokenreinError)
     proxy.error = (402, "billing", "pay up")
     with pytest.raises(anthropic.APIStatusError) as ei2:
         message(anthropic_client())
-    assert not isinstance(ei2.value, tokenlens.TokenLensError)
+    assert not isinstance(ei2.value, tokenrein.TokenreinError)
 
 
 def test_streaming_call_raises_mapped_error(proxy):
-    proxy.error = (402, "tokenlens_budget_exceeded", "over")
+    proxy.error = (402, "tokenrein_budget_exceeded", "over")
     with pytest.raises(BudgetExceeded):
         chat(openai_client(), stream=True)
 
 
 async def test_async_client_raises_mapped_error(proxy):
-    proxy.error = (403, "tokenlens_run_killed", "killed")
+    proxy.error = (403, "tokenrein_run_killed", "killed")
     client = guard.anthropic(anthropic.AsyncAnthropic(api_key="x"))
     async with guard.run("dead"):
         with pytest.raises(RunKilled) as ei:
@@ -355,6 +364,6 @@ def test_user_header_from_client_or_run_and_inherited_by_child_runs(proxy):
         with guard.run("u2"):
             chat(unnamed)
     chat(unnamed)
-    assert [r["headers"].get("x-tl-user") for r in proxy.requests] == ["alice", "bob", "bob", None]
+    assert [r["headers"].get("x-tr-user") for r in proxy.requests] == ["alice", "bob", "bob", None]
     with pytest.raises(ValueError):
         guard.run(user="not valid")

@@ -2,12 +2,12 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "tokenlens.fullname" . }}
+  name: {{ include "tokenrein.fullname" . }}
   labels:
-    {{- include "tokenlens.labels" . | nindent 4 }}
+    {{- include "tokenrein.labels" . | nindent 4 }}
 spec:
   minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
   selector:
     matchLabels:
-      {{- include "tokenlens.selectorLabels" . | nindent 6 }}
+      {{- include "tokenrein.selectorLabels" . | nindent 6 }}
 {{- end }}

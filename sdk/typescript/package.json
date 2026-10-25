@@ -1,5 +1,5 @@
 {
-  "name": "@tokenlens/sdk",
+  "name": "@tokenrein/sdk",
   "version": "0.1.0",
   "description": "Budgets, run tracing and spend reports for AI agents: wrap your OpenAI or Anthropic client in one line",
   "license": "Apache-2.0",

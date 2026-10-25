@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Connect Cursor on this machine to TokenLens (or disconnect it).
+"""Connect Cursor on this machine to Tokenrein (or disconnect it).
 
 Adds user-level Cursor hooks to ~/.cursor/hooks.json that report each agent conversation to
-TokenLens and stop the next prompt, tool call or sub-agent when an admin pauses the run or an
-enforced budget is used up. The hooks run ~/.tokenlens/hook.py, which this script writes. The
+Tokenrein and stop the next prompt, tool call or sub-agent when an admin pauses the run or an
+enforced budget is used up. The hooks run ~/.tokenrein/hook.py, which this script writes. The
 hooks file is backed up first. Cursor has no local usage telemetry: a team admin can import
-usage from Cursor's Admin API on the TokenLens Connect page. Standard library only.
+usage from Cursor's Admin API on the Tokenrein Connect page. Standard library only.
 
-    python3 cursor.py --key tl_... --url http://127.0.0.1:8787
+    python3 cursor.py --key tr_... --url http://127.0.0.1:8787
     python3 cursor.py --remove
 """
 
-# @tokenlens-common@
+# @tokenrein-common@
 
 TOOL = "cursor"
 HOOK_EVENTS = ["beforeSubmitPrompt", "preToolUse", "subagentStart", "sessionEnd"]
@@ -35,9 +35,9 @@ def main():
             write_json(path, doc)
         changed = remove_hook(TOOL) or changed
         if not changed:
-            print("TokenLens is not configured in %s; nothing to do." % path)
+            print("Tokenrein is not configured in %s; nothing to do." % path)
         else:
-            print("Removed TokenLens from %s." % path)
+            print("Removed Tokenrein from %s." % path)
         return 0
 
     url = validate(p, a)
@@ -49,7 +49,7 @@ def main():
         hooks.setdefault(event, []).append({"command": hook_command(TOOL), "timeout": 5})
     write_json(path, doc)
 
-    print("Connected. Cursor agent conversations report to TokenLens at %s." % url)
+    print("Connected. Cursor agent conversations report to Tokenrein at %s." % url)
     print("Cursor reloads hooks.json on save; each conversation shows up as run cursor-<conversation id>.")
     print("Undo: run this script again with --remove (or restore the backup above).")
     return 0

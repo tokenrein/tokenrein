@@ -1400,7 +1400,7 @@ async fn list_audit(
             ),
             (
                 axum::http::header::CONTENT_DISPOSITION,
-                HeaderValue::from_static("attachment; filename=\"tokenlens-audit.csv\""),
+                HeaderValue::from_static("attachment; filename=\"tokenrein-audit.csv\""),
             ),
         ],
         out,

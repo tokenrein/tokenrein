@@ -82,7 +82,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/chat/completions", post(openai_chat))
         .route("/v1/responses", post(openai_responses))
         .route("/v1/messages", post(anthropic_messages))
-        // TokenLens out of the request path: reported usage, budget checks, agent telemetry.
+        // Tokenrein out of the request path: reported usage, budget checks, agent telemetry.
         .route("/v1/usage", post(crate::ingest::usage))
         .route("/v1/check", post(crate::ingest::check))
         .route("/v1/otel/v1/logs", post(crate::ingest::otel_logs))
@@ -97,7 +97,26 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/hooks/cursor", post(crate::ingest::cursor_hook))
         .route("/healthz", get(|| async { "ok" }))
         .layer(DefaultBodyLimit::max(limit))
+        .layer(axum::middleware::map_request(legacy_headers))
         .with_state(state)
+}
+
+/// Clients set up before the product was renamed send `x-tl-*` headers. They are read as the
+/// matching `x-tr-*` header (which wins when both are sent) until v1.1.
+async fn legacy_headers(mut req: axum::extract::Request) -> axum::extract::Request {
+    let headers = req.headers_mut();
+    let renamed: Vec<(HeaderName, HeaderValue)> = headers
+        .iter()
+        .filter_map(|(name, value)| {
+            let rest = name.as_str().strip_prefix("x-tl-")?;
+            let new = HeaderName::from_bytes(format!("x-tr-{rest}").as_bytes()).ok()?;
+            (!headers.contains_key(&new)).then(|| (new, value.clone()))
+        })
+        .collect();
+    for (name, value) in renamed {
+        headers.append(name, value);
+    }
+    req
 }
 
 async fn openai_chat(State(st): State<Arc<AppState>>, headers: HeaderMap, body: Bytes) -> Response {
@@ -179,53 +198,53 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
     let Some(token) = client_token(&headers) else {
         return reject(
             StatusCode::UNAUTHORIZED,
-            "tokenlens_unauthorized",
-            "missing TokenLens virtual key (send it as 'Authorization: Bearer' or 'x-api-key')",
+            "tokenrein_unauthorized",
+            "missing Tokenrein virtual key (send it as 'Authorization: Bearer' or 'x-api-key')",
         );
     };
     let rt = st.rt();
     let Some(&(oi, pi)) = rt.keys.get(&config::sha256_hex(token)) else {
         return reject(
             StatusCode::UNAUTHORIZED,
-            "tokenlens_unauthorized",
-            "invalid TokenLens virtual key",
+            "tokenrein_unauthorized",
+            "invalid Tokenrein virtual key",
         );
     };
     let org = &rt.cfg.orgs[oi];
     let project = &org.projects[pi];
 
-    let run_id = match header_id(&headers, "x-tl-run-id") {
+    let run_id = match header_id(&headers, "x-tr-run-id") {
         Ok(r) => r.unwrap_or_else(|| request_id.clone()),
-        Err(m) => return reject(StatusCode::BAD_REQUEST, "tokenlens_invalid_request", &m),
+        Err(m) => return reject(StatusCode::BAD_REQUEST, "tokenrein_invalid_request", &m),
     };
-    let parent = match header_id(&headers, "x-tl-parent-run-id") {
+    let parent = match header_id(&headers, "x-tr-parent-run-id") {
         Ok(p) => p,
-        Err(m) => return reject(StatusCode::BAD_REQUEST, "tokenlens_invalid_request", &m),
+        Err(m) => return reject(StatusCode::BAD_REQUEST, "tokenrein_invalid_request", &m),
     };
     if parent.as_deref() == Some(run_id.as_str()) {
         return reject(
             StatusCode::BAD_REQUEST,
-            "tokenlens_invalid_request",
+            "tokenrein_invalid_request",
             "a run cannot be its own parent",
         );
     }
-    let agent = match header_id(&headers, "x-tl-agent") {
+    let agent = match header_id(&headers, "x-tr-agent") {
         Ok(a) => a.unwrap_or_else(|| "default".into()),
-        Err(m) => return reject(StatusCode::BAD_REQUEST, "tokenlens_invalid_request", &m),
+        Err(m) => return reject(StatusCode::BAD_REQUEST, "tokenrein_invalid_request", &m),
     };
     // The person or service on whose behalf the agent runs; for spend reports only.
-    let user = match headers.get("x-tl-user").map(|v| v.to_str().map(str::trim)) {
+    let user = match headers.get("x-tr-user").map(|v| v.to_str().map(str::trim)) {
         None => None,
         Some(Ok(u)) if config::valid_user(u) => Some(u.to_string()),
         Some(_) => {
             return reject(
                 StatusCode::BAD_REQUEST,
-                "tokenlens_invalid_request",
-                "x-tl-user must be 1-128 letters, digits, '.', '_', '-', '@' or '+'",
+                "tokenrein_invalid_request",
+                "x-tr-user must be 1-128 letters, digits, '.', '_', '-', '@' or '+'",
             );
         }
     };
-    let run_budget_header = match headers.get("x-tl-run-budget-usd") {
+    let run_budget_header = match headers.get("x-tr-run-budget-usd") {
         None => None,
         Some(v) => match v
             .to_str()
@@ -237,8 +256,8 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
             None => {
                 return reject(
                     StatusCode::BAD_REQUEST,
-                    "tokenlens_invalid_request",
-                    "x-tl-run-budget-usd must be a positive number of US dollars",
+                    "tokenrein_invalid_request",
+                    "x-tr-run-budget-usd must be a positive number of US dollars",
                 );
             }
         },
@@ -246,13 +265,13 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
 
     let prepared = match providers::prepare(api, &body, rt.cfg.server.default_max_output_tokens) {
         Ok(p) => p,
-        Err(m) => return reject(StatusCode::BAD_REQUEST, "tokenlens_invalid_request", &m),
+        Err(m) => return reject(StatusCode::BAD_REQUEST, "tokenrein_invalid_request", &m),
     };
     let provider = api.provider();
     let Some(base) = rt.upstream_base(provider) else {
         return reject(
             StatusCode::BAD_REQUEST,
-            "tokenlens_provider_not_configured",
+            "tokenrein_provider_not_configured",
             &format!(
                 "provider {} is not configured on this proxy",
                 provider.name()
@@ -262,9 +281,9 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
     let Some(api_key) = rt.provider_key(oi, provider) else {
         return reject(
             StatusCode::BAD_REQUEST,
-            "tokenlens_provider_not_configured",
+            "tokenrein_provider_not_configured",
             &format!(
-                "no {} API key for org {}: add one in the TokenLens dashboard",
+                "no {} API key for org {}: add one in the Tokenrein dashboard",
                 provider.name(),
                 org.id
             ),
@@ -275,7 +294,7 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         Err(m) => {
             return reject(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "tokenlens_internal_error",
+                "tokenrein_internal_error",
                 &m,
             );
         }
@@ -295,7 +314,7 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         error_response(
             api,
             StatusCode::SERVICE_UNAVAILABLE,
-            "tokenlens_unavailable",
+            "tokenrein_unavailable",
             "budget ledger unavailable and this org fails closed",
             &request_id,
         )
@@ -413,7 +432,7 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         }) => {
             emit(&st, &ctx, &Outcome::blocked("blocked_budget", &label));
             let message = format!(
-                "TokenLens budget exceeded for {label}: spent ${} + in flight ${} + this request (up to ${}) is over the ${} limit",
+                "Tokenrein budget exceeded for {label}: spent ${} + in flight ${} + this request (up to ${}) is over the ${} limit",
                 usd(spent),
                 usd(reserved),
                 usd(estimate as i64),
@@ -422,7 +441,7 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
             return with_run_header(
                 reject(
                     StatusCode::PAYMENT_REQUIRED,
-                    "tokenlens_budget_exceeded",
+                    "tokenrein_budget_exceeded",
                     &message,
                 ),
                 &run_id,
@@ -438,12 +457,12 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
                 &Outcome::blocked("blocked_run_stopped", &stopped),
             );
             let kind = if state == "killed" {
-                "tokenlens_run_killed"
+                "tokenrein_run_killed"
             } else {
-                "tokenlens_run_paused"
+                "tokenrein_run_paused"
             };
             let message = format!(
-                "TokenLens: run {stopped} is {state}; resume it from the dashboard or admin API"
+                "Tokenrein: run {stopped} is {state}; resume it from the dashboard or admin API"
             );
             return with_run_header(reject(StatusCode::FORBIDDEN, kind, &message), &run_id);
         }
@@ -473,7 +492,7 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         Ok(resp) => resp,
         Err(_) => reject(
             StatusCode::BAD_GATEWAY,
-            "tokenlens_upstream_error",
+            "tokenrein_upstream_error",
             "proxy task ended unexpectedly",
         ),
     }
@@ -595,7 +614,7 @@ async fn forward(
             let resp = error_response(
                 ctx.api,
                 StatusCode::BAD_GATEWAY,
-                "tokenlens_upstream_error",
+                "tokenrein_upstream_error",
                 message,
                 &ctx.request_id,
             );
@@ -628,7 +647,7 @@ async fn forward(
             let resp = error_response(
                 ctx.api,
                 StatusCode::BAD_GATEWAY,
-                "tokenlens_upstream_error",
+                "tokenrein_upstream_error",
                 "upstream response was cut off",
                 &ctx.request_id,
             );
@@ -889,7 +908,7 @@ fn error_response(
         .into_response();
     if let Ok(v) = HeaderValue::from_str(request_id) {
         resp.headers_mut()
-            .insert(HeaderName::from_static("x-tl-request-id"), v);
+            .insert(HeaderName::from_static("x-tr-request-id"), v);
     }
     resp
 }
@@ -897,7 +916,7 @@ fn error_response(
 fn with_run_header(mut resp: Response, run_id: &str) -> Response {
     if let Ok(v) = HeaderValue::from_str(run_id) {
         resp.headers_mut()
-            .insert(HeaderName::from_static("x-tl-run-id"), v);
+            .insert(HeaderName::from_static("x-tr-run-id"), v);
     }
     resp
 }
@@ -931,11 +950,11 @@ fn add_tl_headers(h: &mut HeaderMap, ctx: &Ctx) {
             h.insert(HeaderName::from_static(name), v);
         }
     };
-    set("x-tl-request-id", &ctx.request_id);
-    set("x-tl-run-id", &ctx.run_id);
+    set("x-tr-request-id", &ctx.request_id);
+    set("x-tr-run-id", &ctx.run_id);
     if !ctx.check_exceeded.is_empty() {
         set(
-            "x-tl-warning",
+            "x-tr-warning",
             &format!(
                 "check-mode budget exceeded: {}",
                 ctx.check_exceeded.join(", ")
@@ -943,7 +962,7 @@ fn add_tl_headers(h: &mut HeaderMap, ctx: &Ctx) {
         );
     }
     if ctx.degraded {
-        set("x-tl-degraded", "true");
+        set("x-tr-degraded", "true");
     }
 }
 

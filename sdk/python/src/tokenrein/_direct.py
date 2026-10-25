@@ -1,9 +1,9 @@
-"""Direct mode: the wrapped client calls the provider itself; TokenLens gets usage only.
+"""Direct mode: the wrapped client calls the provider itself; Tokenrein gets usage only.
 
-Before each call the SDK asks TokenLens whether the run may continue (``POST /v1/check``); after
+Before each call the SDK asks Tokenrein whether the run may continue (``POST /v1/check``); after
 each response it reads the token usage (also from streams) and reports it in the background
 (``POST /v1/usage``). Prompts and responses never leave the process. Network problems with
-TokenLens never break a call: checks fail open and reports are dropped after a few tries.
+Tokenrein never break a call: checks fail open and reports are dropped after a few tries.
 """
 
 from __future__ import annotations
@@ -156,7 +156,7 @@ async def tee_async(it: Any, parser: StreamUsage, done: Callable[[], None]) -> A
 
 
 class Reporter:
-    """Talks to TokenLens: budget checks (blocking, short timeout) and usage reports (queued,
+    """Talks to Tokenrein: budget checks (blocking, short timeout) and usage reports (queued,
     sent from a background thread in batches)."""
 
     BATCH = 100
@@ -186,14 +186,14 @@ class Reporter:
     # --- checks ---
 
     def check(self, body: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]]]:
-        """(allowed, verdict). Fails open when TokenLens can't be reached."""
+        """(allowed, verdict). Fails open when Tokenrein can't be reached."""
         try:
             v = self._post("/v1/check", body, self.check_timeout)
         except urllib.error.HTTPError as e:
             if e.code == 401:
-                raise errors.TokenLensError(
-                    "TokenLens rejected the API key (TOKENLENS_API_KEY)",
-                    error_type="tokenlens_unauthorized",
+                raise errors.TokenreinError(
+                    "Tokenrein rejected the API key (TOKENREIN_API_KEY)",
+                    error_type="tokenrein_unauthorized",
                     status_code=401,
                 ) from None
             return True, None
@@ -206,7 +206,7 @@ class Reporter:
     def report(self, event: Dict[str, Any]) -> None:
         with self._lock:
             if self._thread is None or not self._thread.is_alive():
-                self._thread = threading.Thread(target=self._run, name="tokenlens-reporter", daemon=True)
+                self._thread = threading.Thread(target=self._run, name="tokenrein-reporter", daemon=True)
                 self._thread.start()
             self._pending += 1
         try:
@@ -283,8 +283,8 @@ def flush(timeout: float = 5.0) -> bool:
 atexit.register(flush, 3.0)
 
 
-def verdict_error(v: Dict[str, Any], run_id: Optional[str]) -> errors.TokenLensError:
-    message = v.get("reason") or "TokenLens refused the call"
+def verdict_error(v: Dict[str, Any], run_id: Optional[str]) -> errors.TokenreinError:
+    message = v.get("reason") or "Tokenrein refused the call"
     state = v.get("run_state")
     rid = v.get("run_id") or run_id
     if state == "killed":

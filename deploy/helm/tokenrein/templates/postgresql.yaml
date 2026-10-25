@@ -1,16 +1,16 @@
 {{- if .Values.postgresql.enabled }}
-{{- $name := include "tokenlens.postgresHost" . }}
+{{- $name := include "tokenrein.postgresHost" . }}
 # Single-node Postgres 17 for evaluation: config history and the audit log.
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ $name }}
   labels:
-    {{- include "tokenlens.labels" . | nindent 4 }}
+    {{- include "tokenrein.labels" . | nindent 4 }}
     app.kubernetes.io/component: postgresql
 spec:
   selector:
-    app.kubernetes.io/name: {{ include "tokenlens.name" . }}
+    app.kubernetes.io/name: {{ include "tokenrein.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/component: postgresql
   ports:
@@ -23,20 +23,20 @@ kind: StatefulSet
 metadata:
   name: {{ $name }}
   labels:
-    {{- include "tokenlens.labels" . | nindent 4 }}
+    {{- include "tokenrein.labels" . | nindent 4 }}
     app.kubernetes.io/component: postgresql
 spec:
   serviceName: {{ $name }}
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "tokenlens.name" . }}
+      app.kubernetes.io/name: {{ include "tokenrein.name" . }}
       app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/component: postgresql
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: {{ include "tokenlens.name" . }}
+        app.kubernetes.io/name: {{ include "tokenrein.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: postgresql
     spec:
@@ -53,14 +53,14 @@ spec:
           image: {{ .Values.postgresql.image }}
           env:
             - name: POSTGRES_USER
-              value: tokenlens
+              value: tokenrein
             - name: POSTGRES_DB
-              value: tokenlens
+              value: tokenrein
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "tokenlens.secretName" . }}
-                  key: TL_POSTGRES_PASSWORD
+                  name: {{ include "tokenrein.secretName" . }}
+                  key: TOKENREIN_POSTGRES_PASSWORD
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           ports:
@@ -70,10 +70,10 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
           readinessProbe:
-            exec: { command: ["pg_isready", "-U", "tokenlens", "-d", "tokenlens", "-h", "127.0.0.1"] }
+            exec: { command: ["pg_isready", "-U", "tokenrein", "-d", "tokenrein", "-h", "127.0.0.1"] }
             periodSeconds: 5
           livenessProbe:
-            exec: { command: ["pg_isready", "-U", "tokenlens", "-d", "tokenlens", "-h", "127.0.0.1"] }
+            exec: { command: ["pg_isready", "-U", "tokenrein", "-d", "tokenrein", "-h", "127.0.0.1"] }
             periodSeconds: 10
             failureThreshold: 6
           resources:

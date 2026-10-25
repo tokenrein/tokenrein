@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tokenrein.fullname" . }}
+  labels:
+    {{- include "tokenrein.labels" . | nindent 4 }}
+data:
+  tokenrein.toml: |
+    {{- .Values.config | nindent 4 }}
