@@ -96,6 +96,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/admin/orgs/{org}/runs/{run}/resume", post(resume))
         .route("/admin/orgs/{org}/runs/{run}/kill", post(kill))
         .merge(crate::auth::routes::router())
+        .merge(crate::connectors::routes())
         .with_state(state)
 }
 
@@ -188,8 +189,11 @@ async fn list_models(
             if model.is_empty() || model == "-" {
                 continue;
             }
-            // Calls that reported their own cost (Claude Code) don't need a price.
-            let self_priced = e.get("source").and_then(|v| v.as_str()) == Some("claude-code");
+            // Calls that reported their own cost (Claude Code, Cursor's import) don't need a price.
+            let self_priced = matches!(
+                e.get("source").and_then(|v| v.as_str()),
+                Some("claude-code" | "cursor")
+            );
             let provider = s("provider");
             let known = self_priced || rt.prices.lookup_any(&provider, &model).1;
             let entry = seen.entry((provider, model)).or_insert((true, 0));
@@ -265,12 +269,12 @@ pub(crate) fn err(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
 }
 
-fn unavailable(e: anyhow::Error) -> Response {
+pub(crate) fn unavailable(e: anyhow::Error) -> Response {
     tracing::error!(error = %e, "admin ledger call failed");
     err(StatusCode::SERVICE_UNAVAILABLE, "budget ledger unavailable")
 }
 
-fn edit_error(e: EditError) -> Response {
+pub(crate) fn edit_error(e: EditError) -> Response {
     match e {
         EditError::Invalid(m) => err(StatusCode::BAD_REQUEST, &m),
         EditError::NotFound(m) => err(StatusCode::NOT_FOUND, &m),
@@ -422,7 +426,10 @@ struct KeyBody {
     name: String,
 }
 
-fn find_org<'a>(orgs: &'a mut [OrgConfig], org: &str) -> Result<&'a mut OrgConfig, EditError> {
+pub(crate) fn find_org<'a>(
+    orgs: &'a mut [OrgConfig],
+    org: &str,
+) -> Result<&'a mut OrgConfig, EditError> {
     orgs.iter_mut()
         .find(|o| o.id == org)
         .ok_or_else(|| EditError::NotFound(format!("unknown org {org:?}")))
@@ -473,6 +480,7 @@ async fn create_org(
                 provider_key_env: HashMap::new(),
                 provider_secrets: HashMap::new(),
                 anthropic_workspace_id: None,
+                cursor_import: None,
                 projects: Vec::new(),
             });
             Ok(id)

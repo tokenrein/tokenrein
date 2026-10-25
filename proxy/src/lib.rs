@@ -2,6 +2,7 @@ pub mod admin;
 pub mod audit;
 pub mod auth;
 pub mod config;
+pub mod connectors;
 pub mod control;
 pub mod db;
 pub mod ingest;
@@ -74,6 +75,9 @@ pub fn spawn_sweeper(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
                     && let Err(e) = state.ledger.trim_activity(&org.id).await
                 {
                     tracing::warn!(org = %org.id, error = %e, "activity trim failed");
+                }
+                if now % 3600 < 5 && org.cursor_import.is_some() {
+                    connectors::sync_due(&state, &org.id).await;
                 }
                 match state.ledger.sweep(&org.id, now, 500).await {
                     Ok(0) => {}

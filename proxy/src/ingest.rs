@@ -3,12 +3,12 @@
 //!
 //! - `POST /v1/usage`: usage events reported after each call (SDK direct mode, any client).
 //! - `POST /v1/check`: "may this run make another call?", asked before a call or agent step.
-//! - `POST /v1/otel/v1/logs`: OpenTelemetry logs (OTLP over HTTP/JSON) from agents with
-//!   built-in telemetry, such as Claude Code's `claude_code.api_request` events.
-//! - `POST /v1/hooks/claude-code`: Claude Code HTTP hooks; blocks the next prompt or tool call
-//!   when a run is paused, killed or over an enforced budget.
+//! - `POST /v1/otel/v1/logs`: OpenTelemetry logs (OTLP over HTTP/JSON) from coding agents with
+//!   built-in telemetry: Claude Code, OpenAI Codex CLI and Gemini CLI.
+//! - `POST /v1/hooks/{claude-code,codex,gemini,cursor}`: coding agents' hooks; they block the
+//!   next prompt or tool call when a run is paused, killed or over an enforced budget.
 //!
-//! All four authenticate with a TokenLens virtual key, like the proxy. Reported spend is
+//! All of them authenticate with a TokenLens virtual key, like the proxy. Reported spend is
 //! charged to the same budgets and shows up in the same dashboard. Enforcement is between calls
 //! (the call that crosses a limit has already happened), unlike the proxy's pre-call reservation.
 
@@ -31,10 +31,10 @@ use crate::proxy::{AppState, ScopeInput, build_scopes, client_token};
 /// Most events accepted in one `/v1/usage` request.
 const MAX_EVENTS: usize = 500;
 
-struct Caller {
-    rt: Arc<Resolved>,
-    oi: usize,
-    pi: usize,
+pub(crate) struct Caller {
+    pub(crate) rt: Arc<Resolved>,
+    pub(crate) oi: usize,
+    pub(crate) pi: usize,
 }
 
 impl Caller {
@@ -78,7 +78,7 @@ fn caller(st: &AppState, headers: &HeaderMap) -> Result<Caller, Response> {
 }
 
 /// Turn any string (a session UUID, an agent name) into a valid id.
-fn to_id(s: &str) -> Option<String> {
+pub(crate) fn to_id(s: &str) -> Option<String> {
     let cleaned: String = s
         .trim()
         .chars()
@@ -103,13 +103,13 @@ fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 }
 
 /// Where a reported call belongs.
-struct Who {
-    run: String,
-    parent: Option<String>,
-    agent: String,
-    user: Option<String>,
-    source: String,
-    run_budget_usd: Option<f64>,
+pub(crate) struct Who {
+    pub(crate) run: String,
+    pub(crate) parent: Option<String>,
+    pub(crate) agent: String,
+    pub(crate) user: Option<String>,
+    pub(crate) source: String,
+    pub(crate) run_budget_usd: Option<f64>,
 }
 
 async fn scopes_for(
@@ -182,6 +182,9 @@ pub struct UsageEvent {
     /// Provider HTTP status, when the call failed.
     pub status: Option<u16>,
     pub stream: Option<bool>,
+    /// When the call happened, for usage imported after the fact; otherwise now.
+    #[serde(skip)]
+    pub ts: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -191,7 +194,7 @@ pub struct UsageBody {
 }
 
 #[derive(Default)]
-struct Recorded {
+pub(crate) struct Recorded {
     /// Enforced limits this run has now used up: the next call will be refused.
     over: Vec<String>,
 }
@@ -239,7 +242,7 @@ fn who_from_event(ev: &UsageEvent, default_source: &str) -> Result<Who, String> 
     })
 }
 
-async fn record_usage(
+pub(crate) async fn record_usage(
     st: &AppState,
     c: &Caller,
     ev: &UsageEvent,
@@ -276,7 +279,7 @@ async fn record_usage(
     let failed = ev.status.is_some_and(|s| s >= 400);
     let event = json!({
         "event": "request",
-        "ts": Utc::now().to_rfc3339(),
+        "ts": ev.ts.clone().unwrap_or_else(|| Utc::now().to_rfc3339()),
         "request_id": ev.request_id.clone().unwrap_or_else(|| format!("rep_{}", uuid::Uuid::new_v4().simple())),
         "org": c.org().id,
         "project": c.project().id,
@@ -537,7 +540,54 @@ pub async fn check(
     .into_response()
 }
 
-// --- OpenTelemetry logs (OTLP/HTTP JSON) ---
+// --- Coding agents: telemetry and hooks ---
+
+/// A coding agent that reports through its own telemetry and hooks, with TokenLens out of its
+/// request path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tool {
+    ClaudeCode,
+    Codex,
+    Gemini,
+    Cursor,
+}
+
+impl Tool {
+    /// The default agent name and the `source` of its events.
+    pub fn name(self) -> &'static str {
+        match self {
+            Tool::ClaudeCode => "claude-code",
+            Tool::Codex => "codex",
+            Tool::Gemini => "gemini-cli",
+            Tool::Cursor => "cursor",
+        }
+    }
+
+    /// Run ids are `<prefix>-<session>`.
+    fn run_prefix(self) -> &'static str {
+        match self {
+            Tool::ClaudeCode => "cc",
+            Tool::Codex => "codex",
+            Tool::Gemini => "gemini",
+            Tool::Cursor => "cursor",
+        }
+    }
+}
+
+/// Run ids for an agent session: the session itself, and one child run for its sub-agents.
+pub(crate) fn session_runs(
+    tool: Tool,
+    session: &str,
+    subagent: bool,
+) -> Option<(String, Option<String>)> {
+    let root = to_id(&format!("{}-{session}", tool.run_prefix()))?;
+    if subagent {
+        let child = to_id(&format!("{root}-sub"))?;
+        Some((child, Some(root)))
+    } else {
+        Some((root, None))
+    }
+}
 
 /// Attribute value from OTLP JSON: `{"stringValue": ..}`, `{"intValue": "12"}`, `{"doubleValue": 1.5}`, ...
 fn any_value(v: &Value) -> Option<Value> {
@@ -583,17 +633,139 @@ fn attr_num(a: &Map<String, Value>, k: &str) -> Option<f64> {
     }
 }
 
-/// Run ids for a Claude Code session: the session itself, and one child run for its sub-agents.
-fn claude_code_runs(session: &str, subagent: bool) -> Option<(String, Option<String>)> {
-    let root = to_id(&format!("cc-{session}"))?;
-    if subagent {
-        let child = to_id(&format!("cc-{session}-sub"))?;
-        Some((child, Some(root)))
+fn attr_tokens(a: &Map<String, Value>, k: &str) -> u64 {
+    attr_num(a, k).unwrap_or(0.0).max(0.0) as u64
+}
+
+/// Which agent sent a log record: from the event name's prefix, else the resource's
+/// `service.name`. Records from anything else are read as Claude Code's, as before.
+fn otel_tool(event: &str, service: Option<&str>) -> Tool {
+    if event.starts_with("codex.") {
+        Tool::Codex
+    } else if event.starts_with("gemini_cli.") {
+        Tool::Gemini
+    } else if event.starts_with("claude_code.") {
+        Tool::ClaudeCode
     } else {
-        Some((root, None))
+        match service {
+            Some(s) if s.starts_with("codex") => Tool::Codex,
+            Some("gemini-cli") => Tool::Gemini,
+            _ => Tool::ClaudeCode,
+        }
     }
 }
 
+/// One log record, read: whose session it belongs to and what it reports.
+struct Record {
+    session: String,
+    subagent: bool,
+    user: Option<String>,
+    /// A model call; `None` for records that only show the session is active.
+    usage: Option<UsageEvent>,
+}
+
+/// Read a log record from a coding agent; `None` for records TokenLens does not use.
+/// See docs/connectors.md for the fields and where they are documented.
+fn read_record(tool: Tool, event: &str, a: &Map<String, Value>) -> Option<Record> {
+    let user = |keys: &[&str]| keys.iter().find_map(|k| attr_str(a, k)).map(str::to_string);
+    let model = || attr_str(a, "model").unwrap_or("unknown").to_string();
+    match tool {
+        Tool::ClaudeCode => {
+            let name = event.strip_prefix("claude_code.").unwrap_or(event);
+            let usage = match name {
+                "api_request" => Some(UsageEvent {
+                    provider: Some("anthropic".into()),
+                    model: model(),
+                    input_tokens: attr_tokens(a, "input_tokens"),
+                    output_tokens: attr_tokens(a, "output_tokens"),
+                    cache_read_tokens: attr_tokens(a, "cache_read_tokens"),
+                    cache_write_tokens: attr_tokens(a, "cache_creation_tokens"),
+                    cost_usd: attr_num(a, "cost_usd_micros")
+                        .map(|m| m / 1_000_000.0)
+                        .or_else(|| attr_num(a, "cost_usd")),
+                    duration_ms: attr_num(a, "duration_ms").map(|d| d.max(0.0) as u64),
+                    request_id: attr_str(a, "request_id").map(str::to_string),
+                    ..UsageEvent::default()
+                }),
+                "user_prompt" | "tool_result" | "tool_decision" => None,
+                _ => return None,
+            };
+            Some(Record {
+                session: attr_str(a, "session.id")?.to_string(),
+                subagent: attr_str(a, "query_source") == Some("subagent"),
+                user: user(&["user.email", "user.account_id"]),
+                usage,
+            })
+        }
+        Tool::Codex => {
+            let name = event.strip_prefix("codex.").unwrap_or(event);
+            let usage = match name {
+                // Token counts come with the stream's `response.completed` event.
+                "sse_event"
+                    if attr_str(a, "event.kind") == Some("response.completed")
+                        && a.contains_key("input_token_count") =>
+                {
+                    // OpenAI counts cached input inside the input tokens.
+                    let input = attr_tokens(a, "input_token_count");
+                    let cached = attr_tokens(a, "cached_token_count").min(input);
+                    Some(UsageEvent {
+                        provider: Some("openai".into()),
+                        model: model(),
+                        input_tokens: input - cached,
+                        output_tokens: attr_tokens(a, "output_token_count"),
+                        cache_read_tokens: cached,
+                        cache_write_tokens: attr_tokens(a, "cache_write_token_count"),
+                        ..UsageEvent::default()
+                    })
+                }
+                "conversation_starts" | "user_prompt" | "tool_decision" | "tool_result" => None,
+                _ => return None,
+            };
+            Some(Record {
+                session: attr_str(a, "conversation.id")?.to_string(),
+                subagent: false,
+                user: user(&["user.email", "user.account_id"]),
+                usage,
+            })
+        }
+        Tool::Gemini => {
+            let name = event.strip_prefix("gemini_cli.").unwrap_or(event);
+            let usage = match name {
+                "api_response" => {
+                    // Gemini counts cached content inside the prompt tokens, and bills
+                    // thinking tokens as output.
+                    let input = attr_tokens(a, "input_token_count");
+                    let cached = attr_tokens(a, "cached_content_token_count").min(input);
+                    Some(UsageEvent {
+                        provider: Some("google".into()),
+                        model: model(),
+                        input_tokens: input - cached,
+                        output_tokens: attr_tokens(a, "output_token_count")
+                            + attr_tokens(a, "thoughts_token_count"),
+                        cache_read_tokens: cached,
+                        duration_ms: attr_num(a, "duration_ms").map(|d| d.max(0.0) as u64),
+                        status: attr_num(a, "status_code")
+                            .map(|s| s as u16)
+                            .filter(|s| *s >= 400),
+                        ..UsageEvent::default()
+                    })
+                }
+                "user_prompt" | "tool_call" | "agent.start" => None,
+                _ => return None,
+            };
+            Some(Record {
+                session: attr_str(a, "session.id")?.to_string(),
+                subagent: attr_str(a, "role") == Some("subagent"),
+                user: user(&["user.email"]),
+                usage,
+            })
+        }
+        // Cursor has no telemetry export; its usage comes from the Admin API import.
+        Tool::Cursor => None,
+    }
+}
+
+/// OTLP logs from Claude Code, OpenAI Codex CLI and Gemini CLI.
 pub async fn otel_logs(
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -608,7 +780,7 @@ pub async fn otel_logs(
         return error(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "tokenlens_invalid_request",
-            "send OTLP logs as JSON: OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json",
+            "send OTLP logs as JSON (OTLP/HTTP with protocol http/json)",
         );
     }
     let doc: Value = match serde_json::from_slice(&body) {
@@ -621,9 +793,7 @@ pub async fn otel_logs(
             );
         }
     };
-    let agent = header_str(&headers, "x-tl-agent")
-        .and_then(to_id)
-        .unwrap_or_else(|| "claude-code".into());
+    let header_agent = header_str(&headers, "x-tl-agent").and_then(to_id);
     let header_user = header_str(&headers, "x-tl-user").filter(|u| valid_user(u));
     let mut recorded = 0usize;
     for rl in doc
@@ -634,6 +804,7 @@ pub async fn otel_logs(
     {
         let mut resource = Map::new();
         attributes(rl.pointer("/resource/attributes"), &mut resource);
+        let service = attr_str(&resource, "service.name").map(str::to_string);
         for sl in rl
             .get("scopeLogs")
             .and_then(Value::as_array)
@@ -648,56 +819,33 @@ pub async fn otel_logs(
             {
                 let mut a = resource.clone();
                 attributes(rec.get("attributes"), &mut a);
-                let name = attr_str(&a, "event.name")
+                let event = attr_str(&a, "event.name")
                     .or_else(|| rec.pointer("/body/stringValue").and_then(Value::as_str))
                     .unwrap_or("");
-                let name = name.strip_prefix("claude_code.").unwrap_or(name);
-                let Some(session) = attr_str(&a, "session.id") else {
+                let tool = otel_tool(event, service.as_deref());
+                let Some(r) = read_record(tool, event, &a) else {
                     continue;
                 };
-                let subagent = attr_str(&a, "query_source") == Some("subagent");
-                let Some((run, parent)) = claude_code_runs(session, subagent) else {
+                let Some((run, parent)) = session_runs(tool, &r.session, r.subagent) else {
                     continue;
                 };
-                let user = header_user
-                    .map(str::to_string)
-                    .or_else(|| attr_str(&a, "user.email").map(str::to_string))
-                    .or_else(|| attr_str(&a, "user.account_id").map(str::to_string))
-                    .filter(|u| valid_user(u));
                 let who = Who {
                     run,
                     parent,
-                    agent: agent.clone(),
-                    user,
-                    source: "claude-code".into(),
+                    agent: header_agent
+                        .clone()
+                        .unwrap_or_else(|| tool.name().to_string()),
+                    user: header_user
+                        .map(str::to_string)
+                        .or(r.user)
+                        .filter(|u| valid_user(u)),
+                    source: tool.name().into(),
                     run_budget_usd: None,
                 };
-                match name {
-                    "api_request" => {
-                        let tokens = |k: &str| attr_num(&a, k).unwrap_or(0.0).max(0.0) as u64;
-                        let cost_usd = attr_num(&a, "cost_usd_micros")
-                            .map(|m| m / 1_000_000.0)
-                            .or_else(|| attr_num(&a, "cost_usd"));
-                        let ev = UsageEvent {
-                            provider: Some("anthropic".into()),
-                            model: attr_str(&a, "model").unwrap_or("unknown").to_string(),
-                            input_tokens: tokens("input_tokens"),
-                            output_tokens: tokens("output_tokens"),
-                            cache_read_tokens: tokens("cache_read_tokens"),
-                            cache_write_tokens: tokens("cache_creation_tokens"),
-                            cost_usd,
-                            duration_ms: attr_num(&a, "duration_ms").map(|d| d.max(0.0) as u64),
-                            request_id: attr_str(&a, "request_id").map(str::to_string),
-                            ..UsageEvent::default()
-                        };
-                        if let Err(e) = record_usage(&st, &c, &ev, &who).await {
-                            return unavailable(e);
-                        }
-                        recorded += 1;
-                    }
-                    "user_prompt" | "tool_result" | "tool_decision" => {
-                        if let Err(e) = st
-                            .ledger
+                let result = match &r.usage {
+                    Some(ev) => record_usage(&st, &c, ev, &who).await.map(|_| recorded += 1),
+                    None => {
+                        st.ledger
                             .touch(
                                 &c.org().id,
                                 &c.project().id,
@@ -709,11 +857,10 @@ pub async fn otel_logs(
                                 false,
                             )
                             .await
-                        {
-                            return unavailable(e);
-                        }
                     }
-                    _ => {}
+                };
+                if let Err(e) = result {
+                    return unavailable(e);
                 }
             }
         }
@@ -722,42 +869,152 @@ pub async fn otel_logs(
     Json(json!({})).into_response()
 }
 
-// --- Claude Code hooks ---
+/// OTLP traces and metrics: accepted and dropped. Gemini CLI exports them next to its logs when
+/// it sends OTLP over HTTP; TokenLens only uses the logs.
+pub async fn otel_discard(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    match caller(&st, &headers) {
+        Ok(_) => Json(json!({})).into_response(),
+        Err(r) => r,
+    }
+}
 
-pub async fn claude_code_hook(
-    State(st): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(input): Json<Value>,
-) -> Response {
-    let c = match caller(&st, &headers) {
+/// What a hook call asks TokenLens to allow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Gate {
+    /// A prompt is about to be sent.
+    Prompt,
+    /// A tool call (shell command, file edit, MCP tool, ...) is about to run.
+    Tool,
+    /// A sub-agent is about to start.
+    Subagent,
+    /// A model call is about to be made.
+    Model,
+}
+
+/// One hook call, read.
+struct HookCall<'a> {
+    event: &'a str,
+    session: &'a str,
+    subagent: bool,
+    gate: Option<Gate>,
+    ended: bool,
+    user: Option<&'a str>,
+}
+
+/// See docs/connectors.md for each tool's hook events and fields.
+fn read_hook(tool: Tool, input: &Value) -> Option<HookCall<'_>> {
+    let s = |k: &str| {
+        input
+            .get(k)
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+    };
+    let event = s("hook_event_name").unwrap_or("");
+    let (gate, ended) = match (tool, event) {
+        (Tool::ClaudeCode | Tool::Codex, "UserPromptSubmit") => (Some(Gate::Prompt), false),
+        (Tool::ClaudeCode | Tool::Codex, "PreToolUse") => (Some(Gate::Tool), false),
+        // Codex can't stop a sub-agent from a hook; its tool calls are still checked.
+        (Tool::ClaudeCode, "SubagentStart") => (Some(Gate::Subagent), false),
+        (Tool::ClaudeCode | Tool::Codex | Tool::Gemini, "SessionEnd") => (None, true),
+        (Tool::Gemini, "BeforeAgent") => (Some(Gate::Prompt), false),
+        (Tool::Gemini, "BeforeTool") => (Some(Gate::Tool), false),
+        (Tool::Gemini, "BeforeModel") => (Some(Gate::Model), false),
+        (Tool::Cursor, "beforeSubmitPrompt") => (Some(Gate::Prompt), false),
+        (Tool::Cursor, "preToolUse" | "beforeShellExecution" | "beforeMCPExecution") => {
+            (Some(Gate::Tool), false)
+        }
+        (Tool::Cursor, "subagentStart") => (Some(Gate::Subagent), false),
+        (Tool::Cursor, "sessionEnd") => (None, true),
+        _ => (None, false),
+    };
+    let (session, subagent) = match tool {
+        // Hooks fired inside a Claude Code sub-agent carry its agent_id.
+        Tool::ClaudeCode => (
+            s("session_id")?,
+            s("agent_id").is_some() || matches!(event, "SubagentStart" | "SubagentStop"),
+        ),
+        // Codex sub-agent hooks carry the parent session's id.
+        Tool::Codex | Tool::Gemini => (s("session_id")?, false),
+        // A sub-agent about to start counts against the conversation that starts it.
+        Tool::Cursor => (
+            s("conversation_id")
+                .or_else(|| s("parent_conversation_id"))
+                .or_else(|| s("session_id"))?,
+            false,
+        ),
+    };
+    Some(HookCall {
+        event,
+        session,
+        subagent,
+        gate,
+        ended,
+        user: if tool == Tool::Cursor {
+            s("user_email")
+        } else {
+            None
+        },
+    })
+}
+
+/// The hook's answer when TokenLens has no objection.
+fn hook_allow(tool: Tool, gate: Option<Gate>) -> Value {
+    match (tool, gate) {
+        (Tool::Cursor, Some(Gate::Prompt)) => json!({ "continue": true }),
+        (Tool::Cursor, Some(_)) => json!({ "permission": "allow" }),
+        _ => json!({}),
+    }
+}
+
+/// The hook's answer that stops the prompt, tool call, sub-agent or model call, in each
+/// tool's own format.
+fn hook_block(tool: Tool, gate: Gate, event: &str, reason: &str) -> Value {
+    match (tool, gate) {
+        (Tool::ClaudeCode | Tool::Codex, Gate::Tool) => json!({
+            "hookSpecificOutput": {
+                "hookEventName": event,
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
+        }),
+        (Tool::ClaudeCode | Tool::Codex, _) => json!({ "decision": "block", "reason": reason }),
+        (Tool::Gemini, _) => json!({ "decision": "deny", "reason": reason }),
+        (Tool::Cursor, Gate::Prompt) => json!({ "continue": false, "user_message": reason }),
+        (Tool::Cursor, _) => json!({
+            "permission": "deny",
+            "user_message": reason,
+            "agent_message": reason,
+        }),
+    }
+}
+
+/// A coding agent's hook: records that its session is active, and stops the next prompt,
+/// tool call, sub-agent or model call when the run is paused or killed or an enforced budget is
+/// used up. Fails open: a ledger outage never stops anyone's agent.
+async fn agent_hook(st: &AppState, headers: &HeaderMap, input: &Value, tool: Tool) -> Response {
+    let c = match caller(st, headers) {
         Ok(c) => c,
         Err(r) => return r,
     };
-    let event = input
-        .get("hook_event_name")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let Some(session) = input.get("session_id").and_then(Value::as_str) else {
+    let Some(call) = read_hook(tool, input) else {
         return Json(json!({})).into_response();
     };
-    // Hooks fired inside a sub-agent carry its agent_id.
-    let subagent = input.get("agent_id").and_then(Value::as_str).is_some()
-        || event == "SubagentStart"
-        || event == "SubagentStop";
-    let Some((run, parent)) = claude_code_runs(session, subagent) else {
-        return Json(json!({})).into_response();
+    let allow = Json(hook_allow(tool, call.gate)).into_response();
+    let Some((run, parent)) = session_runs(tool, call.session, call.subagent) else {
+        return allow;
     };
     let who = Who {
         run,
         parent,
-        agent: header_str(&headers, "x-tl-agent")
+        agent: header_str(headers, "x-tl-agent")
             .and_then(to_id)
-            .unwrap_or_else(|| "claude-code".into()),
-        user: header_str(&headers, "x-tl-user")
+            .unwrap_or_else(|| tool.name().into()),
+        user: header_str(headers, "x-tl-user")
+            .or(call.user)
             .filter(|u| valid_user(u))
             .map(str::to_string),
-        source: "claude-code".into(),
-        run_budget_usd: header_str(&headers, "x-tl-run-budget-usd")
+        source: tool.name().into(),
+        run_budget_usd: header_str(headers, "x-tl-run-budget-usd")
             .and_then(|b| b.parse::<f64>().ok())
             .filter(|b| b.is_finite() && *b > 0.0),
     };
@@ -771,46 +1028,81 @@ pub async fn claude_code_hook(
             &who.run,
             who.parent.as_deref(),
             &who.source,
-            event == "SessionEnd",
+            call.ended,
         )
         .await
     {
+        if call.gate.is_some() {
+            tracing::error!(error = %e, "hook could not record activity; allowing");
+            return allow;
+        }
         return unavailable(e);
     }
-    if !matches!(event, "UserPromptSubmit" | "PreToolUse" | "SubagentStart") {
-        return Json(json!({})).into_response();
-    }
-    let v = match verdict(&st, &c, &who, 0).await {
+    let Some(gate) = call.gate else {
+        return allow;
+    };
+    let v = match verdict(st, &c, &who, 0).await {
         Ok(v) => v,
-        // Never break someone's agent because the ledger is down; fail open.
         Err(e) => {
             tracing::error!(error = %e, "hook budget check failed; allowing");
-            return Json(json!({})).into_response();
+            return allow;
         }
     };
     if v.allowed {
-        return Json(json!({})).into_response();
+        return allow;
     }
     let _ = st.activity.try_send(blocked_event(&c, &who, &v, None));
     let reason = v
         .reason
         .unwrap_or_else(|| "TokenLens: budget used up".into());
-    Json(match event {
-        "PreToolUse" => json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason,
-            }
-        }),
-        _ => json!({ "decision": "block", "reason": reason }),
-    })
-    .into_response()
+    Json(hook_block(tool, gate, call.event, &reason)).into_response()
+}
+
+/// Claude Code HTTP hooks.
+pub async fn claude_code_hook(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(input): Json<Value>,
+) -> Response {
+    agent_hook(&st, &headers, &input, Tool::ClaudeCode).await
+}
+
+/// OpenAI Codex CLI command hooks, forwarded by the TokenLens hook script.
+pub async fn codex_hook(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(input): Json<Value>,
+) -> Response {
+    agent_hook(&st, &headers, &input, Tool::Codex).await
+}
+
+/// Gemini CLI command hooks, forwarded by the TokenLens hook script.
+pub async fn gemini_hook(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(input): Json<Value>,
+) -> Response {
+    agent_hook(&st, &headers, &input, Tool::Gemini).await
+}
+
+/// Cursor command hooks, forwarded by the TokenLens hook script.
+pub async fn cursor_hook(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(input): Json<Value>,
+) -> Response {
+    agent_hook(&st, &headers, &input, Tool::Cursor).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn attrs(list: Value) -> Map<String, Value> {
+        let mut m = Map::new();
+        attributes(Some(&list), &mut m);
+        m
+    }
 
     #[test]
     fn ids_from_sessions() {
@@ -820,28 +1112,126 @@ mod tests {
         );
         assert_eq!(to_id("a b/c").as_deref(), Some("a-b-c"));
         assert_eq!(to_id("  "), None);
-        let (run, parent) = claude_code_runs("s1", true).unwrap();
+        let (run, parent) = session_runs(Tool::ClaudeCode, "s1", true).unwrap();
         assert_eq!(
             (run.as_str(), parent.as_deref()),
             ("cc-s1-sub", Some("cc-s1"))
         );
+        let (run, _) = session_runs(Tool::Codex, "thr_1", false).unwrap();
+        assert_eq!(run, "codex-thr_1");
+        let (run, _) = session_runs(Tool::Gemini, "g 1", false).unwrap();
+        assert_eq!(run, "gemini-g-1");
     }
 
     #[test]
     fn otlp_values() {
-        let mut m = Map::new();
-        attributes(
-            Some(&json!([
-                {"key": "model", "value": {"stringValue": "claude-opus-5-5"}},
-                {"key": "input_tokens", "value": {"intValue": "120"}},
-                {"key": "cost_usd", "value": {"doubleValue": 0.25}},
-                {"key": "x", "value": {"kvlistValue": {}}},
-            ])),
-            &mut m,
-        );
+        let m = attrs(json!([
+            {"key": "model", "value": {"stringValue": "claude-opus-5-5"}},
+            {"key": "input_tokens", "value": {"intValue": "120"}},
+            {"key": "cost_usd", "value": {"doubleValue": 0.25}},
+            {"key": "x", "value": {"kvlistValue": {}}},
+        ]));
         assert_eq!(attr_str(&m, "model"), Some("claude-opus-5-5"));
         assert_eq!(attr_num(&m, "input_tokens"), Some(120.0));
         assert_eq!(attr_num(&m, "cost_usd"), Some(0.25));
         assert!(!m.contains_key("x"));
+    }
+
+    #[test]
+    fn tells_agents_apart() {
+        assert_eq!(otel_tool("codex.sse_event", None), Tool::Codex);
+        assert_eq!(otel_tool("gemini_cli.api_response", None), Tool::Gemini);
+        assert_eq!(
+            otel_tool("api_request", Some("claude-code")),
+            Tool::ClaudeCode
+        );
+        assert_eq!(otel_tool("sse_event", Some("codex_cli_rs")), Tool::Codex);
+        assert_eq!(otel_tool("api_response", Some("gemini-cli")), Tool::Gemini);
+        assert_eq!(otel_tool("api_request", None), Tool::ClaudeCode);
+    }
+
+    #[test]
+    fn codex_usage_excludes_cached_input() {
+        let a = attrs(json!([
+            {"key": "event.kind", "value": {"stringValue": "response.completed"}},
+            {"key": "conversation.id", "value": {"stringValue": "thr_1"}},
+            {"key": "model", "value": {"stringValue": "gpt-5.5"}},
+            {"key": "input_token_count", "value": {"stringValue": "1000"}},
+            {"key": "cached_token_count", "value": {"intValue": "800"}},
+            {"key": "output_token_count", "value": {"stringValue": "50"}},
+        ]));
+        let r = read_record(Tool::Codex, "codex.sse_event", &a).unwrap();
+        let u = r.usage.unwrap();
+        assert_eq!(
+            (u.input_tokens, u.cache_read_tokens, u.output_tokens),
+            (200, 800, 50)
+        );
+        // Other stream events don't carry usage and aren't used.
+        let a = attrs(json!([
+            {"key": "event.kind", "value": {"stringValue": "response.output_item.done"}},
+            {"key": "conversation.id", "value": {"stringValue": "thr_1"}},
+        ]));
+        assert!(read_record(Tool::Codex, "codex.sse_event", &a).is_none());
+    }
+
+    #[test]
+    fn gemini_usage_bills_thoughts_as_output() {
+        let a = attrs(json!([
+            {"key": "session.id", "value": {"stringValue": "s"}},
+            {"key": "input_token_count", "value": {"intValue": 1000}},
+            {"key": "cached_content_token_count", "value": {"intValue": 400}},
+            {"key": "output_token_count", "value": {"intValue": 30}},
+            {"key": "thoughts_token_count", "value": {"intValue": 70}},
+            {"key": "role", "value": {"stringValue": "subagent"}},
+        ]));
+        let r = read_record(Tool::Gemini, "gemini_cli.api_response", &a).unwrap();
+        assert!(r.subagent);
+        let u = r.usage.unwrap();
+        assert_eq!(
+            (u.input_tokens, u.cache_read_tokens, u.output_tokens),
+            (600, 400, 100)
+        );
+        // The semantic-convention copy of the same call is not counted twice.
+        assert!(
+            read_record(
+                Tool::Gemini,
+                "gen_ai.client.inference.operation.details",
+                &a
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn hook_answers_in_each_tools_format() {
+        let r = "over";
+        assert_eq!(
+            hook_block(Tool::Codex, Gate::Tool, "PreToolUse", r)["hookSpecificOutput"]["permissionDecision"],
+            "deny"
+        );
+        assert_eq!(
+            hook_block(Tool::Codex, Gate::Prompt, "UserPromptSubmit", r)["decision"],
+            "block"
+        );
+        assert_eq!(
+            hook_block(Tool::Gemini, Gate::Model, "BeforeModel", r)["decision"],
+            "deny"
+        );
+        assert_eq!(
+            hook_block(Tool::Cursor, Gate::Prompt, "beforeSubmitPrompt", r)["continue"],
+            false
+        );
+        assert_eq!(
+            hook_block(Tool::Cursor, Gate::Tool, "preToolUse", r)["permission"],
+            "deny"
+        );
+        assert_eq!(
+            hook_allow(Tool::Cursor, Some(Gate::Subagent))["permission"],
+            "allow"
+        );
+        assert_eq!(hook_allow(Tool::Gemini, Some(Gate::Tool)), json!({}));
+        let input = json!({"hook_event_name": "subagentStart", "parent_conversation_id": "c1"});
+        let call = read_hook(Tool::Cursor, &input).unwrap();
+        assert_eq!((call.session, call.gate), ("c1", Some(Gate::Subagent)));
     }
 }

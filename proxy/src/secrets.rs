@@ -70,6 +70,12 @@ pub fn context(org: &str, provider: &str) -> String {
     format!("tokenlens/provider-key/{org}/{provider}")
 }
 
+/// The associated data for an org's key to another service (e.g. a Cursor Admin API key), so it
+/// cannot be swapped with a provider key.
+pub fn connector_context(org: &str, service: &str) -> String {
+    format!("tokenlens/connector-key/{org}/{service}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

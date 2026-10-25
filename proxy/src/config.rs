@@ -89,6 +89,9 @@ pub struct ServerConfig {
     pub default_max_output_tokens: u64,
     #[serde(default = "default_max_body")]
     pub max_body_bytes: usize,
+    /// Base URL of Cursor's Admin API, for the optional Cursor usage import.
+    #[serde(default = "default_cursor_api_url")]
+    pub cursor_api_url: String,
 }
 
 fn default_admin_listen() -> String {
@@ -108,6 +111,9 @@ fn default_max_output() -> u64 {
 }
 fn default_max_body() -> usize {
     10 * 1024 * 1024
+}
+fn default_cursor_api_url() -> String {
+    "https://api.cursor.com".into()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -268,8 +274,21 @@ pub struct OrgConfig {
     /// one). Required by Anthropic keys that are not scoped to a workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anthropic_workspace_id: Option<String>,
+    /// Usage imported from the Cursor team's Admin API, if set up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_import: Option<CursorImport>,
     #[serde(default)]
     pub projects: Vec<ProjectConfig>,
+}
+
+/// Imports a Cursor team's usage events (see `crate::connectors`).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CursorImport {
+    /// The project the imported spend counts against.
+    pub project: String,
+    /// The team's Admin API key, encrypted like provider keys.
+    pub key: ProviderSecret,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
