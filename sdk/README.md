@@ -19,7 +19,7 @@ Ollama / vLLM / LM Studio (priced at $0). The provider is recognised from the ba
 | Package | Path | Wraps |
 |---|---|---|
 | `tokenlens` (Python ≥ 3.9) | [`python/`](python) | `openai` ≥ 1.0, `anthropic` ≥ 0.30 (sync and async clients) |
-| `@tokenlens/sdk` (Node ≥ 18) | [`typescript/`](typescript) | `openai` ≥ 4.0, `@anthropic-ai/sdk` ≥ 0.30 |
+| `@tokenlens/sdk` (Node ≥ 20) | [`typescript/`](typescript) | `openai` ≥ 4.0, `@anthropic-ai/sdk` ≥ 0.30 |
 
 Configuration: `TOKENLENS_API_KEY` (a TokenLens key, `tl_…`), `TOKENLENS_BASE_URL` (default
 `http://127.0.0.1:8787`) and optionally `TOKENLENS_MODE` (`direct` or `proxy`); or pass

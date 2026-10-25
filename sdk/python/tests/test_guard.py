@@ -46,8 +46,10 @@ def test_openai_points_at_proxy_with_virtual_key(proxy):
 
 
 def test_anthropic_points_at_proxy_and_drops_provider_bearer(proxy):
-    raw = anthropic.Anthropic(api_key="sk-ant-real", auth_token="real-oauth-token")
+    # An OAuth-token client: newer SDKs refuse a second credential, so the guard must drop it.
+    raw = anthropic.Anthropic(auth_token="real-oauth-token")
     client = guard.anthropic(raw, agent="writer")
+    assert raw.auth_token == "real-oauth-token", "the caller's client is unchanged"
     assert message(client).content[0].text == "ok"
     req = proxy.requests[-1]
     assert req["path"] == "/v1/messages"

@@ -22,7 +22,7 @@ await guard.run({ runId: 'ticket-4812', budgetUsd: 5 }, async () => {
 });
 ```
 
-Node ≥ 18 (uses `AsyncLocalStorage`). See [../README.md](../README.md) for the full API.
+Node ≥ 20 (uses `AsyncLocalStorage`). See [../README.md](../README.md) for the full API.
 
 ## Develop
 

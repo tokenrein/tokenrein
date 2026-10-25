@@ -19,6 +19,8 @@ swapped for a cached subclass that:
 
 from __future__ import annotations
 
+import copy
+
 import asyncio
 import inspect
 import json
@@ -119,6 +121,10 @@ def _guarded_class(base: type, *, strip_bearer: bool) -> type:
     return cls
 
 
+# Anthropic client credentials other than the API key.
+_PROVIDER_CREDENTIALS = ("auth_token", "credentials")
+
+
 def wrap(
     client: Any,
     *,
@@ -132,7 +138,17 @@ def wrap(
         validate_id(agent, "agent")
     if user is not None:
         validate_user(user)
-    guarded = client.with_options(api_key=api_key, base_url=base_url)
+    source = client
+    if strip_bearer:
+        # The proxy only needs the TokenLens key. Newer Anthropic SDKs refuse a client with more
+        # than one credential, and a copy keeps the original's, so drop them on a shallow copy
+        # first (the caller's client is left as it is).
+        held = [a for a in _PROVIDER_CREDENTIALS if getattr(client, a, None) is not None]
+        if held:
+            source = copy.copy(client)
+            for a in held:
+                setattr(source, a, None)
+    guarded = source.with_options(api_key=api_key, base_url=base_url)
     guarded.__class__ = _guarded_class(type(client), strip_bearer=strip_bearer)
     guarded._tl_agent = agent
     guarded._tl_user = user
