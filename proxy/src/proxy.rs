@@ -539,9 +539,13 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
             } else {
                 "tokenrein_run_paused"
             };
-            let message = format!(
-                "Tokenrein: run {stopped} is {state}; resume it from the dashboard or admin API"
-            );
+            let message = if state == "killed" {
+                format!("Tokenrein: run {stopped} was stopped by an admin and cannot continue.")
+            } else {
+                format!(
+                    "Tokenrein: run {stopped} is paused. An approver can let it continue from the Approvals or Runs page of the Tokenrein dashboard."
+                )
+            };
             return with_run_header(reject(StatusCode::FORBIDDEN, kind, &message), &run_id);
         }
         Err(e) => {

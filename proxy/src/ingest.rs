@@ -504,7 +504,7 @@ async fn verdict(st: &AppState, c: &Caller, who: &Who, estimate: u64) -> anyhow:
                     format!("Tokenrein: run {run_id} was stopped by an admin and cannot continue.")
                 } else {
                     format!(
-                        "Tokenrein: run {run_id} is paused by an admin. Resume it in the Tokenrein dashboard to continue."
+                        "Tokenrein: run {run_id} is paused. An approver can let it continue from the Approvals or Runs page of the Tokenrein dashboard."
                     )
                 }),
                 scope: Some(format!("run:{run_id}")),

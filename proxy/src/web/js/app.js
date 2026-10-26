@@ -202,3 +202,10 @@ function start() {
   S.token = store("session", TOKEN_KEY);
   try { await signedIn(); } catch (_) { showLogin(); }
 })();
+// An alert link opened in a tab that already shows the dashboard.
+window.addEventListener("hashchange", () => {
+  const tab = location.hash.startsWith("#tab=") ? location.hash.slice(5) : "";
+  if (!S.me || !$(`nav.tabs button[data-tab="${CSS.escape(tab)}"]`)) return;
+  history.replaceState(null, "", location.pathname);
+  showTab(tab);
+});
