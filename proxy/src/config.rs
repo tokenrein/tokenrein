@@ -446,6 +446,7 @@ pub const ENV_OVERRIDES: &[(&str, &str)] = &[
     ("TOKENREIN_LISTEN", "server.listen"),
     ("TOKENREIN_ADMIN_LISTEN", "server.admin_listen"),
     ("TOKENREIN_REDIS_URL", "redis.url"),
+    ("TOKENREIN_PUBLIC_URL", "auth.public_url"),
     (
         "TOKENREIN_DATABASE_MAX_CONNECTIONS",
         "database.max_connections",
@@ -464,6 +465,9 @@ impl Config {
         }
         if let Some(v) = get("TOKENREIN_REDIS_URL") {
             self.redis.url = v;
+        }
+        if let Some(v) = get("TOKENREIN_PUBLIC_URL") {
+            self.auth.public_url = Some(v.trim().trim_end_matches('/').to_string());
         }
         if let Some(n) =
             get("TOKENREIN_DATABASE_MAX_CONNECTIONS").and_then(|v| v.trim().parse().ok())
@@ -958,6 +962,7 @@ mod tests {
             "TOKENREIN_ADMIN_LISTEN" => Some("0.0.0.0:8788".into()),
             "TOKENREIN_REDIS_URL" => Some("redis://redis:6379/2".into()),
             "TOKENREIN_DATABASE_MAX_CONNECTIONS" => Some("25".into()),
+            "TOKENREIN_PUBLIC_URL" => Some("https://tokenrein.example.com/".into()),
             _ => None,
         })
         .unwrap();
@@ -965,6 +970,8 @@ mod tests {
         assert_eq!(rt.cfg.server.admin_listen, "0.0.0.0:8788");
         assert_eq!(rt.cfg.redis.url, "redis://redis:6379/2");
         assert_eq!(rt.cfg.database.max_connections, 25);
+        let public = rt.cfg.auth.public_url.as_deref();
+        assert_eq!(public, Some("https://tokenrein.example.com"));
         // Empty values keep the file's settings.
         let rt = Resolved::from_toml(BASE, |name| (name == "TOKENREIN_LISTEN").then(String::new))
             .unwrap();

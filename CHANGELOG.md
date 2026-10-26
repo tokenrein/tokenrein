@@ -7,6 +7,19 @@ SDKs; the release workflow refuses a tag that does not match all three.
 
 ## [Unreleased]
 
+### Added
+
+- **Approvals**: run budgets can be in Ask mode. A run that uses up its budget is paused and
+  waits for an approver, who adds budget (the run continues) or stops it. Approvals page,
+  `/admin/orgs/{org}/approvals`.
+- **Loop guard**: pauses, stops or reports runs that repeat the same request or tool call, spend
+  too fast or make too many calls, in the proxy, SDK checks, agent hooks and reported usage. The
+  SDKs send a hash of each request (never its content) for this.
+- **Alerts** to Slack, Microsoft Teams, PagerDuty and HMAC-signed webhooks: budget 80% used,
+  budget used up, run waiting for approval, runaway loop.
+- `TOKENREIN_PUBLIC_URL` (Helm `publicUrl`) sets the dashboard's address for links and SSO.
+- Developer, enterprise and admin API guides.
+
 ### Renamed: TokenLens is now Tokenrein
 
 | Before | Now |

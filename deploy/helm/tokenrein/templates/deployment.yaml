@@ -64,6 +64,10 @@ spec:
               value: "0.0.0.0:8787"
             - name: TOKENREIN_ADMIN_LISTEN
               value: "0.0.0.0:8788"
+            {{- with .Values.publicUrl }}
+            - name: TOKENREIN_PUBLIC_URL
+              value: {{ . | quote }}
+            {{- end }}
             {{- if .Values.redis.enabled }}
             - name: TOKENREIN_REDIS_URL
               value: {{ printf "redis://%s:6379" (include "tokenrein.redisHost" .) | quote }}

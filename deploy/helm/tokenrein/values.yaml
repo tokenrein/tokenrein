@@ -2,6 +2,10 @@
 
 replicaCount: 2
 
+# The dashboard's address as people reach it (https://tokenrein.example.com): used in alert
+# links, password setup links and single sign-on redirects.
+publicUrl: ""
+
 image:
   repository: ghcr.io/geektuhin123/tokenrein
   # Defaults to the chart's appVersion.
