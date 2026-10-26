@@ -406,6 +406,50 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         tracing::warn!(request_id, model = %ctx.model, "unknown model price; reserving at the provider's most expensive rate");
     }
 
+    // Loop detection, before anything is reserved: a run caught looping stops here.
+    let loop_policy = crate::loops::policy_for(&rt, &org.id, &project.id);
+    if loop_policy.is_some() {
+        let fingerprint = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| crate::loops::request_fingerprint(&ctx.model, &v));
+        let seen = crate::loops::Seen {
+            org: &org.id,
+            project: &project.id,
+            agent: &ctx.agent,
+            run: &run_id,
+            fingerprint: fingerprint.as_deref(),
+            call: true,
+            cost: 0,
+        };
+        match crate::loops::observe(&st, loop_policy, seen).await {
+            Ok(Some(action)) => {
+                emit(
+                    &st,
+                    &ctx,
+                    &Outcome::blocked("blocked_loop", &format!("run:{run_id}")),
+                );
+                let (kind, message) = if action == config::LoopAction::Kill {
+                    (
+                        "tokenrein_run_killed",
+                        format!(
+                            "Tokenrein: run {run_id} looks like a runaway loop and was stopped"
+                        ),
+                    )
+                } else {
+                    (
+                        "tokenrein_run_paused",
+                        format!(
+                            "Tokenrein: run {run_id} looks like a runaway loop and is paused until an approver lets it continue"
+                        ),
+                    )
+                };
+                return with_run_header(reject(StatusCode::FORBIDDEN, kind, &message), &run_id);
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!(request_id, error = %e, "loop detection failed; continuing"),
+        }
+    }
+
     let reservation_ttl = rt.cfg.server.upstream_timeout_secs + RESERVATION_GRACE_SECS;
     let mut runs = Vec::with_capacity(ancestors.len() + 1);
     runs.push(run_id.clone());
@@ -427,8 +471,42 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         Ok(Reservation::OverBudget {
             label,
             spent,
+            limit,
+            mode: config::Mode::Ask,
+            ..
+        }) if label.starts_with("run:") => {
+            // Ask mode: the run waits for an approver instead of failing.
+            let budget_run = &label["run:".len()..];
+            let request = crate::approvals::Request {
+                org: &org.id,
+                run: budget_run,
+                project: &project.id,
+                agent: &ctx.agent,
+                reason: crate::approvals::Reason::Budget {
+                    scope: &label,
+                    spent,
+                    limit,
+                },
+            };
+            if let Err(e) = crate::approvals::request(&st, request).await {
+                tracing::error!(request_id, error = %e, "could not request approval");
+            }
+            emit(&st, &ctx, &Outcome::blocked("blocked_approval", &label));
+            let message = format!(
+                "Tokenrein: run {budget_run} reached its ${} budget and is waiting for an approver to let it continue",
+                usd(limit)
+            );
+            return with_run_header(
+                reject(StatusCode::FORBIDDEN, "tokenrein_run_paused", &message),
+                &run_id,
+            );
+        }
+        Ok(Reservation::OverBudget {
+            label,
+            spent,
             reserved,
             limit,
+            ..
         }) => {
             emit(&st, &ctx, &Outcome::blocked("blocked_budget", &label));
             let message = format!(
@@ -806,7 +884,24 @@ async fn settle(st: &AppState, ctx: &Ctx, actual: u64) {
             .settle(&ctx.org, &ctx.request_id, actual, &ctx.scopes)
             .await
         {
-            Ok(_) => return,
+            Ok(_) => {
+                let policy = crate::loops::policy_for(&st.rt(), &ctx.org, &ctx.project);
+                if policy.is_some() && actual > 0 {
+                    let seen = crate::loops::Seen {
+                        org: &ctx.org,
+                        project: &ctx.project,
+                        agent: &ctx.agent,
+                        run: &ctx.run_id,
+                        fingerprint: None,
+                        call: false,
+                        cost: actual,
+                    };
+                    if let Err(e) = crate::loops::observe(st, policy, seen).await {
+                        tracing::warn!(request_id = %ctx.request_id, error = %e, "loop detection failed");
+                    }
+                }
+                return;
+            }
             Err(e) => {
                 tracing::warn!(request_id = %ctx.request_id, attempt, error = %e, "settle failed");
                 tokio::time::sleep(Duration::from_millis(50 << attempt)).await;

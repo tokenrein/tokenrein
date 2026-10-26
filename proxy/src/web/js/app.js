@@ -91,11 +91,11 @@ function showTab(tab) {
   const changed = S.tab !== tab;
   S.tab = tab;
   if (tab !== "run") store("local", TAB_KEY, tab);
-  if (changed) S.peopleNotice = ""; // one-time links and tokens are shown once
+  if (changed) { S.peopleNotice = ""; S.alertsNotice = ""; } // one-time secrets are shown once
   $$("nav.tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
   $$("[data-view]").forEach(v => v.classList.toggle("hide", v.dataset.view !== tab));
   render();
-  if (changed && ["spend", "run", "overview", "models", "connect", "audit", "people"].includes(tab) && S.me) refresh();
+  if (changed && ["spend", "run", "overview", "models", "connect", "audit", "people", "approvals", "settings"].includes(tab) && S.me) refresh();
 }
 function openRun(id) {
   S.runId = id; S.run = null;
@@ -139,6 +139,8 @@ async function refresh() {
       if (S.tab === "run" && S.runId) S.run = await api(`/admin/orgs/${o}/runs/${encodeURIComponent(S.runId)}/timeline`);
       if (S.tab === "audit") S.audit = can("admin") ? await api(auditPath()) : null;
       if (S.tab === "people") await loadPeople();
+      if (S.tab === "settings") await loadAlerts();
+      S.approvals = await api(`/admin/orgs/${o}/approvals`).catch(err => ({ error: err.message, approvals: [], pending: 0 }));
     } else {
       S.runs = []; S.agents = []; S.events = []; S.review = null;
     }
@@ -164,6 +166,8 @@ function render() {
   if (S.tab === "settings" && !S.editing) renderSettings();
   if (S.tab === "audit") renderAudit();
   if (S.tab === "people") renderPeople();
+  if (S.tab === "approvals") renderApprovals();
+  renderApprovalBadge();
   renderWhoami();
   // Org admins see their org's audit log; instance admins see everything.
   $("nav.tabs button[data-tab=audit]").classList.toggle("hide", !can("admin"));
@@ -190,6 +194,9 @@ function start() {
   let message = "";
   if (hash.startsWith("#setup=")) S.setupToken = decodeURIComponent(hash.slice(7));
   if (hash.startsWith("#login-error=")) message = decodeURIComponent(hash.slice(13).replace(/\+/g, " "));
+  // Links from alerts open a page: #tab=approvals (kept through sign-in).
+  const tab = hash.startsWith("#tab=") ? hash.slice(5) : "";
+  if ($(`nav.tabs button[data-tab="${CSS.escape(tab)}"]`)) store("local", TAB_KEY, tab);
   if (hash) history.replaceState(null, "", location.pathname);
   if (S.setupToken || message) return showLogin(message);
   S.token = store("session", TOKEN_KEY);

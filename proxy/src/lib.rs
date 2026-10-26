@@ -1,4 +1,6 @@
 pub mod admin;
+pub mod alerts;
+pub mod approvals;
 pub mod audit;
 pub mod auth;
 pub mod config;
@@ -7,6 +9,7 @@ pub mod control;
 pub mod db;
 pub mod ingest;
 pub mod ledger;
+pub mod loops;
 pub mod metrics;
 pub mod packs;
 pub mod pricing;
@@ -93,6 +96,9 @@ fn spawn_activity_writer(
             if let Err(e) = state.ledger.record_activity(&batch).await {
                 tracing::warn!(error = %e, dropped = batch.len(), "could not record dashboard activity");
                 metrics::activity_write_failed(batch.len());
+            }
+            for (org, alert) in batch.iter().filter_map(alerts::blocked_alert) {
+                alerts::notify(&state, &org, alert).await;
             }
             batch.clear();
         }

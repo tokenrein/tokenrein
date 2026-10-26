@@ -51,8 +51,8 @@ for i = 1, n do
     local spent = tonumber(redis.call('HGET', key, 'spent') or '0')
     local reserved = tonumber(redis.call('HGET', key, 'reserved') or '0')
     if spent + reserved + est > limit then
-      if mode == 'enforce' then
-        return {'over', tostring(i), tostring(spent), tostring(reserved), tostring(limit)}
+      if mode == 'enforce' or mode == 'ask' then
+        return {'over', tostring(i), tostring(spent), tostring(reserved), tostring(limit), mode}
       end
       table.insert(exceeded, tostring(i))
     end
@@ -127,8 +127,8 @@ for i = 1, n do
     local over
     if est > 0 then over = spent + reserved + est > limit else over = spent + reserved >= limit end
     if over then
-      if mode == 'enforce' then
-        return {'over', tostring(i), tostring(spent), tostring(reserved), tostring(limit)}
+      if mode == 'enforce' or mode == 'ask' then
+        return {'over', tostring(i), tostring(spent), tostring(reserved), tostring(limit), mode}
       end
       table.insert(exceeded, tostring(i))
     end
@@ -261,6 +261,26 @@ impl<'a> Keys<'a> {
     pub fn import_seen(&self, source: &str, id: &str) -> String {
         format!("tl:{{{}}}:imp:{source}:seen:{id}", self.org)
     }
+    /// An approval request for a run (see `crate::approvals`).
+    pub fn approval(&self, run: &str) -> String {
+        format!("tl:{{{}}}:ap:{run}", self.org)
+    }
+    /// Approval requests by time.
+    pub fn approvals(&self) -> String {
+        format!("tl:{{{}}}:aps", self.org)
+    }
+    /// Loop detection counters for a run (see `crate::loops`).
+    pub fn loop_key(&self, run: &str, what: &str) -> String {
+        format!("tl:{{{}}}:lp:{run}:{what}", self.org)
+    }
+    /// Set while an alert is quiet after being sent (see `crate::alerts`).
+    pub fn alert_sent(&self, dedup: &str) -> String {
+        format!("tl:{{{}}}:al:{dedup}", self.org)
+    }
+    /// Last delivery result of an alert channel.
+    pub fn alert_status(&self, channel: &str) -> String {
+        format!("tl:{{{}}}:als:{channel}", self.org)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -305,6 +325,8 @@ pub enum Reservation {
         spent: i64,
         reserved: i64,
         limit: i64,
+        /// Enforce, or Ask (pause the run for an approver instead of failing).
+        mode: Mode,
     },
     RunStopped {
         run_id: String,
@@ -454,6 +476,7 @@ impl Ledger {
                 let scope = scopes.get(i.parse::<usize>().ok()?.checked_sub(1)?)?;
                 let mode = match mode {
                     "enforce" => Mode::Enforce,
+                    "ask" => Mode::Ask,
                     "check" => Mode::Check,
                     _ => Mode::Skip,
                 };
@@ -541,6 +564,11 @@ fn parse_reservation(out: &[String], scopes: &[Scope], runs: &[String]) -> Resul
                     spent: lua_num(out.get(2).map(String::as_str).unwrap_or("0")),
                     reserved: lua_num(out.get(3).map(String::as_str).unwrap_or("0")),
                     limit: lua_num(out.get(4).map(String::as_str).unwrap_or("0")),
+                    mode: if out.get(5).map(String::as_str) == Some("ask") {
+                        Mode::Ask
+                    } else {
+                        Mode::Enforce
+                    },
                 })
             }
             Some("stopped") => {
@@ -689,6 +717,11 @@ impl Ledger {
             )
             .await?;
         Ok(())
+    }
+
+    /// A Redis connection for modules that keep their own keys (approvals, loops, alerts).
+    pub fn conn(&self) -> ConnectionManager {
+        self.conn.clone()
     }
 
     pub async fn run_state(&self, org: &str, run: &str) -> Result<Option<String>> {

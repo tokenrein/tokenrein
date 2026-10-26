@@ -97,7 +97,8 @@ async fn blocks_when_reservation_would_exceed_limit_then_settles() {
             label: "run".into(),
             spent: 0,
             reserved: 800_000,
-            limit: 1_000_000
+            limit: 1_000_000,
+            mode: Mode::Enforce,
         }
     );
 

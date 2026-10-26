@@ -16,6 +16,7 @@
  * Later `withOptions()` copies construct the same subclass, so they stay guarded.
  */
 
+import { createHash } from 'node:crypto';
 import { envVar } from './env.js';
 import {
   type TokenUsage,
@@ -203,6 +204,21 @@ export function wrap<T>(client: T, opts: GuardOptions, provider: 'openai' | 'ant
 
 // --- Direct mode ---------------------------------------------------------------------------
 
+/**
+ * A hash of the model and the last message, so Tokenrein can spot a run repeating itself. Only
+ * the hash is sent.
+ */
+export function fingerprint(body: Record<string, any>): string | undefined {
+  const input = body.input;
+  const last = Array.isArray(body.messages) && body.messages.length ? body.messages.at(-1)
+    : Array.isArray(input) && input.length ? input.at(-1)
+    : typeof input === 'string' ? input : undefined;
+  if (last === undefined) return undefined;
+  const h = createHash('sha256');
+  for (const part of [String(body.model ?? ''), JSON.stringify(last)]) h.update(part).update('\0');
+  return h.digest('hex').slice(0, 32);
+}
+
 const MAX_OUTPUT_FIELDS = ['max_tokens', 'max_completion_tokens', 'max_output_tokens'];
 
 interface DirectConfig {
@@ -311,6 +327,8 @@ function observingFetch(inner: typeof fetch, cfg: DirectConfig, kind: 'openai' |
         const req: Record<string, unknown> = { ...w, model: body.model, provider: cfg.provider };
         const max = MAX_OUTPUT_FIELDS.map((f) => body[f]).find((x) => typeof x === 'number');
         if (max !== undefined) req.max_output_tokens = max;
+        const fp = fingerprint(body);
+        if (fp) req.fingerprint = fp;
         v = await cfg.reporter.check(req);
       } else {
         v = overVerdict(cfg);

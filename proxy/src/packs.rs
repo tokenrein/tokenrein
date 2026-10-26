@@ -2,10 +2,11 @@
 //!
 //! Applying a pack to a project sets its budgets in Check mode (allow and warn), so nothing is
 //! blocked until someone reviews what would have been blocked and switches a budget to Enforce.
+//! Loop detection likewise only alerts until it is switched to pause or kill.
 
 use serde::Serialize;
 
-use crate::config::{BudgetPolicy, Budgets, Mode};
+use crate::config::{BudgetPolicy, Budgets, LoopAction, LoopPolicy, Mode};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Pack {
@@ -13,6 +14,17 @@ pub struct Pack {
     pub title: &'static str,
     pub description: &'static str,
     pub budgets: Budgets,
+}
+
+/// Loop detection that only alerts, like Check mode for budgets.
+fn warn_loops(max_repeats: u32, usd_per_minute: f64, max_calls: Option<u32>) -> Option<LoopPolicy> {
+    Some(LoopPolicy {
+        action: LoopAction::Warn,
+        max_repeats,
+        repeat_window_secs: 600,
+        max_usd_per_minute: Some(usd_per_minute),
+        max_calls_per_run: max_calls,
+    })
 }
 
 fn check(limit_usd: f64) -> Option<BudgetPolicy> {
@@ -35,6 +47,7 @@ pub fn all() -> Vec<Pack> {
                 agent_daily: check(25.0),
                 run: check(10.0),
                 max_run_usd: Some(50.0),
+                loops: warn_loops(8, 5.0, Some(400)),
             },
         },
         Pack {
@@ -48,6 +61,7 @@ pub fn all() -> Vec<Pack> {
                 agent_daily: check(100.0),
                 run: check(2.0),
                 max_run_usd: Some(10.0),
+                loops: warn_loops(5, 1.0, Some(100)),
             },
         },
         Pack {
@@ -61,6 +75,7 @@ pub fn all() -> Vec<Pack> {
                 agent_daily: None,
                 run: check(50.0),
                 max_run_usd: Some(200.0),
+                loops: warn_loops(20, 10.0, None),
             },
         },
     ]

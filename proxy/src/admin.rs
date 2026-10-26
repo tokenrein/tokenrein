@@ -39,6 +39,8 @@ const ASSETS: &[(&str, &str, &str)] = &[
     ("js/spend.js", JS, include_str!("web/js/spend.js")),
     ("js/activity.js", JS, include_str!("web/js/activity.js")),
     ("js/settings.js", JS, include_str!("web/js/settings.js")),
+    ("js/approvals.js", JS, include_str!("web/js/approvals.js")),
+    ("js/alerts.js", JS, include_str!("web/js/alerts.js")),
     ("js/people.js", JS, include_str!("web/js/people.js")),
     ("js/audit.js", JS, include_str!("web/js/audit.js")),
     ("js/app.js", JS, include_str!("web/js/app.js")),
@@ -96,6 +98,21 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/admin/orgs/{org}/runs/{run}/pause", post(pause))
         .route("/admin/orgs/{org}/runs/{run}/resume", post(resume))
         .route("/admin/orgs/{org}/runs/{run}/kill", post(kill))
+        .route("/admin/orgs/{org}/approvals", get(list_approvals))
+        .route("/admin/orgs/{org}/approvals/{run}/approve", post(approve))
+        .route("/admin/orgs/{org}/approvals/{run}/deny", post(deny))
+        .route(
+            "/admin/orgs/{org}/alerts",
+            get(list_alert_channels).post(add_alert_channel),
+        )
+        .route(
+            "/admin/orgs/{org}/alerts/{channel}",
+            delete(remove_alert_channel),
+        )
+        .route(
+            "/admin/orgs/{org}/alerts/{channel}/test",
+            post(test_alert_channel),
+        )
         .merge(crate::auth::routes::router())
         .merge(crate::connectors::routes())
         .layer(axum::middleware::map_response(security_headers))
@@ -495,6 +512,7 @@ async fn create_org(
                 provider_secrets: HashMap::new(),
                 anthropic_workspace_id: None,
                 cursor_import: None,
+                alert_channels: Vec::new(),
                 projects: Vec::new(),
             });
             Ok(id)
@@ -1515,4 +1533,303 @@ async fn get_run(
         "budget": budget_json(&budget),
     }))
     .into_response()
+}
+
+// --- Approvals: runs waiting for an approver ---
+
+async fn list_approvals(
+    State(st): State<Arc<AppState>>,
+    Path(org): Path<String>,
+    admin: Admin,
+) -> Response {
+    if let Err(r) = admin.org(&st, &org, Role::Viewer) {
+        return r;
+    }
+    match crate::approvals::list(&st, &org, 200).await {
+        Ok((approvals, pending)) => {
+            Json(json!({ "approvals": approvals, "pending": pending })).into_response()
+        }
+        Err(e) => unavailable(e),
+    }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ApproveBody {
+    /// Added to the budget that ran out; leave out to just let the run continue.
+    add_usd: Option<f64>,
+    note: Option<String>,
+}
+
+async fn approve(
+    State(st): State<Arc<AppState>>,
+    Path((org, run)): Path<(String, String)>,
+    admin: Admin,
+    body: Option<Json<ApproveBody>>,
+) -> Response {
+    let body = body.map(|b| b.0).unwrap_or_default();
+    decide_approval(&st, &org, &run, &admin, true, body.add_usd, body.note).await
+}
+
+async fn deny(
+    State(st): State<Arc<AppState>>,
+    Path((org, run)): Path<(String, String)>,
+    admin: Admin,
+    body: Option<Json<ApproveBody>>,
+) -> Response {
+    let note = body.and_then(|b| b.0.note);
+    decide_approval(&st, &org, &run, &admin, false, None, note).await
+}
+
+async fn decide_approval(
+    st: &AppState,
+    org: &str,
+    run: &str,
+    admin: &Admin,
+    approve: bool,
+    add_usd: Option<f64>,
+    note: Option<String>,
+) -> Response {
+    use crate::approvals::DecideError;
+    if let Err(r) = admin.run(st, org, run, Role::Approver) {
+        return r;
+    }
+    let state = match crate::approvals::decide(st, org, run, approve, add_usd, &admin.actor).await {
+        Ok(s) => s,
+        Err(DecideError::NotFound) => {
+            return err(StatusCode::NOT_FOUND, "no approval request for this run");
+        }
+        Err(DecideError::NotPending(s)) => {
+            return err(
+                StatusCode::CONFLICT,
+                &format!("this request was already {s}"),
+            );
+        }
+        Err(DecideError::Invalid(m)) => return err(StatusCode::BAD_REQUEST, m),
+        Err(DecideError::Unavailable(e)) => return unavailable(e),
+    };
+    if approve && let Err(e) = crate::loops::reset(st, org, run).await {
+        tracing::warn!(error = %e, "could not reset loop detection");
+    }
+    let note: Option<String> = note.map(|n| n.trim().chars().take(500).collect());
+    let detail = json!({ "add_usd": add_usd, "note": note });
+    let action = if approve {
+        "approval.approve"
+    } else {
+        "approval.deny"
+    };
+    audit::record(st, admin.entry(action, org, run, detail)).await;
+    state_json(org, run, state)
+}
+
+// --- Alert channels ---
+
+fn channel_json(
+    c: &crate::config::AlertChannel,
+    status: Option<&HashMap<String, String>>,
+) -> Value {
+    let status = status.filter(|s| !s.is_empty()).map(|s| {
+        json!({
+            "at": s.get("at"),
+            "ok": s.get("ok").map(|v| v == "true"),
+            "error": s.get("error").filter(|e| !e.is_empty()),
+        })
+    });
+    json!({
+        "id": c.id,
+        "kind": c.kind,
+        "name": c.name,
+        "last4": c.last4,
+        "events": c.events,
+        "signed": c.signing_sealed.is_some(),
+        "created_at": c.created_at,
+        "last_delivery": status,
+    })
+}
+
+async fn list_alert_channels(
+    State(st): State<Arc<AppState>>,
+    Path(org): Path<String>,
+    admin: Admin,
+) -> Response {
+    if let Err(r) = admin.org(&st, &org, Role::Admin) {
+        return r;
+    }
+    let rt = st.rt();
+    let Some(o) = rt.cfg.orgs.iter().find(|o| o.id == org) else {
+        return err(StatusCode::NOT_FOUND, "unknown org");
+    };
+    let statuses = match crate::alerts::statuses(&st, &org, &o.alert_channels).await {
+        Ok(s) => s,
+        Err(e) => return unavailable(e),
+    };
+    let channels: Vec<Value> = o
+        .alert_channels
+        .iter()
+        .enumerate()
+        .map(|(i, c)| channel_json(c, statuses.get(i)))
+        .collect();
+    Json(json!({
+        "channels": channels,
+        "secrets_enabled": rt.secrets().is_some(),
+        "links": rt.cfg.auth.public_url.is_some(),
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AlertChannelBody {
+    kind: crate::config::AlertKind,
+    name: String,
+    /// The webhook URL, or the PagerDuty routing key.
+    target: String,
+    #[serde(default)]
+    events: Vec<crate::config::AlertEvent>,
+}
+
+/// URLs must be HTTPS (plain HTTP only to this machine, for testing).
+fn valid_alert_url(u: &str) -> bool {
+    match url::Url::parse(u) {
+        Ok(url) => {
+            url.scheme() == "https"
+                || (url.scheme() == "http"
+                    && matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")))
+        }
+        Err(_) => false,
+    }
+}
+
+async fn add_alert_channel(
+    State(st): State<Arc<AppState>>,
+    Path(org): Path<String>,
+    admin: Admin,
+    Json(b): Json<AlertChannelBody>,
+) -> Response {
+    use crate::config::AlertKind;
+    if let Err(r) = admin.org(&st, &org, Role::Admin) {
+        return r;
+    }
+    let name = b.name.trim();
+    let target = b.target.trim();
+    if name.is_empty() || name.chars().count() > 100 {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "channel name must be 1-100 characters",
+        );
+    }
+    let target_ok = match b.kind {
+        AlertKind::Pagerduty => {
+            (20..=64).contains(&target.len()) && target.bytes().all(|c| c.is_ascii_alphanumeric())
+        }
+        _ => target.len() <= 2048 && valid_alert_url(target),
+    };
+    if !target_ok {
+        return err(
+            StatusCode::BAD_REQUEST,
+            if b.kind == AlertKind::Pagerduty {
+                "enter the PagerDuty integration (routing) key"
+            } else {
+                "enter the channel's https:// webhook URL"
+            },
+        );
+    }
+    let mut events = b.events;
+    events.dedup();
+    let (channel, signing) =
+        match crate::alerts::new_channel(&st, &org, b.kind, name, target, events) {
+            Ok(c) => c,
+            Err(e) => return err(StatusCode::CONFLICT, &e.to_string()),
+        };
+    let shown = channel_json(&channel, None);
+    let id = channel.id.clone();
+    let result = control::edit(
+        &st,
+        admin.change("alert_channel.add", Some(&org), &id),
+        |orgs| {
+            let o = find_org(orgs, &org)?;
+            if o.alert_channels.len() >= 20 {
+                return Err(EditError::Invalid(
+                    "at most 20 alert channels per org".into(),
+                ));
+            }
+            o.alert_channels.push(channel);
+            Ok(())
+        },
+    )
+    .await;
+    match result {
+        Ok(()) => {
+            let mut body = shown;
+            // Shown once: receivers use it to check the x-tokenrein-signature header.
+            body["signing_secret"] = json!(signing);
+            (StatusCode::CREATED, Json(body)).into_response()
+        }
+        Err(e) => edit_error(e),
+    }
+}
+
+async fn remove_alert_channel(
+    State(st): State<Arc<AppState>>,
+    Path((org, channel)): Path<(String, String)>,
+    admin: Admin,
+) -> Response {
+    if let Err(r) = admin.org(&st, &org, Role::Admin) {
+        return r;
+    }
+    let result = control::edit(
+        &st,
+        admin.change("alert_channel.remove", Some(&org), &channel),
+        |orgs| {
+            let o = find_org(orgs, &org)?;
+            let before = o.alert_channels.len();
+            o.alert_channels.retain(|c| c.id != channel);
+            if o.alert_channels.len() == before {
+                return Err(EditError::NotFound("unknown alert channel".into()));
+            }
+            Ok(())
+        },
+    )
+    .await;
+    match result {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => edit_error(e),
+    }
+}
+
+async fn test_alert_channel(
+    State(st): State<Arc<AppState>>,
+    Path((org, channel)): Path<(String, String)>,
+    admin: Admin,
+) -> Response {
+    if let Err(r) = admin.org(&st, &org, Role::Admin) {
+        return r;
+    }
+    let rt = st.rt();
+    let Some(c) = rt
+        .cfg
+        .orgs
+        .iter()
+        .find(|o| o.id == org)
+        .and_then(|o| o.alert_channels.iter().find(|c| c.id == channel))
+    else {
+        return err(StatusCode::NOT_FOUND, "unknown alert channel");
+    };
+    let result = crate::alerts::test(&st, &org, c).await;
+    audit::record(
+        &st,
+        admin.entry(
+            "alert_channel.test",
+            &org,
+            &channel,
+            json!({ "ok": result.is_ok() }),
+        ),
+    )
+    .await;
+    match result {
+        Ok(()) => Json(json!({ "ok": true, "message": "test alert delivered" })).into_response(),
+        Err(e) => {
+            Json(json!({ "ok": false, "message": format!("not delivered: {e}") })).into_response()
+        }
+    }
 }

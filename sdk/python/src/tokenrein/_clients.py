@@ -20,6 +20,7 @@ swapped for a cached subclass that:
 from __future__ import annotations
 
 import copy
+import hashlib
 import warnings
 
 import asyncio
@@ -216,7 +217,29 @@ def _check_body(client: Any, options: Any) -> Dict[str, Any]:
             if isinstance(data.get(f), int):
                 body["max_output_tokens"] = data[f]
                 break
+        fp = _fingerprint(data)
+        if fp:
+            body["fingerprint"] = fp
     return body
+
+
+def _fingerprint(data: Dict[str, Any]) -> Optional[str]:
+    """A hash of the model and the last message, so Tokenrein can spot a run repeating itself.
+    Only the hash is sent."""
+    messages = data.get("messages")
+    if isinstance(messages, list) and messages:
+        last: Any = messages[-1]
+    elif isinstance(data.get("input"), list) and data["input"]:
+        last = data["input"][-1]
+    elif isinstance(data.get("input"), str):
+        last = data["input"]
+    else:
+        return None
+    h = hashlib.sha256()
+    for part in (str(data.get("model", "")), json.dumps(last, sort_keys=True, default=str)):
+        h.update(part.encode())
+        h.update(b"\0")
+    return h.hexdigest()[:32]
 
 
 def _include_stream_usage(client: Any, options: Any) -> None:

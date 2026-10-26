@@ -119,6 +119,18 @@ describe('direct mode', () => {
     expect(tl.seen.at(-1)!.headers.authorization).toBe('Bearer tl_direct_key');
   });
 
+  it('sends a fingerprint of each request, never its content', async () => {
+    const client = guard.openai(new OpenAI({ apiKey: 'sk', baseURL: `${provider.url}/v1` }));
+    for (const content of ['same', 'same', 'different']) {
+      await client.chat.completions.create({ model: 'gpt-4o-mini', messages: [{ role: 'user', content }] });
+    }
+    const fps = checks().map((c) => c.fingerprint);
+    expect(fps[0]).toMatch(/^[0-9a-f]{32}$/);
+    expect(fps[1]).toBe(fps[0]);
+    expect(fps[2]).not.toBe(fps[0]);
+    expect(JSON.stringify(checks())).not.toContain('same');
+  });
+
   it('reads Anthropic stream usage', async () => {
     const client = guard.anthropic(new Anthropic({ apiKey: 'sk-ant', baseURL: provider.url }), { agent: 'bot' });
     const stream = client.messages.stream({ model: 'claude-haiku-5-5', max_tokens: 64, messages: MSG });

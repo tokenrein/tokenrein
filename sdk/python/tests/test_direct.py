@@ -248,3 +248,14 @@ def test_usage_shapes():
     s = _direct.StreamUsage()
     s.feed(b'data: {"type": "response.completed", "response": {"model": "gpt-5", "usage": {"input_tokens": 9, "output_tokens": 3, "output_tokens_details": {}}}}\n')
     assert s.model == "gpt-5" and s.usage["output_tokens"] == 3
+
+
+def test_checks_carry_a_fingerprint_not_the_content(env):
+    tl, provider = env
+    client = guard.openai(openai.OpenAI(api_key="sk", base_url=provider.url + "/v1"))
+    for text in ("same", "same", "different"):
+        client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": text}])
+    fps = [c["fingerprint"] for c in tl.checks()]
+    assert fps[0] == fps[1] != fps[2]
+    assert len(fps[0]) == 32 and all(ch in "0123456789abcdef" for ch in fps[0])
+    assert "same" not in json.dumps(tl.checks())

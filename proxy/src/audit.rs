@@ -134,7 +134,7 @@ fn redact(v: &Value) -> Value {
         Value::Object(m) => Value::Object(
             m.iter()
                 .map(|(k, v)| {
-                    let v = if k == "sealed" {
+                    let v = if k == "sealed" || k.ends_with("_sealed") {
                         Value::String("[redacted]".into())
                     } else {
                         redact(v)

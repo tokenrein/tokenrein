@@ -100,6 +100,7 @@ async fn main() -> Result<()> {
     }
     control::spawn_sync(state.clone());
     spawn_sweeper(state.clone());
+    tokenrein::alerts::spawn_budget_watch(state.clone());
 
     let proxy_listener = tokio::net::TcpListener::bind(listen)
         .await

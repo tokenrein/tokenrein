@@ -16,7 +16,8 @@ const S = { token: null, org: null, overview: null, runs: [], agents: [], events
   packs: [], review: null, spend: null, runId: null, run: null, snip: "python",
   models: null, modelFilter: "", modelProvider: "", connectProject: null, connectKey: null, sdkSnip: "python",
   audit: null, auditQuery: "", auditOrgOnly: false,
-  me: null, csrf: null, authConfig: null, people: null, peopleNotice: "" };
+  me: null, csrf: null, authConfig: null, people: null, peopleNotice: "",
+  approvals: null, alerts: null, alertKind: "slack", alertsNotice: "" };
 
 // Roles, lowest first; each can do everything the ones before it can.
 const RANK = { viewer: 1, approver: 2, admin: 3, owner: 4 };

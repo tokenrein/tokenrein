@@ -13,7 +13,7 @@ function budgetEditor(scope, budgets, inherited, policies) {
       <div class="t">${esc(title)}</div><div class="d">${esc(desc)}</div>
       <div class="inline">
         <input type="number" min="0" step="any" placeholder="${inherited ? "inherit" : "no limit"}" aria-label="${esc(title)} limit in USD" data-f="limit" value="${p ? esc(p.limit_usd) : ""}">
-        <select data-f="mode" aria-label="${esc(title)} mode" ${p ? "" : "disabled"}>${Object.entries(MODES).map(([m, label]) => `<option value="${m}" ${(p?.mode || "check") === m ? "selected" : ""}>${esc(label.split(":")[0])}</option>`).join("")}</select>
+        <select data-f="mode" aria-label="${esc(title)} mode" ${p ? "" : "disabled"}>${Object.entries(key === "run" ? { ...MODES, ...ASK_MODE } : MODES).map(([m, label]) => `<option value="${m}" ${(p?.mode || "check") === m ? "selected" : ""} title="${esc(label)}">${esc(label.split(":")[0])}</option>`).join("")}</select>
       </div>
       ${inhText ? `<div class="inherit">${inhText}</div>` : ""}
     </div>`;
@@ -25,12 +25,55 @@ function budgetEditor(scope, budgets, inherited, policies) {
       <div class="t">Max run budget</div><div class="d">Caps any x-tr-run-budget-usd a caller asks for.</div>
       <div class="inline"><input type="number" min="0" step="any" placeholder="${inherited ? "inherit" : "none"}" aria-label="Max run budget in USD" data-f="max" value="${max ?? ""}"></div>
       ${inhMax ? `<div class="inherit">${inhMax}</div>` : ""}
-    </div></div>`;
+    </div>${loopEditor(budgets?.loops, inherited ? (inherited.loops || null) : undefined)}</div>`;
+}
+
+// Run budgets can also ask an approver instead of failing.
+const ASK_MODE = { ask: "Ask: pause the run and ask an approver" };
+const LOOP_ACTIONS = { warn: "Warn: alert only", pause: "Pause and ask an approver", kill: "Kill the run" };
+
+// Loop detection settings; `inherited` is the org's policy when editing a project.
+function loopEditor(l, inherited) {
+  const project = inherited !== undefined;
+  const inh = project ? (inherited ? `Inherits from the org: ${esc(LOOP_ACTIONS[inherited.action || "pause"].split(":")[0].toLowerCase())} after ${inherited.max_repeats} repeats` : "Inherits: off") : "";
+  const num = (f, v, ph, label, extra = "") => `<label class="field">${label}<input type="number" min="0" step="any" data-loop="${f}" value="${v ?? ""}" placeholder="${ph}" ${extra}></label>`;
+  return `<div class="budget loop-guard" data-policy="loops">
+    <div class="t">Loop guard</div>
+    <div class="d">Stops runaway runs early: the same request or tool call repeated, spend per minute, or too many calls in one run.</div>
+    <div class="inline">
+      <select data-loop="action" aria-label="Loop guard action">
+        <option value="">${project ? "Inherit" : "Off"}</option>
+        ${Object.entries(LOOP_ACTIONS).map(([k, label]) => `<option value="${k}" ${l?.action === k ? "selected" : ""}>${esc(label)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="loop-fields">
+      ${num("max_repeats", l?.max_repeats, "6", "Same request, times", 'min="2" step="1"')}
+      ${num("window_min", l ? Math.round((l.repeat_window_secs || 600) / 60) : "", "10", "…within minutes", 'min="1" step="1"')}
+      ${num("max_usd_per_minute", l?.max_usd_per_minute, "none", "Max $ per minute")}
+      ${num("max_calls_per_run", l?.max_calls_per_run, "none", "Max calls per run", 'step="1"')}
+    </div>
+    ${inh ? `<div class="inherit">${inh}</div>` : ""}
+  </div>`;
+}
+
+function readLoops(el) {
+  const action = $("[data-loop=action]", el).value;
+  if (!action) return undefined;
+  const v = f => { const x = $(`[data-loop=${f}]`, el).value.trim(); return x === "" ? undefined : Number(x); };
+  const out = { action, max_repeats: v("max_repeats") ?? 6, repeat_window_secs: Math.round((v("window_min") ?? 10) * 60) };
+  if (v("max_usd_per_minute") !== undefined) out.max_usd_per_minute = v("max_usd_per_minute");
+  if (v("max_calls_per_run") !== undefined) out.max_calls_per_run = v("max_calls_per_run");
+  return out;
 }
 function readBudgets(root) {
   const out = {};
   for (const el of $$(".budget[data-policy]", root)) {
     const key = el.dataset.policy;
+    if (key === "loops") {
+      const l = readLoops(el);
+      if (l) out.loops = l;
+      continue;
+    }
     if (key === "max_run_usd") {
       const v = $("[data-f=max]", el).value.trim();
       if (v !== "") out.max_run_usd = Number(v);
@@ -57,6 +100,7 @@ function renderSettings() {
         </div></div>
       <div class="card-b">${modeHelp}${budgetEditor("org", org.budgets, null, POLICIES)}</div></div>`;
     html += providerKeysCard(org);
+    if (can("admin")) html += alertsCard();
     for (const p of org.projects) {
       const keys = p.keys.map(k => `<tr>
         <td>${esc(k.name)}${k.source === "config" ? ' <span class="badge b-muted">config file</span>' : ""}</td>
@@ -108,6 +152,7 @@ function renderSettings() {
   if (org && !can("admin")) {
     html = `<div class="card"><div class="card-b"><b>Read-only.</b> You are ${esc(roleIn() || "not a member")} in ${esc(org.id)}; an admin or owner can change keys and limits.</div></div>` + html;
   }
+  if (S.alertsNotice) { html = S.alertsNotice + html; }
   $("#settings").innerHTML = html;
   if (org && !can("admin")) $$("#settings input, #settings select, #settings button").forEach(el => { el.disabled = true; });
 }

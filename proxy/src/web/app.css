@@ -231,3 +231,10 @@ details.more[open] summary { margin-bottom: 8px; }
 details.changes summary { cursor: pointer; color: var(--accent); white-space: nowrap; }
 details.changes ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
 details.changes li { margin: 2px 0; word-break: break-word; }
+.nav-count { margin-left: auto; background: var(--warn); color: var(--bg); border-radius: 999px; font-size: 11px; font-weight: 700; padding: 1px 7px; }
+.loop-guard { grid-column: 1 / -1; }
+.loop-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-top: 8px; }
+.alert-form { display: grid; gap: 10px; }
+.approval-b { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.approval-title { font-size: 15px; font-weight: 600; }
+.approval { margin-bottom: 12px; border-left: 3px solid var(--warn); }

@@ -16,6 +16,9 @@ pub enum Mode {
     #[default]
     Check,
     Enforce,
+    /// Like enforce, but the run is paused with an approval request instead of failing: an
+    /// approver can give it more budget or stop it. Run budgets only.
+    Ask,
 }
 
 impl Mode {
@@ -24,6 +27,7 @@ impl Mode {
             Mode::Skip => "skip",
             Mode::Check => "check",
             Mode::Enforce => "enforce",
+            Mode::Ask => "ask",
         }
     }
 }
@@ -57,6 +61,47 @@ pub struct Budgets {
     pub run: Option<BudgetPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_run_usd: Option<f64>,
+    /// Runaway-loop detection for runs (see `crate::loops`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loops: Option<LoopPolicy>,
+}
+
+/// What counts as a runaway run, and what happens to it.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct LoopPolicy {
+    #[serde(default)]
+    pub action: LoopAction,
+    /// The same request (or tool call) this many times within `repeat_window_secs`.
+    #[serde(default = "default_max_repeats")]
+    pub max_repeats: u32,
+    #[serde(default = "default_repeat_window")]
+    pub repeat_window_secs: u32,
+    /// Spend within one minute, in US dollars.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_usd_per_minute: Option<f64>,
+    /// Model calls in one run, including its sub-agent runs' own counts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_calls_per_run: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LoopAction {
+    /// Alert only.
+    Warn,
+    /// Pause the run and ask an approver whether it may continue.
+    #[default]
+    Pause,
+    /// Stop the run for good.
+    Kill,
+}
+
+fn default_max_repeats() -> u32 {
+    6
+}
+fn default_repeat_window() -> u32 {
+    600
 }
 
 impl Budgets {
@@ -68,6 +113,7 @@ impl Budgets {
             agent_daily: project.agent_daily.or(org.agent_daily),
             run: project.run.or(org.run),
             max_run_usd: project.max_run_usd.or(org.max_run_usd),
+            loops: project.loops.or(org.loops),
         }
     }
 }
@@ -286,8 +332,57 @@ pub struct OrgConfig {
     /// Usage imported from the Cursor team's Admin API, if set up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_import: Option<CursorImport>,
+    /// Where alerts go (Slack, Microsoft Teams, webhooks, PagerDuty).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alert_channels: Vec<AlertChannel>,
     #[serde(default)]
     pub projects: Vec<ProjectConfig>,
+}
+
+/// One place alerts are sent. The URL or routing key is a secret: it is stored encrypted and
+/// only its last 4 characters are shown.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AlertChannel {
+    pub id: String,
+    pub kind: AlertKind,
+    pub name: String,
+    /// See [`crate::secrets::SecretBox::seal`].
+    pub sealed: String,
+    pub last4: String,
+    /// Webhooks only: the HMAC-SHA256 signing secret, encrypted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_sealed: Option<String>,
+    /// Events sent here; empty means all.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<AlertEvent>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AlertKind {
+    /// Slack incoming webhook URL.
+    Slack,
+    /// Microsoft Teams incoming webhook (or Workflows) URL.
+    Teams,
+    /// Any HTTPS endpoint; requests are signed with HMAC-SHA256.
+    Webhook,
+    /// PagerDuty Events API v2 routing key.
+    Pagerduty,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum AlertEvent {
+    /// A budget passed 80% of its limit.
+    BudgetWarning,
+    /// A request was refused because a budget is used up.
+    BudgetBlocked,
+    /// A run is waiting for an approver.
+    ApprovalRequested,
+    /// A run looks like a runaway loop.
+    LoopDetected,
 }
 
 /// Imports a Cursor team's usage events (see `crate::connectors`).
@@ -691,6 +786,27 @@ fn validate_budgets(b: &Budgets, owner: &str) -> Result<()> {
     {
         if !(policy.limit_usd.is_finite() && policy.limit_usd >= 0.0) {
             bail!("{owner}: budget limits must be zero or positive");
+        }
+    }
+    // An approval gives one run more budget; there is no "more" for a shared daily or monthly
+    // budget without changing it for everyone.
+    for policy in [b.org_monthly, b.project_monthly, b.agent_daily]
+        .into_iter()
+        .flatten()
+    {
+        if policy.mode == Mode::Ask {
+            bail!("{owner}: \"ask\" mode is for run budgets; use enforce or check here");
+        }
+    }
+    if let Some(l) = b.loops {
+        if l.max_repeats < 2 || l.repeat_window_secs < 10 || l.repeat_window_secs > 86_400 {
+            bail!("{owner}: loop max_repeats must be at least 2 and repeat_window_secs 10-86400");
+        }
+        if l.max_usd_per_minute
+            .is_some_and(|v| !(v.is_finite() && v > 0.0))
+            || l.max_calls_per_run == Some(0)
+        {
+            bail!("{owner}: loop limits must be positive");
         }
     }
     if let Some(max) = b.max_run_usd

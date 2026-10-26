@@ -274,9 +274,50 @@ pub(crate) async fn record_usage(
         .collect();
     let enforced: Vec<String> = over
         .iter()
-        .filter(|(_, m)| *m == config::Mode::Enforce)
+        .filter(|(_, m)| matches!(m, config::Mode::Enforce | config::Mode::Ask))
         .map(|(l, _)| l.clone())
         .collect();
+    // A reported call took a run past an Ask-mode budget: it waits for an approver.
+    for (label, _) in over.iter().filter(|(_, m)| *m == config::Mode::Ask) {
+        let Some(budget_run) = label.strip_prefix("run:") else {
+            continue;
+        };
+        let b = st
+            .ledger
+            .budget(&crate::ledger::Keys::new(&c.org().id).run_budget(budget_run))
+            .await
+            .unwrap_or_default();
+        let num = |f: &str| b.get(f).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) as i64;
+        let request = crate::approvals::Request {
+            org: &c.org().id,
+            run: budget_run,
+            project: &c.project().id,
+            agent: &who.agent,
+            reason: crate::approvals::Reason::Budget {
+                scope: label,
+                spent: num("spent"),
+                limit: num("limit"),
+            },
+        };
+        if let Err(e) = crate::approvals::request(st, request).await {
+            tracing::error!(error = %e, "could not request approval");
+        }
+    }
+    let policy = crate::loops::policy_for(&c.rt, &c.org().id, &c.project().id);
+    if policy.is_some() {
+        let seen = crate::loops::Seen {
+            org: &c.org().id,
+            project: &c.project().id,
+            agent: &who.agent,
+            run: &who.run,
+            fingerprint: None,
+            call: true,
+            cost: actual,
+        };
+        if let Err(e) = crate::loops::observe(st, policy, seen).await {
+            tracing::warn!(error = %e, "loop detection failed");
+        }
+    }
     let failed = ev.status.is_some_and(|s| s >= 400);
     let event = json!({
         "event": "request",
@@ -372,6 +413,9 @@ pub struct CheckBody {
     pub max_output_tokens: Option<u64>,
     pub estimate_usd: Option<f64>,
     pub source: Option<String>,
+    /// Hash of the coming request (model and last message), for loop detection. The SDKs compute
+    /// it locally; the content never leaves the caller.
+    pub fingerprint: Option<String>,
 }
 
 struct Verdict {
@@ -404,8 +448,40 @@ async fn verdict(st: &AppState, c: &Caller, who: &Who, estimate: u64) -> anyhow:
             Reservation::OverBudget {
                 label,
                 spent,
+                limit,
+                mode: config::Mode::Ask,
+                ..
+            } if label.starts_with("run:") => {
+                let budget_run = &label["run:".len()..];
+                let request = crate::approvals::Request {
+                    org: &c.org().id,
+                    run: budget_run,
+                    project: &c.project().id,
+                    agent: &who.agent,
+                    reason: crate::approvals::Reason::Budget {
+                        scope: &label,
+                        spent,
+                        limit,
+                    },
+                };
+                crate::approvals::request(st, request).await?;
+                Verdict {
+                    allowed: false,
+                    reason: Some(format!(
+                        "Tokenrein: run {budget_run} reached its {} budget and is waiting for an approver in the Tokenrein dashboard.",
+                        usd_text(limit)
+                    )),
+                    scope: Some(label.clone()),
+                    run_state: Some("paused".into()),
+                    check_exceeded: Vec::new(),
+                }
+            }
+            Reservation::OverBudget {
+                label,
+                spent,
                 reserved,
                 limit,
+                ..
             } => Verdict {
                 allowed: false,
                 reason: Some(format!(
@@ -437,6 +513,63 @@ async fn verdict(st: &AppState, c: &Caller, who: &Who, estimate: u64) -> anyhow:
             },
         },
     )
+}
+
+/// Count a coming request or tool call for loop detection; a refusal when it tripped the run's
+/// loop guard and the run must stop. Fails open.
+async fn loop_stop(
+    st: &AppState,
+    c: &Caller,
+    who: &Who,
+    fingerprint: Option<&str>,
+) -> Option<Verdict> {
+    let policy = crate::loops::policy_for(&c.rt, &c.org().id, &c.project().id);
+    policy?;
+    let seen = crate::loops::Seen {
+        org: &c.org().id,
+        project: &c.project().id,
+        agent: &who.agent,
+        run: &who.run,
+        fingerprint,
+        call: false,
+        cost: 0,
+    };
+    let action = match crate::loops::observe(st, policy, seen).await {
+        Ok(a) => a?,
+        Err(e) => {
+            tracing::warn!(error = %e, "loop detection failed; allowing");
+            return None;
+        }
+    };
+    let killed = action == config::LoopAction::Kill;
+    Some(Verdict {
+        allowed: false,
+        reason: Some(if killed {
+            format!(
+                "Tokenrein: run {} looks like a runaway loop and was stopped.",
+                who.run
+            )
+        } else {
+            format!(
+                "Tokenrein: run {} looks like a runaway loop and is paused until an approver lets it continue.",
+                who.run
+            )
+        }),
+        scope: Some(format!("run:{}", who.run)),
+        run_state: Some(if killed { "killed" } else { "paused" }.into()),
+        check_exceeded: Vec::new(),
+    })
+}
+
+/// The tool call a hook is about to allow, hashed for loop detection.
+fn tool_fingerprint(input: &Value) -> Option<String> {
+    let name = input.get("tool_name").and_then(Value::as_str).unwrap_or("");
+    let args = input
+        .get("tool_input")
+        .or_else(|| input.get("command"))
+        .map(Value::to_string)
+        .unwrap_or_default();
+    (!name.is_empty() || !args.is_empty()).then(|| crate::loops::fingerprint(&[name, &args]))
 }
 
 fn blocked_event(c: &Caller, who: &Who, v: &Verdict, model: Option<&str>) -> Value {
@@ -505,9 +638,16 @@ pub async fn check(
         }
         _ => 0,
     };
-    let v = match verdict(&st, &c, &who, estimate).await {
-        Ok(v) => v,
-        Err(e) => return unavailable(e),
+    let fingerprint = body
+        .fingerprint
+        .as_deref()
+        .filter(|f| crate::loops::valid_fingerprint(f));
+    let v = match loop_stop(&st, &c, &who, fingerprint).await {
+        Some(v) => v,
+        None => match verdict(&st, &c, &who, estimate).await {
+            Ok(v) => v,
+            Err(e) => return unavailable(e),
+        },
     };
     if let Err(e) = st
         .ledger
@@ -1044,13 +1184,25 @@ async fn agent_hook(st: &AppState, headers: &HeaderMap, input: &Value, tool: Too
     let Some(gate) = call.gate else {
         return allow;
     };
-    let v = match verdict(st, &c, &who, 0).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::error!(error = %e, "hook budget check failed; allowing");
-            crate::metrics::ledger_error();
-            return allow;
-        }
+    let fingerprint = if gate == Gate::Tool {
+        tool_fingerprint(input)
+    } else {
+        None
+    };
+    let stopped = match fingerprint {
+        Some(fp) => loop_stop(st, &c, &who, Some(&fp)).await,
+        None => None,
+    };
+    let v = match stopped {
+        Some(v) => v,
+        None => match verdict(st, &c, &who, 0).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(error = %e, "hook budget check failed; allowing");
+                crate::metrics::ledger_error();
+                return allow;
+            }
+        },
     };
     if v.allowed {
         return allow;

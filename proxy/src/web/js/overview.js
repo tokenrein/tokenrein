@@ -20,6 +20,7 @@ function renderOverview() {
     kpi("Live agents", `${liveAgents ? '<span class="live on" style="font-size:inherit"><span class="dot"></span></span> ' : ""}${liveAgents}`, `of ${S.agents.length} seen · <a href="#" data-goto="agents">view agents</a>`),
     kpi("Active runs", String(activeRuns), "seen in the last hour"),
     kpi("Blocked requests", String(blocked), `of the last ${recent} requests`),
+    kpi("Waiting for approval", String(S.approvals?.pending || 0), S.approvals?.pending ? `<a href="#" data-goto="approvals">open approvals</a>` : "no runs waiting"),
   ].join("");
   renderGetStarted(org);
   renderReview(org);
