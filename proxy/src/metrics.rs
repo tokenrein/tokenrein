@@ -113,6 +113,9 @@ struct Metrics {
     activity_dropped_queue_full: AtomicU64,
     activity_dropped_write_failed: AtomicU64,
     audit_write_failures: AtomicU64,
+    history_rows_written: AtomicU64,
+    history_rows_dropped: AtomicU64,
+    history_write_failures: AtomicU64,
 }
 
 static METRICS: Metrics = Metrics {
@@ -123,6 +126,9 @@ static METRICS: Metrics = Metrics {
     activity_dropped_queue_full: AtomicU64::new(0),
     activity_dropped_write_failed: AtomicU64::new(0),
     audit_write_failures: AtomicU64::new(0),
+    history_rows_written: AtomicU64::new(0),
+    history_rows_dropped: AtomicU64::new(0),
+    history_write_failures: AtomicU64::new(0),
 };
 
 pub fn decision(path: Path, decision: &str) {
@@ -160,6 +166,27 @@ pub fn activity_write_failed(events: usize) {
 
 pub fn audit_write_failed() {
     METRICS.audit_write_failures.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Usage history rows written to Parquet.
+pub fn history_written(rows: usize) {
+    METRICS
+        .history_rows_written
+        .fetch_add(rows as u64, Ordering::Relaxed);
+}
+
+/// Usage history rows dropped because the in-memory queue was full.
+pub fn history_dropped(rows: usize) {
+    METRICS
+        .history_rows_dropped
+        .fetch_add(rows as u64, Ordering::Relaxed);
+}
+
+/// A usage history write that failed (its rows are retried).
+pub fn history_write_failed() {
+    METRICS
+        .history_write_failures
+        .fetch_add(1, Ordering::Relaxed);
 }
 
 /// Queue a request event for the dashboard and count its decision. Best effort: when the queue
@@ -271,6 +298,32 @@ pub fn render(config_version: u64) -> String {
         out,
         "tokenrein_audit_write_failures_total {}",
         load(&m.audit_write_failures)
+    );
+
+    header(
+        &mut out,
+        "tokenrein_history_rows_total",
+        "counter",
+        "Usage history rows written to Parquet, and rows dropped because the queue was full.",
+    );
+    let _ = writeln!(
+        out,
+        "tokenrein_history_rows_total{{result=\"written\"}} {}\n\
+         tokenrein_history_rows_total{{result=\"dropped\"}} {}",
+        load(&m.history_rows_written),
+        load(&m.history_rows_dropped)
+    );
+
+    header(
+        &mut out,
+        "tokenrein_history_write_failures_total",
+        "counter",
+        "Usage history writes that failed (their rows are retried).",
+    );
+    let _ = writeln!(
+        out,
+        "tokenrein_history_write_failures_total {}",
+        load(&m.history_write_failures)
     );
 
     header(

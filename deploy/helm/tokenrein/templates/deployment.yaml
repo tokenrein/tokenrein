@@ -68,6 +68,12 @@ spec:
             - name: TOKENREIN_PUBLIC_URL
               value: {{ . | quote }}
             {{- end }}
+            {{- if .Values.history.enabled }}
+            - name: TOKENREIN_HISTORY_DIR
+              value: /var/lib/tokenrein/history
+            - name: TOKENREIN_HISTORY_RETENTION_DAYS
+              value: {{ .Values.history.retentionDays | quote }}
+            {{- end }}
             {{- if .Values.redis.enabled }}
             - name: TOKENREIN_REDIS_URL
               value: {{ printf "redis://%s:6379" (include "tokenrein.redisHost" .) | quote }}
@@ -143,6 +149,10 @@ spec:
               mountPath: /var/run/secrets/tokenrein
               readOnly: true
             {{- end }}
+            {{- if .Values.history.enabled }}
+            - name: history
+              mountPath: /var/lib/tokenrein/history
+            {{- end }}
       volumes:
         - name: config
           configMap:
@@ -152,6 +162,11 @@ spec:
           secret:
             secretName: {{ include "tokenrein.secretName" . }}
             defaultMode: 0400
+        {{- end }}
+        {{- if .Values.history.enabled }}
+        - name: history
+          persistentVolumeClaim:
+            claimName: {{ .Values.history.persistence.existingClaim | default (printf "%s-history" (include "tokenrein.fullname" .)) }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

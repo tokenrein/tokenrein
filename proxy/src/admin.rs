@@ -1116,6 +1116,88 @@ async fn review(
 #[derive(Deserialize)]
 struct SpendQuery {
     days: Option<u32>,
+    format: Option<String>,
+}
+
+fn history_failed(e: anyhow::Error) -> Response {
+    tracing::error!(error = %e, "usage history read failed");
+    err(StatusCode::SERVICE_UNAVAILABLE, "usage history unavailable")
+}
+
+/// Days of spend Redis keeps; longer ranges come from the usage history.
+const SPEND_REDIS_DAYS: u32 = 40;
+
+fn csv_response(body: String, filename: &str) -> Response {
+    let disposition = format!("attachment; filename=\"{filename}\"");
+    (
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("text/csv; charset=utf-8"),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                HeaderValue::from_str(&disposition)
+                    .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
+            ),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+/// Spend from the usage history (DuckDB over Parquet), in the same shape as from Redis.
+async fn spend_history(
+    history: Arc<crate::history::History>,
+    org: String,
+    n: i64,
+    csv: bool,
+) -> Response {
+    let today = Utc::now().date_naive();
+    let from = today - chrono::Duration::days(n - 1);
+    let o = org.clone();
+    if csv {
+        return match tokio::task::spawn_blocking(move || history.export_csv(&o, from, today)).await
+        {
+            Ok(Ok(body)) => csv_response(body, &format!("tokenrein-spend-{org}-{today}.csv")),
+            Ok(Err(e)) => history_failed(e),
+            Err(e) => history_failed(e.into()),
+        };
+    }
+    let retention = history.retention_days;
+    let report = match tokio::task::spawn_blocking(move || history.spend(&o, from, today)).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => return history_failed(e),
+        Err(e) => return history_failed(e.into()),
+    };
+    let by_day: HashMap<&str, &crate::history::Totals> =
+        report.days.iter().map(|t| (t.key.as_str(), t)).collect();
+    let series: Vec<Value> = (0..n)
+        .rev()
+        .map(|i| {
+            let day = today - chrono::Duration::days(i);
+            let t = by_day.get(day.to_string().as_str());
+            json!({
+                "day": day.format("%Y%m%d").to_string(),
+                "cost_micros": t.map_or(0, |t| t.cost_micros),
+                "requests": t.map_or(0, |t| t.requests),
+                "blocked": t.map_or(0, |t| t.blocked),
+            })
+        })
+        .collect();
+    let breakdown: serde_json::Map<String, Value> = report
+        .by
+        .into_iter()
+        .map(|(dim, rows)| {
+            let rows: Vec<Value> = rows
+                .into_iter()
+                .map(|t| json!({ "key": t.key, "cost_micros": t.cost_micros, "requests": t.requests, "blocked": t.blocked }))
+                .collect();
+            (dim.to_string(), json!(rows))
+        })
+        .collect();
+    Json(json!({ "days": series, "by": breakdown, "source": "history", "history_days": retention }))
+        .into_response()
 }
 
 async fn spend(
@@ -1127,7 +1209,18 @@ async fn spend(
     if let Err(r) = admin.org(&st, &org, Role::Viewer) {
         return r;
     }
-    let n = q.days.unwrap_or(30).clamp(1, 40) as i64;
+    let csv = q.format.as_deref() == Some("csv");
+    let history = st.history.clone();
+    let max = history
+        .as_ref()
+        .map_or(SPEND_REDIS_DAYS, |h| h.retention_days);
+    let n = q.days.unwrap_or(30).clamp(1, max);
+    if let Some(h) = history.clone()
+        && (csv || n > SPEND_REDIS_DAYS)
+    {
+        return spend_history(h, org, i64::from(n), csv).await;
+    }
+    let n = i64::from(n);
     let today = Utc::now().date_naive();
     let days: Vec<String> = (0..n)
         .rev()
@@ -1183,7 +1276,27 @@ async fn spend(
             (dim.to_string(), json!(rows))
         })
         .collect();
-    Json(json!({ "days": series, "by": breakdown })).into_response()
+    if csv {
+        // Without the usage history, only daily totals are kept.
+        let mut out = String::from("day,requests,blocked,cost_usd\n");
+        for d in &series {
+            out.push_str(&format!(
+                "{},{},{},{:.6}\n",
+                d["day"].as_str().unwrap_or(""),
+                d["requests"],
+                d["blocked"],
+                d["cost_micros"].as_i64().unwrap_or(0) as f64 / 1e6
+            ));
+        }
+        return csv_response(out, &format!("tokenrein-spend-{org}-{today}.csv"));
+    }
+    Json(json!({
+        "days": series,
+        "by": breakdown,
+        "source": "redis",
+        "history_days": history.map(|h| h.retention_days),
+    }))
+    .into_response()
 }
 
 // --- Activity: runs, agents and request events ---
@@ -1308,6 +1421,13 @@ async fn run_timeline(
         Ok(t) => t,
         Err(e) => return unavailable(e),
     };
+    // Redis keeps run detail for 7 days; older runs come from the usage history.
+    if events.is_empty()
+        && let Some(h) = st.history.clone()
+        && let Some(found) = run_timeline_history(h, &org, &run).await
+    {
+        return found;
+    }
     let details = match st.ledger.run_details(&org, &runs).await {
         Ok(d) => d,
         Err(e) => return unavailable(e),
@@ -1332,6 +1452,57 @@ async fn run_timeline(
         })
         .collect();
     Json(json!({ "run_id": run, "runs": runs, "events": events })).into_response()
+}
+
+/// A run Redis no longer has (more than 7 days old), rebuilt from the usage history; `None`
+/// when the history has no events for it either.
+async fn run_timeline_history(
+    history: Arc<crate::history::History>,
+    org: &str,
+    run: &str,
+) -> Option<Response> {
+    let (o, r) = (org.to_string(), run.to_string());
+    let events = match tokio::task::spawn_blocking(move || history.run_events(&o, &r)).await {
+        Ok(Ok(e)) if e.is_empty() => return None,
+        Ok(Ok(e)) => e,
+        Ok(Err(e)) => return Some(history_failed(e)),
+        Err(e) => return Some(history_failed(e.into())),
+    };
+    // One summary per run (the run and its sub-agents), from its events.
+    let mut runs: Vec<Value> = Vec::new();
+    for e in events.iter().rev() {
+        let id = e["run_id"].as_str().unwrap_or("");
+        let ts = e["ts"]
+            .as_str()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.timestamp());
+        let blocked = e["decision"]
+            .as_str()
+            .is_some_and(|d| d.starts_with("blocked"));
+        match runs.iter_mut().find(|r| r["run_id"] == id) {
+            Some(r) => {
+                r["requests"] = json!(r["requests"].as_i64().unwrap_or(0) + 1);
+                r["blocked"] = json!(r["blocked"].as_i64().unwrap_or(0) + i64::from(blocked));
+                r["last_seen"] = json!(ts);
+            }
+            None => runs.push(json!({
+                "run_id": id,
+                "parent_run_id": e["parent_run_id"],
+                "state": "ended",
+                "project": e["project"],
+                "agent": e["agent"],
+                "requests": 1,
+                "blocked": i64::from(blocked),
+                "first_seen": ts,
+                "last_seen": ts,
+                "budget": Value::Null,
+            })),
+        }
+    }
+    Some(
+        Json(json!({ "run_id": run, "runs": runs, "events": events, "source": "history" }))
+            .into_response(),
+    )
 }
 
 // --- Audit log ---

@@ -246,6 +246,40 @@ fn default_database_max_connections() -> u32 {
     10
 }
 
+/// Usage history for spend reports beyond Redis's 40 days: Parquet files in `dir`, read with
+/// DuckDB. Off unless `dir` is set (or `TOKENREIN_HISTORY_DIR`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryConfig {
+    /// Folder for the files; replicas may share it.
+    #[serde(default)]
+    pub dir: Option<String>,
+    /// Days kept (default 400, about 13 months).
+    #[serde(default = "default_history_retention_days")]
+    pub retention_days: u32,
+    /// Seconds between writes (default 30); events are held in memory until then.
+    #[serde(default = "default_history_flush_secs")]
+    pub flush_secs: u64,
+}
+
+impl Default for HistoryConfig {
+    fn default() -> Self {
+        Self {
+            dir: None,
+            retention_days: default_history_retention_days(),
+            flush_secs: default_history_flush_secs(),
+        }
+    }
+}
+
+fn default_history_retention_days() -> u32 {
+    400
+}
+
+fn default_history_flush_secs() -> u64 {
+    30
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
@@ -432,6 +466,8 @@ pub struct Config {
     #[serde(default)]
     pub database: DatabaseConfig,
     #[serde(default)]
+    pub history: HistoryConfig,
+    #[serde(default)]
     pub auth: AuthConfig,
     #[serde(default)]
     pub providers: ProvidersConfig,
@@ -447,6 +483,8 @@ pub const ENV_OVERRIDES: &[(&str, &str)] = &[
     ("TOKENREIN_ADMIN_LISTEN", "server.admin_listen"),
     ("TOKENREIN_REDIS_URL", "redis.url"),
     ("TOKENREIN_PUBLIC_URL", "auth.public_url"),
+    ("TOKENREIN_HISTORY_DIR", "history.dir"),
+    ("TOKENREIN_HISTORY_RETENTION_DAYS", "history.retention_days"),
     (
         "TOKENREIN_DATABASE_MAX_CONNECTIONS",
         "database.max_connections",
@@ -468,6 +506,13 @@ impl Config {
         }
         if let Some(v) = get("TOKENREIN_PUBLIC_URL") {
             self.auth.public_url = Some(v.trim().trim_end_matches('/').to_string());
+        }
+        if let Some(v) = get("TOKENREIN_HISTORY_DIR") {
+            self.history.dir = Some(v.trim().to_string());
+        }
+        if let Some(n) = get("TOKENREIN_HISTORY_RETENTION_DAYS").and_then(|v| v.trim().parse().ok())
+        {
+            self.history.retention_days = n;
         }
         if let Some(n) =
             get("TOKENREIN_DATABASE_MAX_CONNECTIONS").and_then(|v| v.trim().parse().ok())
@@ -566,6 +611,12 @@ impl Resolved {
     }
 
     fn build(cfg: Config, env: EnvFn) -> Result<Self> {
+        if !(1..=3650).contains(&cfg.history.retention_days) {
+            bail!("history.retention_days must be 1-3650");
+        }
+        if !(1..=3600).contains(&cfg.history.flush_secs) {
+            bail!("history.flush_secs must be 1-3600");
+        }
         let mut keys = HashMap::new();
         let mut org_ids = HashSet::new();
         for (oi, org) in cfg.orgs.iter().enumerate() {

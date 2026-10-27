@@ -140,6 +140,8 @@ always use `rate()` / `increase()`. No org, project, user or key ids are exporte
 | `tokenrein_ledger_errors_total` | counter | | Failed Redis calls (request path, sweeper, admin, ingest) |
 | `tokenrein_activity_events_dropped_total` | counter | `reason` (`queue_full`, `write_failed`) | Dashboard activity events lost. Budgets are unaffected; spend reports and run timelines are incomplete |
 | `tokenrein_audit_write_failures_total` | counter | | Audit entries that could not be stored (they are still in the log) |
+| `tokenrein_history_rows_total` | counter | `result` (`written`, `dropped`) | Usage history rows written to Parquet, and rows dropped because 200,000 were already waiting |
+| `tokenrein_history_write_failures_total` | counter | | Usage history writes that failed (disk full, folder not writable); their rows are retried at the next write |
 | `tokenrein_config_version` | gauge | | Managed config version this process serves |
 | `tokenrein_build_info` | gauge | `version` | Always 1 |
 

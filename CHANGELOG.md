@@ -17,6 +17,11 @@ SDKs; the release workflow refuses a tag that does not match all three.
   SDKs send a hash of each request (never its content) for this.
 - **Alerts** to Slack, Microsoft Teams, PagerDuty and HMAC-signed webhooks: budget 80% used,
   budget used up, run waiting for approval, runaway loop.
+- **Usage history**: with `TOKENREIN_HISTORY_DIR` (Compose: on by default; Helm:
+  `history.enabled`), every request event is also kept as Parquet files and read with DuckDB
+  2.0 (built in): Spend ranges of 90 days, 6 and 12 months, **Download CSV** for chargeback
+  (per day, project, agent, user and model), and run timelines older than 7 days. Kept 400 days
+  by default; finished days are merged hourly; replicas share the folder.
 - `TOKENREIN_PUBLIC_URL` (Helm `publicUrl`) sets the dashboard's address for links and SSO.
 - Developer, enterprise and admin API guides.
 

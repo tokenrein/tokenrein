@@ -12,11 +12,14 @@ function niceMax(v) {
 function renderSpend() {
   const sp = S.spend;
   if (!sp) { $("#spend-chart").innerHTML = '<p class="muted">Loading…</p>'; return; }
+  // Ranges past 40 days need the usage history (history.dir on the server).
+  const kept = sp.history_days || 0;
+  document.querySelectorAll("#spend-days [data-history]").forEach(o => { o.hidden = o.disabled = kept < +o.value; });
   const days = sp.days;
   const total = days.reduce((a, d) => a + d.cost_micros, 0);
   const reqs = days.reduce((a, d) => a + d.requests, 0);
   const blocked = days.reduce((a, d) => a + d.blocked, 0);
-  $("#spend-title").textContent = `Cost per day, last ${days.length} days (UTC)`;
+  $("#spend-title").textContent = `Cost per day, last ${days.length} days (UTC)${sp.source === "history" ? ", from the usage history" : ""}`;
   $("#spend-kpis").innerHTML = [
     kpi("Total", usd(total), `${reqs.toLocaleString()} requests`),
     kpi("Average per day", usd(Math.round(total / Math.max(1, days.length))), ""),
@@ -91,3 +94,17 @@ function renderSpend() {
   };
   $("#spend-split").innerHTML = breakdown("model", "By model", "Model") + breakdown("user", "By user", "User") + breakdown("project", "By project", "Project") + breakdown("agent", "By agent", "Project / agent");
 }
+
+// Download: every day, project, agent, user and model with the usage history; daily totals without.
+document.addEventListener("click", async e => {
+  if (!e.target.closest("[data-spend-csv]") || !S.org) return;
+  try {
+    const res = await fetch(`/admin/orgs/${encodeURIComponent(S.org)}/spend?days=${$("#spend-days").value}&format=csv`, { headers: S.token ? { Authorization: "Bearer " + S.token } : {} });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = url; a.download = `tokenrein-spend-${S.org}-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) { toast("Download failed: " + err.message, true); }
+});

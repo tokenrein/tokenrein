@@ -7,6 +7,7 @@ Tokenrein is one stateless binary, `tokenrein`, plus two stores:
 | `tokenrein` | Nothing on disk. Port **8787**: the proxy and the usage/check API that agents and SDKs call. Port **8788**: the dashboard, admin API, `/metrics`, `/readyz` | Yes |
 | Redis | The budget ledger (reservations, spend counters per run, agent, project and org), run state (paused / killed), recent activity for the dashboard | Yes |
 | Postgres | Every version of the managed config (orgs, projects, keys, budgets, prices) and the audit log | Recommended. Without it both live in Redis: current config only, last 10,000 audit entries |
+| Usage history folder | Every request event as Parquet files, read with DuckDB (built into the binary): spend reports past 40 days, CSV exports, run timelines older than 7 days | Recommended. Without it spend reports cover the last 40 days |
 
 Run as many proxy replicas as you like: they share Redis and Postgres, and each picks up config
 changes made on any other within 2 seconds.
@@ -58,11 +59,32 @@ and Postgres URL from the variables above. These override the file from the envi
 | `TOKENREIN_ADMIN_LISTEN` | `server.admin_listen` | `0.0.0.0:8788` |
 | `TOKENREIN_REDIS_URL` | `redis.url` | `redis://127.0.0.1:6379` |
 | `TOKENREIN_DATABASE_MAX_CONNECTIONS` | `database.max_connections` | `10` |
+| `TOKENREIN_HISTORY_DIR` | `history.dir` | unset (Compose: `/var/lib/tokenrein/history`) |
+| `TOKENREIN_HISTORY_RETENTION_DAYS` | `history.retention_days` | `400` |
 
 For anything else (provider base URLs, upstream timeout, the Redis call timeout `[redis]
 timeout_ms`), mount your own TOML file and point `TOKENREIN_CONFIG` at it. Orgs, projects, keys and
 budgets are not in the file: create them in the dashboard. (A `[[orgs]]` section in the file
 seeds a fresh install once; after that the database is the source of truth.)
+
+### Usage history
+
+Redis keeps 40 days of daily spend totals and 7 days of run detail. For longer reports, set
+`TOKENREIN_HISTORY_DIR` to a writable folder (the Compose file does, on the `history_data`
+volume; Helm: `history.enabled: true`). Every request event is then also written there as
+compressed Parquet files, one folder per org and day, every 30 seconds (`[history]
+flush_secs`), and read back with DuckDB for:
+
+- the Spend page's 90-day, 6-month and 12-month ranges (`/admin/orgs/{org}/spend?days=`),
+- **Download CSV**: spend per day, project, agent, user and model,
+- run timelines older than 7 days.
+
+Each replica writes its own files, so every replica must see the **same** folder: a Docker
+volume on one host, or ReadWriteMany storage in Kubernetes (EFS, Filestore, Azure Files, NFS,
+CephFS). Finished days are merged into one file each hour, and days older than
+`retention_days` (400) are deleted. Plan on roughly 100 bytes per request event: a million
+events a month is about 100 MB a month. The files are plain Parquet, so the same folder also
+works with any tool that reads Parquet (DuckDB, Spark, pandas).
 
 `RUST_LOG` sets the log level (`info` by default). Logs are JSON on stderr; stdout carries one
 JSON event per request for an analytics pipeline.
@@ -174,6 +196,10 @@ pg_dump --format=custom --file=tokenrein-$(date +%F).dump "$TOKENREIN_DATABASE_U
 ```
 
 With Compose: `docker compose exec postgres pg_dump -U tokenrein -Fc tokenrein > tokenrein.dump`.
+
+**The usage history folder** holds immutable Parquet files: copy or snapshot it like any other
+volume (`rsync`, volume snapshots, or object storage sync). Losing it loses spend reports past
+40 days and old run timelines, nothing else.
 
 **`TOKENREIN_SECRETS_KEY`**: store it in your secret manager, apart from the database backups. A database
 backup without it still restores every setting, but the provider keys saved in the dashboard are

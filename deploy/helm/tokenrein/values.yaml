@@ -120,6 +120,19 @@ adminService:
   port: 8788
   annotations: {}
 
+# Usage history for spend reports past 40 days, CSV exports and run timelines older than 7 days:
+# Parquet files read with DuckDB, on a volume every replica writes to. With more than one
+# replica it needs ReadWriteMany storage (EFS, Filestore, Azure Files, NFS, CephFS), or an
+# existingClaim of that kind.
+history:
+  enabled: false
+  retentionDays: 400
+  persistence:
+    existingClaim: ""
+    accessModes: [ReadWriteMany]
+    size: 20Gi
+    storageClass: ""
+
 resources:
   requests:
     cpu: 100m

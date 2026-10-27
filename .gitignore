@@ -3,3 +3,4 @@ node_modules/
 gateway/data/
 *.log
 target/
+data/

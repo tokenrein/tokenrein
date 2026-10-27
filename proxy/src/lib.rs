@@ -7,6 +7,7 @@ pub mod config;
 pub mod connectors;
 pub mod control;
 pub mod db;
+pub mod history;
 pub mod ingest;
 pub mod ledger;
 pub mod loops;
@@ -96,6 +97,9 @@ fn spawn_activity_writer(
             if let Err(e) = state.ledger.record_activity(&batch).await {
                 tracing::warn!(error = %e, dropped = batch.len(), "could not record dashboard activity");
                 metrics::activity_write_failed(batch.len());
+            }
+            if let Some(h) = &state.history {
+                h.push(&batch);
             }
             for (org, alert) in batch.iter().filter_map(alerts::blocked_alert) {
                 alerts::notify(&state, &org, alert).await;

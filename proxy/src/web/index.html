@@ -122,8 +122,9 @@
       <div class="card">
         <div class="card-h"><h2 id="spend-title">Cost per day</h2>
           <div class="toolbar">
-            <select id="spend-days" aria-label="Date range"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option></select>
+            <select id="spend-days" aria-label="Date range"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90" data-history hidden disabled>Last 90 days</option><option value="180" data-history hidden disabled>Last 6 months</option><option value="365" data-history hidden disabled>Last 12 months</option></select>
             <label class="inline status"><input type="checkbox" id="spend-table-toggle"> Table</label>
+            <button class="btn sm" data-spend-csv>Download CSV</button>
           </div></div>
         <div class="card-b">
           <div class="grid kpis" id="spend-kpis" style="margin-bottom:8px"></div>

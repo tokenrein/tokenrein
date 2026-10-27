@@ -17,6 +17,8 @@ sign-on and an audit log.
   Prompts never have to pass through Tokenrein.
 - **Built for teams**: SSO (OpenID Connect), roles per org, API tokens, every change versioned and
   audited, Docker Compose and Helm.
+- **Spend you can charge back**: by project, agent, person and model, over up to 13 months, with
+  CSV export (usage history in Parquet files, queried with DuckDB).
 
 ## How it works
 
@@ -34,6 +36,7 @@ flowchart LR
   end
   redis[("Redis<br/>budgets, runs")]
   pg[("Postgres<br/>people, config history, audit")]
+  hist[("Usage history<br/>Parquet + DuckDB")]
   out["Slack · Teams · PagerDuty · webhooks"]
 
   cc -- "telemetry + hooks" --> gate
@@ -43,6 +46,7 @@ flowchart LR
   tool -- "every call (proxy mode)" --> gate
   gate -- "proxy mode only" --> llm
   gate --- redis
+  gate --- hist
   dash --- pg
   gate --> out
 ```
@@ -124,7 +128,7 @@ with guard.run("ticket-4812", budget_usd=5):              # one task = one run
 
 | Path | What it is |
 |---|---|
-| `proxy/` | Tokenrein itself (Rust): proxy, usage ingest, budget ledger (Redis), people and audit (Postgres), alerts, dashboard (`proxy/src/web`) |
+| `proxy/` | Tokenrein itself (Rust): proxy, usage ingest, budget ledger (Redis), people and audit (Postgres), usage history (Parquet + DuckDB), alerts, dashboard (`proxy/src/web`) |
 | `sdk/python`, `sdk/typescript` | SDKs (Apache-2.0) |
 | `deploy/` | Docker Compose stack and Helm chart; `Dockerfile` builds the image |
 | `config/dev.toml` | Local development config |

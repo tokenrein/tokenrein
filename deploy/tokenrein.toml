@@ -9,6 +9,8 @@
 #   TOKENREIN_SECRETS_KEY                   64 hex characters; encrypts provider keys saved in the dashboard
 #   TOKENREIN_PUBLIC_URL                    the dashboard's address as people reach it (links in
 #                                           alerts and setup links, single sign-on redirects)
+#   TOKENREIN_HISTORY_DIR                   folder for usage history (spend past 40 days, CSV
+#                                           exports); TOKENREIN_HISTORY_RETENTION_DAYS (400)
 #   OPENAI_API_KEY, ANTHROPIC_API_KEY  optional; keys can also be saved per org in the dashboard
 # Any of them can be read from a file instead: TOKENREIN_ADMIN_TOKEN_FILE=/run/secrets/admin_token.
 #

@@ -170,7 +170,7 @@ send it to Splunk, Datadog, Elastic or Sentinel.
 | What | Where | How |
 |---|---|---|
 | Prompts and responses | Direct mode and connectors: **never sent** to Tokenrein. Proxy mode: passed through to the provider, **not stored** | Loop detection keeps only SHA-256 hashes |
-| Usage events (model, tokens, cost, run, agent, user email) | Redis: the latest 5,000 events per org, 7 days of run detail, 40 days of daily totals | For the dashboard and budgets |
+| Usage events (model, tokens, cost, run, agent, user email) | Redis: the latest 5,000 events per org, 7 days of run detail, 40 days of daily totals. With the usage history: Parquet files on your volume, kept 400 days (configurable), then deleted | For the dashboard, budgets, long-range spend reports and CSV exports for chargeback |
 | Provider API keys, SSO client secret, alert URLs and keys | Managed config (Postgres) | AES-256-GCM, bound to the org and purpose; only the last 4 characters are ever shown |
 | Tokenrein keys, API tokens, sessions, setup links | Postgres or managed config | SHA-256 hashes only; shown once at creation |
 | Passwords | Postgres | argon2id; 12+ characters; 10 failures lock the account for 15 minutes; sign-in rate limits per address |

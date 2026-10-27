@@ -38,6 +38,8 @@ pub struct AppState {
     pub http: reqwest::Client,
     /// Request events for the dashboard, written to Redis by a background task.
     pub activity: mpsc::Sender<Value>,
+    /// Long-term usage history (Parquet files read with DuckDB), when a folder is configured.
+    pub history: Option<Arc<crate::history::History>>,
 }
 
 impl AppState {
@@ -48,7 +50,9 @@ impl AppState {
         http: reqwest::Client,
         activity: mpsc::Sender<Value>,
     ) -> Self {
+        let history = crate::history::History::from_config(&rt.cfg.history);
         Self {
+            history,
             rt: RwLock::new(Arc::new(rt)),
             control_version: AtomicU64::new(0),
             control_edit: tokio::sync::Mutex::new(()),

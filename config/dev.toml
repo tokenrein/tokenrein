@@ -18,6 +18,12 @@ url = "redis://127.0.0.1:6379"
 # url_env = "TOKENREIN_DATABASE_URL"
 # max_connections = 10
 
+# Optional: usage history for spend past 40 days, CSV exports and old run timelines (Parquet
+# files read with DuckDB). Replicas share the folder.
+# [history]
+# dir = "./data/history"
+# retention_days = 400
+
 # Optional: people sign in with their own accounts (needs the database). public_url is the
 # dashboard's address as people reach it; single sign-on sends them back there.
 # [auth]

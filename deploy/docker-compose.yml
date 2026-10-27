@@ -25,7 +25,11 @@ services:
     env_file: .env
     environment:
       TOKENREIN_REDIS_URL: redis://redis:6379
+      # Spend history past 40 days and CSV exports (Parquet files read with DuckDB).
+      TOKENREIN_HISTORY_DIR: /var/lib/tokenrein/history
       RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - history_data:/var/lib/tokenrein/history
     ports:
       - "${TOKENREIN_PROXY_PORT:-8787}:8787"
       # The admin listener carries the dashboard and admin API: keep it off public interfaces.
@@ -78,3 +82,4 @@ services:
 volumes:
   redis_data:
   postgres_data:
+  history_data:

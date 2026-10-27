@@ -36,7 +36,7 @@ to read, approver for run actions, admin to change things); `/admin/orgs` (creat
 | `POST` | `/admin/orgs/{org}/connectors/cursor/sync` | Import Cursor usage now (it also runs hourly) |
 | `POST` | `/admin/orgs/{org}/projects/{project}/pack` | Apply `{pack}`: replaces the project's budgets, all in Check mode |
 | `GET` | `/admin/orgs/{org}/review` | What Enforce would have blocked: per limit, requests / cost / runs, from recent events |
-| `GET` | `/admin/orgs/{org}/spend?days=` | Cost and requests per day, and by model / user / project / agent (up to 40 days) |
+| `GET` | `/admin/orgs/{org}/spend?days=&format=` | Cost and requests per day, and by model / user / project / agent. Up to 40 days from Redis; with the usage history, up to its retention (`source` says which). `format=csv` downloads spend per day, project, agent, user and model (daily totals without the history) |
 | `GET` | `/admin/orgs/{org}/runs/{run}/timeline` | A run, its sub-agent runs, and every request in them |
 | `POST` | `/admin/orgs/{org}/projects` | Create a project `{id, budgets?}` |
 | `PUT` / `DELETE` | `/admin/orgs/{org}/projects/{project}` | Set `{budgets}` (blank = inherit from org) / delete |
@@ -68,4 +68,7 @@ actual cost, usage, `pre_upstream_us` overhead) for the analytics pipeline. The 
 feed the dashboard: a background task writes them to Redis (a capped stream of the last 5,000
 per org, the last 500 per run, run / sub-run / agent indexes, and daily spend totals by model,
 user, project and agent), off the request path; if Redis is slow they are dropped, never the
-request. Spend reports come from these events; budgets are always enforced from the ledger.
+request. Spend reports come from these events; budgets are always enforced from the ledger. With
+`[history] dir` set, the same events are also written to Parquet files (one folder per org and
+day) and read with DuckDB for ranges past 40 days, CSV exports and run timelines older than 7
+days.

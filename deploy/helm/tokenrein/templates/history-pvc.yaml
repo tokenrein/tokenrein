@@ -1,0 +1,20 @@
+{{- if and .Values.history.enabled (not .Values.history.persistence.existingClaim) }}
+# Usage history (Parquet files) shared by every replica. Kept on uninstall.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "tokenrein.fullname" . }}-history
+  labels:
+    {{- include "tokenrein.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- toYaml .Values.history.persistence.accessModes | nindent 4 }}
+  {{- with .Values.history.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.history.persistence.size }}
+{{- end }}
