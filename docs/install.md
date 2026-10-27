@@ -123,7 +123,7 @@ image:
   tag: "0.1.0"
 secrets:
   existingSecret: tokenrein-secrets
-  mountAsFiles: true          # TL_*_FILE instead of environment variables
+  mountAsFiles: true          # TOKENREIN_*_FILE instead of environment variables
 redis:
   enabled: false
 externalRedis:

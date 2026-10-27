@@ -58,7 +58,7 @@ secrets:
   previousSecretsKey: ""
   # With existingSecret and mountAsFiles: set while the Secret holds TOKENREIN_SECRETS_KEY_PREVIOUS.
   rotating: false
-  # Mount the Secret as files and pass TL_*_FILE instead of environment variables.
+  # Mount the Secret as files and pass TOKENREIN_*_FILE instead of environment variables.
   mountAsFiles: false
 
 # An existing Secret with OPENAI_API_KEY and/or ANTHROPIC_API_KEY, used for every org that has

@@ -3,317 +3,443 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tokenrein — spend guardrails for AI agents</title>
-<meta name="description" content="Put a budget on every AI agent run. Tokenrein stops runaway agents before they reach your invoice: per-run budgets, loop detection and approvals for Claude Code, Codex, Cursor and your own agents. Self-hosted, with SSO and an audit log.">
-<meta property="og:title" content="Tokenrein — spend guardrails for AI agents">
-<meta property="og:description" content="Per-run budgets, loop detection and approvals for every AI agent. Self-hosted. Prompts never leave your network.">
+<title>Tokenrein: a budget on every AI agent run</title>
+<meta name="description" content="Tokenrein is a self-hosted guardrail for AI agents: a dollar limit on every run, a loop guard, and a person who decides when the money runs out. For Claude Code, Codex CLI, Gemini CLI, Cursor and your own agents.">
+<meta property="og:title" content="Tokenrein: a budget on every AI agent run">
+<meta property="og:description" content="A dollar limit on every agent run, a loop guard, and approvals in Slack or the dashboard. Self-hosted, with SSO and an audit log.">
 <meta property="og:type" content="website">
-<meta name="theme-color" content="#0d0f12">
+<meta name="theme-color" content="#0a0a0a">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
+<script>document.documentElement.classList.add('js')</script>
 <script src="site.js" defer></script>
 </head>
 <body>
 
-<header class="nav" id="top">
-  <div class="wrap nav-in">
-    <a class="brand" href="#top" aria-label="Tokenrein home">
-      <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--accent)"/><path d="M9 10h14M16 10v13M11 23h10" stroke="var(--accent-ink)" stroke-width="2.6" stroke-linecap="round"/></svg>
-      Tokenrein
-    </a>
-    <nav class="links" aria-label="Main">
-      <a href="#product">Product</a>
-      <a href="#how">How it works</a>
+<header class="hero" id="top">
+  <div class="bar wrap">
+    <a class="wordmark" href="#top">tokenrein</a>
+    <nav class="bar__links" aria-label="Main">
+      <a href="#guards">What stops a run</a>
+      <a href="#agents">Agents</a>
       <a href="#enterprise">Enterprise</a>
       <a href="#pricing">Pricing</a>
       <a href="https://github.com/geektuhin123/tokenrein#documentation">Docs</a>
     </nav>
-    <div class="nav-cta">
-      <button class="theme" type="button" aria-label="Switch light or dark theme" data-theme-toggle>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
-      </button>
-      <a class="btn ghost hide-sm" href="https://github.com/geektuhin123/tokenrein">GitHub</a>
-      <a class="btn primary" href="#start">Get started</a>
+    <a class="button button--small" href="#deploy">Deploy</a>
+  </div>
+
+  <div class="hero__copy wrap">
+    <h1 class="display lines">
+      <span class="line"><span data-line style="--i:0">Budget every</span></span>
+      <span class="line"><span data-line style="--i:1">agent run</span></span>
+    </h1>
+    <p class="lead hero__lead" data-load>Tokenrein is a self-hosted guardrail for AI agents: a dollar limit on every run, a loop guard, and a person who decides when the money runs out.</p>
+  </div>
+
+  <div class="straps wrap">
+    <a class="strap strap--1" href="#guards"><span class="strap__tab">What stops a run</span></a>
+    <a class="strap strap--2" href="#rollout"><span class="strap__tab">Rollout</span></a>
+    <a class="strap strap--3" href="#agents"><span class="strap__tab">Agents</span></a>
+    <div class="strap strap--front">
+      <span class="strap__tab">A run, live</span>
+      <div class="live" data-ui data-live>
+        <div class="live__head">
+          <p class="live__run"><b>ticket-4812</b> · support-bot · claude-sonnet-4-5</p>
+          <p class="live__state" data-state>Paused, waiting for approval</p>
+        </div>
+        <div class="meter" data-meter style="--fill:0.333;--limit:0.333">
+          <span class="meter__fill"></span>
+          <span class="meter__limit" aria-hidden="true"></span>
+        </div>
+        <div class="live__foot">
+          <p class="live__spent nums"><b data-spent>$5.00</b> of <span data-limit>$5.00</span> run budget</p>
+          <div class="live__controls">
+            <div class="choice" role="radiogroup" aria-label="Run budget">
+              <button type="button" role="radio" aria-checked="false" data-budget="2">$2</button>
+              <button type="button" role="radio" aria-checked="true" data-budget="5">$5</button>
+              <button type="button" role="radio" aria-checked="false" data-budget="10">$10</button>
+            </div>
+            <button type="button" class="button button--ink" data-approve hidden>Approve +$5</button>
+            <button type="button" class="textbutton" data-stop hidden>Stop the run</button>
+            <a class="button" href="#deploy">Deploy in five minutes</a>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </header>
 
 <main>
-  <section class="hero">
-    <div class="wrap hero-in">
-      <div class="hero-copy">
-        <p class="eyebrow"><span class="dot"></span>Spend guardrails for AI agents</p>
-        <h1>Put a budget on every agent run.</h1>
-        <p class="lede">Tokenrein stops runaway AI agents <em>before</em> they reach your invoice. Budgets per run, agent and project, a loop guard that catches stuck agents in minutes, and approvals when a run needs more. For Claude Code, Codex, Cursor and your own agents on any model.</p>
-        <div class="cta-row">
-          <a class="btn primary lg" href="#start">Deploy in 5 minutes</a>
-          <a class="btn ghost lg" href="https://github.com/geektuhin123/tokenrein/blob/main/docs/enterprise.md">Enterprise guide</a>
-        </div>
-        <ul class="assurances">
-          <li>Self-hosted in your cloud</li>
-          <li>Prompts never leave your network</li>
-          <li>SSO, roles and audit log</li>
-        </ul>
+
+<section class="showcase" id="guards" aria-labelledby="guards-title">
+  <div class="showcase__stage wrap">
+    <div class="capsule" data-capsule aria-hidden="true"></div>
+
+    <figure class="frag is-on" data-ui data-guard="budget">
+      <div class="ui-card">
+        <p class="ui-title">ticket-4812</p>
+        <p class="ui-sub">support-bot / support-bot · asked 2:03 PM</p>
+        <p class="ui-line"><span class="ui-chip">budget</span> spent $5.04 of its $5.00 budget</p>
+        <div class="ui-row"><span class="ui-label">Add $</span><span class="ui-input">5.00</span><span class="ui-btn">Approve</span><span class="ui-link">Stop the run</span></div>
       </div>
+      <figcaption>The Approvals page: a run that used up its budget</figcaption>
+    </figure>
 
-      <figure class="console" aria-label="Example: a run reaching its budget and waiting for approval">
-        <div class="console-bar"><span></span><span></span><span></span><b>Run ticket-4812 · support-bot</b></div>
-        <div class="console-body">
-          <div class="meter-row">
-            <div><div class="k">Run budget</div><div class="v"><span data-spent>$4.12</span> <span class="muted">of $5.00</span></div></div>
-            <span class="pill warn" data-state>82% used</span>
-          </div>
-          <div class="meter" aria-hidden="true"><span data-fill style="width:82%"></span></div>
-          <ol class="log" aria-hidden="true">
-            <li><time>14:02:11</time><span class="ok">allowed</span> claude-sonnet-5-5 <i>$0.21</i></li>
-            <li><time>14:02:19</time><span class="ok">allowed</span> claude-sonnet-5-5 <i>$0.24</i></li>
-            <li><time>14:02:26</time><span class="warn">loop?</span> same tool call ×4 <i>bash: npm test</i></li>
-            <li class="hot"><time>14:02:31</time><span class="stop">paused</span> budget reached <i>$5.00</i></li>
-          </ol>
-          <div class="approval">
-            <div>
-              <div class="ap-title">Run ticket-4812 needs approval to spend more</div>
-              <div class="muted">support-bot · spent $5.00 of its $5.00 budget · sent to #ai-spend</div>
-            </div>
-            <div class="ap-actions"><span class="fake-btn primary">Approve +$5</span><span class="fake-btn">Stop run</span></div>
-          </div>
-        </div>
-      </figure>
-    </div>
-  </section>
-
-  <section class="works" aria-label="Works with">
-    <div class="wrap">
-      <p>Works with</p>
-      <ul>
-        <li>Claude Code</li><li>Codex CLI</li><li>Gemini CLI</li><li>Cursor</li>
-        <li>OpenAI</li><li>Anthropic</li><li>Gemini</li><li>Groq · Mistral · DeepSeek</li><li>Ollama · vLLM</li>
-      </ul>
-    </div>
-  </section>
-
-  <section class="problem">
-    <div class="wrap two">
-      <div>
-        <p class="kicker">The problem</p>
-        <h2>Agents spend money while nobody is watching.</h2>
+    <figure class="frag" data-ui data-guard="loop">
+      <div class="ui-card">
+        <p class="ui-title">cc-7f3a · claude-code</p>
+        <ol class="ui-trace">
+          <li><span>14:21:02</span> Bash <code>npm test</code> <em>allowed</em></li>
+          <li><span>14:21:40</span> Bash <code>npm test</code> <em>allowed</em></li>
+          <li><span>14:22:15</span> Bash <code>npm test</code> <em>allowed</em></li>
+          <li><span>14:22:51</span> Bash <code>npm test</code> <em>allowed</em></li>
+          <li><span>14:23:30</span> Bash <code>npm test</code> <em>allowed</em></li>
+          <li class="is-stop"><span>14:24:06</span> Bash <code>npm test</code> <em>paused</em></li>
+        </ol>
       </div>
-      <div class="problem-list">
-        <div><h3>One stuck agent can loop for hours.</h3><p>The same tool call, the same prompt, over and over, each one billed. Provider spend caps are per account and trip after the money is gone.</p></div>
-        <div><h3>The bill arrives a month later.</h3><p>One invoice for the whole company. No answer to which team, which agent, which person or which task spent it.</p></div>
-        <div><h3>Rolling out coding agents means trusting every laptop.</h3><p>Hundreds of developers, each running Claude Code or Cursor with real keys and no limit per person or per session.</p></div>
+      <figcaption>A run's tool calls, paused at the sixth identical one</figcaption>
+    </figure>
+
+    <figure class="frag" data-ui data-guard="speed">
+      <div class="ui-card">
+        <p class="ui-title">nightly-triage · batch</p>
+        <dl class="ui-stats">
+          <div><dt>Last minute</dt><dd>$2.40</dd></div>
+          <div><dt>Limit</dt><dd>$1.00 a minute</dd></div>
+          <div><dt>State</dt><dd class="ui-bad">paused</dd></div>
+        </dl>
       </div>
-    </div>
-  </section>
+      <figcaption>A batch run that started spending too fast</figcaption>
+    </figure>
 
-  <section class="features" id="product">
-    <div class="wrap">
-      <p class="kicker">The product</p>
-      <h2>Budgets that act before the spend, not after.</h2>
-      <div class="grid">
-        <article>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M4 8h16M6 16h12"/></svg>
-          <h3>Budgets at every level</h3>
-          <p>Per run, per agent per day, per project and org per month. Each one warns, blocks, or asks a person. Projects inherit the org's limits and can tighten them.</p>
-        </article>
-        <article>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>
-          <h3>Approvals, not dead ends</h3>
-          <p>When a run reaches its budget it pauses and asks an approver in Slack, Teams or the dashboard. Approve more budget and it carries on where it stopped.</p>
-        </article>
-        <article>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7M4 4v5h5"/></svg>
-          <h3>Loop guard</h3>
-          <p>The same request or tool call again and again, spend that suddenly races, too many calls in one run: the run is paused within minutes, not discovered next month.</p>
-        </article>
-        <article>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 9l3 2-3 2M12 13h5"/></svg>
-          <h3>Every agent, any model</h3>
-          <p>One command connects Claude Code, Codex CLI, Gemini CLI or Cursor. One line wraps your Python or TypeScript client. Or use it as a base URL from any tool.</p>
-        </article>
-        <article>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
-          <h3>Prompts stay yours</h3>
-          <p>By default agents call their model provider directly; Tokenrein only receives token counts and a hash of each request. Nothing to send through a third party.</p>
-        </article>
-        <article>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6"/></svg>
-          <h3>Spend you can explain</h3>
-          <p>Live agents, every run with its sub-agents, and spend by model, person, project and agent. Chargeback without spreadsheets.</p>
-        </article>
+    <figure class="frag" data-ui data-guard="calls">
+      <div class="ui-card">
+        <p class="ui-title">research-agent · r-2291</p>
+        <dl class="ui-stats">
+          <div><dt>Calls</dt><dd>400 of 400</dd></div>
+          <div><dt>Spent</dt><dd>$3.12</dd></div>
+          <div><dt>State</dt><dd class="ui-bad">paused</dd></div>
+        </dl>
       </div>
-    </div>
-  </section>
+      <figcaption>A run that reached its limit on calls</figcaption>
+    </figure>
 
-  <section class="how" id="how">
-    <div class="wrap">
-      <p class="kicker">How it works</p>
-      <h2>From install to enforced in three weeks, without blocking anyone on day one.</h2>
-      <ol class="steps">
-        <li>
-          <span class="n">1</span>
-          <h3>Connect</h3>
-          <p>Deploy with Docker Compose or Helm, sign in with your identity provider, and connect agents from the Connect page.</p>
-        </li>
-        <li>
-          <span class="n">2</span>
-          <h3>Observe</h3>
-          <p>Apply a guardrail pack. Every limit starts in Check mode: nothing is blocked, and you see what <em>would</em> have been.</p>
-        </li>
-        <li>
-          <span class="n">3</span>
-          <h3>Enforce</h3>
-          <p>Switch the limits you trust to Enforce or Ask, turn the loop guard on, and route alerts to the team that owns the agent.</p>
-        </li>
-      </ol>
-
-      <div class="code" data-tabs>
-        <div class="tabs" role="tablist" aria-label="Ways to connect">
-          <button role="tab" aria-selected="true" data-tab="cc">Claude Code</button>
-          <button role="tab" aria-selected="false" data-tab="py">Python</button>
-          <button role="tab" aria-selected="false" data-tab="ts">TypeScript</button>
-          <button role="tab" aria-selected="false" data-tab="proxy">Any tool</button>
-        </div>
-        <pre data-panel="cc"><code><span class="c"># on each developer machine (the Connect page fills in the key)</span>
-curl -fsSL https://tokenrein.example.com/connect/claude-code.py \
-  | python3 - --key tr_… --url https://tokenrein.example.com:8787</code></pre>
-        <pre data-panel="py" hidden><code><span class="k">from</span> tokenrein <span class="k">import</span> guard
-
-client = guard.openai(OpenAI(), agent=<span class="s">"support-bot"</span>)   <span class="c"># still calls OpenAI directly</span>
-<span class="k">with</span> guard.run(<span class="s">"ticket-4812"</span>, budget_usd=<span class="m">5</span>):          <span class="c"># one task = one run</span>
-    client.chat.completions.create(model=<span class="s">"gpt-4o"</span>, messages=[...])</code></pre>
-        <pre data-panel="ts" hidden><code><span class="k">import</span> { guard } <span class="k">from</span> <span class="s">'@tokenrein/sdk'</span>;
-
-<span class="k">const</span> client = guard.anthropic(<span class="k">new</span> Anthropic(), { agent: <span class="s">'support-bot'</span> });
-<span class="k">await</span> guard.run({ runId: <span class="s">'ticket-4812'</span>, budgetUsd: <span class="m">5</span> }, () =&gt;
-  client.messages.create({ model: <span class="s">'claude-sonnet-5-5'</span>, max_tokens: <span class="m">1024</span>, messages }));</code></pre>
-        <pre data-panel="proxy" hidden><code><span class="c"># any OpenAI- or Anthropic-compatible tool</span>
-Base URL:  https://tokenrein.example.com:8787/v1
-API key:   tr_…        <span class="c"># a Tokenrein key, never your provider key</span></code></pre>
-      </div>
-    </div>
-  </section>
-
-  <section class="compare">
-    <div class="wrap">
-      <p class="kicker">Why not just provider spend limits?</p>
-      <h2>Because a limit on the whole account stops everyone, after the fact.</h2>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th></th><th>Provider spend caps</th><th>Tokenrein</th></tr></thead>
+    <figure class="frag" data-ui data-guard="pause">
+      <div class="ui-card">
+        <table class="ui-table">
+          <thead><tr><th>Run</th><th>State</th><th>Spend</th><th><span class="sr-only">Action</span></th></tr></thead>
           <tbody>
-            <tr><th>Granularity</th><td>Whole account or project</td><td>Every run, agent, person, project and org</td></tr>
-            <tr><th>When it acts</th><td>After the money is spent</td><td>Before each call, plus loop detection</td></tr>
-            <tr><th>What happens</th><td>Everything stops</td><td>One run pauses and asks an approver</td></tr>
-            <tr><th>Across providers</th><td>One provider at a time</td><td>OpenAI, Anthropic, Gemini, local models, in one place</td></tr>
-            <tr><th>Coding agents</th><td>No view per developer or session</td><td>Per developer and per session, with sub-agents</td></tr>
-            <tr><th>Governance</th><td>Billing console</td><td>SSO, roles, approvals, full audit log</td></tr>
+            <tr><td>cc-91be</td><td><span class="ui-chip ui-chip--ok">running</span></td><td>$1.20</td><td><span class="ui-mini">Pause</span></td></tr>
+            <tr class="is-hover"><td>codex-4c02</td><td><span class="ui-chip ui-chip--warn">paused</span></td><td>$6.85</td><td><span class="ui-mini">Resume</span></td></tr>
+            <tr><td>gemini-77a0</td><td><span class="ui-chip ui-chip--ok">running</span></td><td>$0.44</td><td><span class="ui-mini">Pause</span></td></tr>
           </tbody>
         </table>
       </div>
-    </div>
-  </section>
+      <figcaption>The Runs page: pause, resume or kill any run</figcaption>
+    </figure>
 
-  <section class="enterprise" id="enterprise">
-    <div class="wrap two">
-      <div>
-        <p class="kicker">Enterprise</p>
-        <h2>Runs in your cloud. Answers to your security team.</h2>
-        <p class="lede">Tokenrein is one stateless service with Redis and Postgres. Deploy it with Helm or Docker Compose next to your agents; your prompts, keys and usage data stay with you.</p>
-        <a class="btn ghost" href="https://github.com/geektuhin123/tokenrein/blob/main/docs/enterprise.md">Read the enterprise guide</a>
-      </div>
-      <ul class="checklist">
-        <li><b>Single sign-on</b> with Okta, Microsoft Entra ID, Google Workspace or any OpenID Connect provider, with roles from groups</li>
-        <li><b>Roles per org</b>: viewer, approver, admin, owner; personal API tokens for automation</li>
-        <li><b>Audit log</b> of every change and decision, exportable and streamed to your SIEM</li>
-        <li><b>Encrypted secrets</b>: provider keys and alert URLs sealed with AES-256-GCM; keys and sessions stored as hashes</li>
-        <li><b>Alerts</b> to Slack, Microsoft Teams, PagerDuty and signed webhooks</li>
-        <li><b>Operable</b>: Prometheus metrics, health checks, fail-open or fail-closed per org, runbooks</li>
+    <div class="showcase__index">
+      <h2 class="head showcase__title" id="guards-title">What stops a run</h2>
+      <ul class="index" role="list">
+        <li><button type="button" class="index__row" aria-pressed="true" data-pick="budget" data-tone="pink" data-fact="A run budget in Ask mode pauses the run and asks an approver for more.">Its budget runs out</button></li>
+        <li><button type="button" class="index__row" aria-pressed="false" data-pick="loop" data-tone="pink" data-fact="By default: the same request or tool call six times within ten minutes.">It repeats itself</button></li>
+        <li><button type="button" class="index__row" aria-pressed="false" data-pick="speed" data-tone="mint" data-fact="A dollar limit per minute catches a run burning money before its budget does.">It spends too fast</button></li>
+        <li><button type="button" class="index__row" aria-pressed="false" data-pick="calls" data-tone="mint" data-fact="A cap on model calls per run, for agents that should finish in a known number of steps.">Too many calls</button></li>
+        <li><button type="button" class="index__row" aria-pressed="false" data-pick="pause" data-tone="pink" data-fact="Approvers pause, resume or kill a run and its sub-agents from the dashboard or the API.">Someone pauses it</button></li>
       </ul>
     </div>
-  </section>
+    <p class="showcase__fact" data-fact-out aria-live="polite">A run budget in Ask mode pauses the run and asks an approver for more.</p>
+  </div>
+</section>
 
-  <section class="start" id="start">
-    <div class="wrap two">
-      <div>
-        <p class="kicker">Get started</p>
-        <h2>Five minutes to your first guarded run.</h2>
-        <p class="lede">Bring up Tokenrein, Redis and Postgres with Docker Compose, create the first admin, and follow the checklist in the dashboard.</p>
-        <p class="small">Kubernetes? <code>helm install tokenrein deploy/helm/tokenrein</code></p>
+<section class="rollout" id="rollout" aria-labelledby="rollout-title">
+  <div class="rollout__fields">
+    <div class="rollout__text">
+      <h2 class="head" id="rollout-title" aria-live="polite" data-stage-title>First, watch every run</h2>
+      <p data-stage-note>Connect a team's agents with every limit in Check mode. Nothing is blocked, and from the first day you see spend per person, per agent and per run.</p>
+    </div>
+    <div class="rollout__view">
+      <figure class="frag-static is-on" data-ui data-stage="0">
+        <div class="ui-card ui-card--wide">
+          <p class="ui-title">Overview · acme · October</p>
+          <dl class="ui-stats ui-stats--grid">
+            <div><dt>Spend this month</dt><dd>$1,284.10</dd></div>
+            <div><dt>Live agents</dt><dd>37</dd></div>
+            <div><dt>Active runs</dt><dd>12</dd></div>
+            <div><dt>Enforce would have blocked</dt><dd>9 requests · $46.20</dd></div>
+          </dl>
+        </div>
+        <figcaption>The Overview in the first week</figcaption>
+      </figure>
+      <figure class="frag-static" data-ui data-stage="1">
+        <div class="ui-card ui-card--wide ui-slack">
+          <p class="ui-title">Tokenrein <span class="ui-sub">app · 2:03 PM</span></p>
+          <p class="ui-line"><b>Run ticket-4812 is waiting for approval</b></p>
+          <p class="ui-line">support-bot spent $5.04 of its $5.00 run budget.</p>
+          <p class="ui-line"><span class="ui-btn">Open approvals</span></p>
+        </div>
+        <figcaption>An alert in a Slack channel</figcaption>
+      </figure>
+      <figure class="frag-static" data-ui data-stage="2">
+        <div class="ui-card ui-card--wide">
+          <p class="ui-title">Keys &amp; limits · acme</p>
+          <dl class="ui-stats ui-stats--grid">
+            <div><dt>Run (default)</dt><dd>$5.00 · Ask</dd></div>
+            <div><dt>Agent per day</dt><dd>$20.00 · Enforce</dd></div>
+            <div><dt>Loop guard</dt><dd>Pause and ask</dd></div>
+            <div><dt>Same request</dt><dd>6 times in 10 min</dd></div>
+          </dl>
+        </div>
+        <figcaption>Limits moved from Check to Enforce and Ask</figcaption>
+      </figure>
+      <figure class="frag-static" data-ui data-stage="3">
+        <div class="ui-card ui-card--wide">
+          <p class="ui-title">Spend by project · last 30 days</p>
+          <table class="ui-table">
+            <tbody>
+              <tr><td>platform</td><td class="nums">$1,412.60</td><td class="nums">41 people</td></tr>
+              <tr><td>mobile</td><td class="nums">$988.15</td><td class="nums">23 people</td></tr>
+              <tr><td>data</td><td class="nums">$640.02</td><td class="nums">14 people</td></tr>
+              <tr><td>support-bot</td><td class="nums">$212.40</td><td>agent</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <figcaption>Spend by project, for chargeback</figcaption>
+      </figure>
+    </div>
+  </div>
+  <div class="rollout__control wrap">
+    <label class="sr-only" for="stage">Rollout stage</label>
+    <input type="range" id="stage" min="0" max="3" step="1" value="0" data-stage-input aria-valuetext="Watch">
+    <ol class="rollout__names" role="list">
+      <li class="is-on">Watch</li><li>Alert</li><li>Enforce</li><li>Expand</li>
+    </ol>
+  </div>
+</section>
+
+<section class="agents wrap" id="agents" aria-labelledby="agents-title">
+  <div class="agents__intro">
+    <h2 class="head" id="agents-title">Your agents</h2>
+    <p>Claude Code, Codex CLI, Gemini CLI, Cursor and the agents you build. One command on each developer's machine; usage comes from each agent's own telemetry, so prompts never pass through Tokenrein.</p>
+  </div>
+  <div class="agents__tiles">
+    <figure class="tile tile--mint">
+      <div class="tile__plate" data-ui><pre><code><span class="c"># ~/.codex/config.toml</span>
+[otel]
+log_user_prompt = false
+exporter = { otlp-http = {
+  endpoint = "…/v1/otel/v1/logs",
+  protocol = "json" } }</code></pre></div>
+      <figcaption><b>OpenAI Codex CLI</b>Usage from its OpenTelemetry logs; stops with command hooks.</figcaption>
+    </figure>
+    <figure class="tile tile--wide tile--pink">
+      <div class="tile__plate" data-ui><pre><code><span class="c"># from the dashboard's Connect page</span>
+curl -fsSL https://tokenrein.acme.internal/connect/claude-code.py \
+  | python3 - --key tr_… --url https://tokenrein.acme.internal:8787
+
+Connected. New Claude Code sessions report
+to Tokenrein.</code></pre></div>
+      <figcaption><b>Claude Code</b>Cost per call from its telemetry, subscriptions included; stops the next prompt, tool call or sub-agent with HTTP hooks.</figcaption>
+    </figure>
+    <figure class="tile tile--surface">
+      <div class="tile__plate" data-ui><pre><code><span class="c">// ~/.gemini/settings.json</span>
+"telemetry": {
+  "enabled": true,
+  "otlpProtocol": "http",
+  "logPrompts": false
+}</code></pre></div>
+      <figcaption><b>Gemini CLI</b>Usage from OpenTelemetry; stops with command hooks.</figcaption>
+    </figure>
+    <figure class="tile tile--mint">
+      <div class="tile__plate" data-ui><pre><code><span class="c">// ~/.cursor/hooks.json</span>
+"preToolUse": [{
+  "command": "python3
+    ~/.tokenrein/hook.py cursor"
+}]</code></pre></div>
+      <figcaption><b>Cursor</b>Stops with hooks; usage imported from the team Admin API.</figcaption>
+    </figure>
+    <figure class="tile tile--pink">
+      <div class="tile__plate" data-ui><pre><code><span class="c"># your own agents</span>
+client = guard.openai(OpenAI())
+with guard.run("ticket-4812",
+               budget_usd=5):
+    client.chat.completions…</code></pre></div>
+      <figcaption><b>Python and TypeScript SDKs</b>One line around an OpenAI, Anthropic or OpenAI-compatible client.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="record wrap" id="enterprise" aria-labelledby="record-title">
+  <div class="record__head">
+    <h2 class="head" id="record-title"><span class="soft">Every change</span><br>on the record</h2>
+    <a class="button button--ink" href="https://github.com/geektuhin123/tokenrein/blob/main/docs/enterprise.md">Read the enterprise guide</a>
+  </div>
+  <p class="record__lead">Single sign-on with Okta, Entra ID, Google or any OpenID Connect provider. Four roles per org. Provider keys encrypted and never shown again; prompts never stored. Everything people change is kept in an append-only log you can export to your SIEM.</p>
+  <div class="record__log">
+    <div class="days" role="tablist" aria-label="Audit log by day">
+      <button type="button" role="tab" aria-selected="true" aria-controls="day-0" id="tab-0"><b>Monday</b>26 Oct</button>
+      <button type="button" role="tab" aria-selected="false" aria-controls="day-1" id="tab-1" tabindex="-1"><b>Tuesday</b>27 Oct</button>
+      <button type="button" role="tab" aria-selected="false" aria-controls="day-2" id="tab-2" tabindex="-1"><b>Wednesday</b>28 Oct</button>
+    </div>
+    <div class="bands">
+      <ol class="day" id="day-0" role="tabpanel" aria-labelledby="tab-0">
+        <li><time class="nums">09:02</time><p><b>Single sign-on turned on</b>Okta · people sign in with company accounts</p><span>sam@example.com</span></li>
+        <li><time class="nums">09:15</time><p><b>Groups mapped to roles</b>ai-platform-admins → admin</p><span>sam@example.com</span></li>
+        <li><time class="nums">10:40</time><p><b>Coding agents pack applied</b>every limit in Check mode</p><span>sam@example.com</span></li>
+        <li><time class="nums">16:05</time><p><b>Alert channel added</b>Slack · #ai-spend</p><span>dana@example.com</span></li>
+      </ol>
+      <ol class="day" id="day-1" role="tabpanel" aria-labelledby="tab-1" hidden>
+        <li><time class="nums">08:51</time><p><b>Provider key replaced</b>anthropic · ending 4f2c</p><span>sam@example.com</span></li>
+        <li><time class="nums">11:20</time><p><b>Run budget set to Ask</b>support-bot · $5.00 per run</p><span>dana@example.com</span></li>
+        <li><time class="nums">14:03</time><p><b>Approved: +$5.00</b>run ticket-4812 · budget used up</p><span>lee@example.com</span></li>
+        <li><time class="nums">14:31</time><p><b>Run killed</b>cc-9a1e · loop guard</p><span>lee@example.com</span></li>
+      </ol>
+      <ol class="day" id="day-2" role="tabpanel" aria-labelledby="tab-2" hidden>
+        <li><time class="nums">09:30</time><p><b>Loop guard set to Pause</b>6 repeats in 10 minutes</p><span>dana@example.com</span></li>
+        <li><time class="nums">12:12</time><p><b>Approver added</b>lee@example.com · org acme</p><span>sam@example.com</span></li>
+        <li><time class="nums">15:47</time><p><b>Failed sign-in</b>3 attempts from 10.2.0.14</p><span>system</span></li>
+        <li><time class="nums">17:00</time><p><b>Audit log exported</b>CSV · last 90 days</p><span>audit@example.com</span></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section class="stack wrap" aria-labelledby="stack-title">
+  <ul class="stack__board" role="list">
+    <li class="stack__lead"><h2 class="head" id="stack-title">Plugs into what you run</h2></li>
+    <li>Okta<span>Single sign-on, groups to roles</span></li><li>Microsoft Entra ID<span>Single sign-on, group IDs to roles</span></li>
+    <li>Google Workspace<span>Single sign-on for your domain</span></li><li>Keycloak<span>Or any OpenID Connect provider</span></li><li>Slack<span>Alerts with a link to approve</span></li><li>Microsoft Teams<span>Alerts through Workflows</span></li>
+    <li>PagerDuty<span>Events API v2 for runaway runs</span></li><li>Prometheus<span>Metrics at /metrics</span></li><li>Kubernetes<span>Helm chart with probes and autoscaling</span></li><li>Postgres and Redis<span>Yours, or the ones in the chart</span></li>
+  </ul>
+</section>
+
+<section class="pricing wrap" id="pricing" aria-labelledby="pricing-title">
+  <div class="plans" role="group" aria-labelledby="pricing-title">
+    <h2 class="plans__title" id="pricing-title">Pricing</h2>
+    <button type="button" class="plan" aria-pressed="false" data-plan="0">Self-hosted</button>
+    <button type="button" class="plan" aria-pressed="true" data-plan="1">Design partner</button>
+    <button type="button" class="plan" aria-pressed="false" data-plan="2">Enterprise</button>
+  </div>
+  <div class="plan-stage" aria-live="polite">
+    <div class="plan-card" data-plan-card="0" hidden>
+      <p class="plan-card__price nums">$0<span>forever</span></p>
+      <p>Everything on this page, on your own servers: run budgets, approvals, the loop guard, alerts, single sign-on and the audit log. Help from the community on GitHub.</p>
+      <a class="button" href="#deploy">Deploy self-hosted</a>
+    </div>
+    <div class="plan-card" data-plan-card="1">
+      <p class="plan-card__price nums">$0<span>for the first year</span></p>
+      <p>For ten teams rolling out coding agents now: the enterprise licence free for a year, a shared Slack channel with the people who build Tokenrein, and the connectors you need built first. In return, fifteen minutes of feedback a week.</p>
+      <a class="button" href="mailto:hello@tokenrein.com?subject=Design%20partner&amp;body=Team%20size%3A%0AAgents%20you%20use%3A%0A">Apply as a design partner</a>
+    </div>
+    <div class="plan-card" data-plan-card="2" hidden>
+      <p class="plan-card__price">Quoted<span>per year</span></p>
+      <p>An annual licence sized to your team, support with agreed response times, help through your security review, and a say in what is built next.</p>
+      <a class="button" href="mailto:hello@tokenrein.com?subject=Tokenrein%20Enterprise">Talk to us about Enterprise</a>
+    </div>
+  </div>
+</section>
+
+<section class="faq wrap" id="faq" aria-labelledby="faq-title">
+  <h2 class="head faq__title" id="faq-title">Questions, answered</h2>
+  <div class="faq__list">
+    <details name="faq" open>
+      <summary>Does Tokenrein see our prompts?</summary>
+      <p>No. Coding-agent connectors and the SDKs' default mode send only usage (model, tokens, cost, run, user); the agent keeps calling its provider directly. The loop guard keeps a SHA-256 hash of each request, not the request. Proxy mode is optional, and even then nothing is stored.</p>
+    </details>
+    <details name="faq">
+      <summary>We already set spend limits with the provider.</summary>
+      <p>A provider limit covers a whole account, after the money is spent, at one provider. Tokenrein acts before each call, per run, per agent, per person and per project, across providers, and a run that hits its limit can wait for a person instead of failing.</p>
+    </details>
+    <details name="faq">
+      <summary>What happens if Tokenrein is down?</summary>
+      <p>Agents keep working. Tokenrein fails open by default: the hooks answer "allow" after four seconds and the SDKs carry on. An org can switch to fail-closed if it would rather stop.</p>
+    </details>
+    <details name="faq">
+      <summary>Can a paused run carry on?</summary>
+      <p>Yes. An approver adds budget from the Approvals page or the alert, and the run continues from the call it stopped at. Every request and decision is in the audit log.</p>
+    </details>
+    <details name="faq">
+      <summary>Which agents and models does it cover?</summary>
+      <p>Claude Code, OpenAI Codex CLI, Gemini CLI and Cursor through connectors, and your own agents through the Python and TypeScript SDKs for OpenAI, Anthropic and any OpenAI-compatible provider: Gemini, Groq, Mistral, DeepSeek, OpenRouter, Ollama.</p>
+    </details>
+    <details name="faq">
+      <summary>What does it need to run?</summary>
+      <p>One stateless binary, Redis 7 and Postgres 15 or newer. Docker Compose for one host, a Helm chart for Kubernetes. It runs as non-root on a distroless image, with Prometheus metrics and readiness probes.</p>
+    </details>
+    <details name="faq">
+      <summary>Is it open source?</summary>
+      <p>The SDKs and connectors are Apache-2.0. The server's licence is published with the first release.</p>
+    </details>
+  </div>
+</section>
+
+<section class="deploy" id="deploy" aria-labelledby="deploy-title">
+  <div class="deploy__in wrap">
+    <div class="deploy__close">
+      <h2 class="closing" id="deploy-title">Up in five<br>minutes</h2>
+      <p>Tokenrein, Redis and Postgres on one host with Docker Compose, or on Kubernetes with Helm. Then create the first owner and connect an agent from the dashboard.</p>
+    </div>
+    <form class="dialog" data-ui data-deploy>
+      <p class="dialog__title">Deploy Tokenrein</p>
+      <label class="dialog__label" for="addr">Dashboard address</label>
+      <input class="dialog__field" id="addr" name="addr" type="url" value="https://tokenrein.acme.internal" spellcheck="false" autocomplete="off">
+      <div class="dialog__seg" role="radiogroup" aria-label="Where it runs">
+        <button type="button" role="radio" aria-checked="true" data-target="compose">Docker Compose</button>
+        <button type="button" role="radio" aria-checked="false" data-target="helm">Kubernetes</button>
       </div>
-      <pre class="terminal"><code><span class="c">$</span> git clone https://github.com/geektuhin123/tokenrein
-<span class="c">$</span> cd tokenrein/deploy &amp;&amp; cp .env.example .env
-<span class="c">$</span> docker compose up -d
-<span class="c">$</span> docker compose exec tokenrein tokenrein create-owner you@company.com
-<span class="muted">Open this link within 72 hours to set the password:</span>
-  http://127.0.0.1:8788/#setup=…</code></pre>
-    </div>
-  </section>
+      <pre class="dialog__cmd"><code data-cmd>git clone https://github.com/geektuhin123/tokenrein
+cd tokenrein/deploy &amp;&amp; cp .env.example .env
+echo "TOKENREIN_PUBLIC_URL=https://tokenrein.acme.internal" &gt;&gt; .env
+docker compose up -d
+docker compose exec tokenrein tokenrein create-owner you@company.com</code></pre>
+      <button type="submit" class="dialog__go" data-copy>Copy the commands</button>
+    </form>
+  </div>
+</section>
 
-  <section class="pricing" id="pricing">
-    <div class="wrap">
-      <p class="kicker">Pricing</p>
-      <h2>Start on your own. Bring us in when it matters.</h2>
-      <div class="plans">
-        <article>
-          <h3>Self-hosted</h3>
-          <p class="price">Free to start</p>
-          <ul>
-            <li>Budgets, approvals, loop guard, alerts</li>
-            <li>All coding-agent connectors and SDKs</li>
-            <li>Docker Compose and Helm</li>
-            <li>Community support on GitHub</li>
-          </ul>
-          <a class="btn ghost" href="#start">Deploy now</a>
-        </article>
-        <article class="featured">
-          <h3>Enterprise</h3>
-          <p class="price">Annual license</p>
-          <ul>
-            <li>Everything in self-hosted</li>
-            <li>Support SLA and onboarding help</li>
-            <li>Security review package</li>
-            <li>Roadmap input for your connectors</li>
-          </ul>
-          <a class="btn primary" href="mailto:hello@tokenrein.com?subject=Tokenrein%20for%20our%20team">Talk to us</a>
-        </article>
-      </div>
-    </div>
-  </section>
-
-  <section class="faq">
-    <div class="wrap two">
-      <div><p class="kicker">FAQ</p><h2>Questions teams ask first.</h2></div>
-      <div class="qa">
-        <details open><summary>Does Tokenrein see our prompts?</summary><p>Not by default. With the SDKs and the coding-agent connectors, agents call their model provider directly and Tokenrein only receives token counts and a hash of each request. Only proxy mode passes calls through Tokenrein, and it does not store them.</p></details>
-        <details><summary>What happens if Tokenrein is down?</summary><p>Agents keep working: checks fail open by default, and usage is reported when Tokenrein is back. Orgs that prefer safety over availability can fail closed.</p></details>
-        <details><summary>Will it slow our agents down?</summary><p>A budget check is one round trip to Tokenrein and one atomic Redis operation; in proxy mode the overhead before the upstream call measured under 0.1 ms on a laptop.</p></details>
-        <details><summary>Which models and providers?</summary><p>OpenAI, Anthropic, Google Gemini, Mistral, DeepSeek, xAI, Groq, OpenRouter and other OpenAI-compatible providers, plus local Ollama, vLLM and LM Studio. Built-in prices can be overridden per model.</p></details>
-        <details><summary>Can we try it without blocking anyone?</summary><p>Yes. Guardrail packs start every limit in Check mode, and the dashboard shows exactly which requests Enforce would have refused before you switch.</p></details>
-      </div>
-    </div>
-  </section>
-
-  <section class="final">
-    <div class="wrap final-in">
-      <h2>Give your agents a budget before they give you a bill.</h2>
-      <div class="cta-row"><a class="btn primary lg" href="#start">Get started</a><a class="btn ghost lg" href="mailto:hello@tokenrein.com">Talk to us</a></div>
-    </div>
-  </section>
 </main>
 
-<footer class="footer">
-  <div class="wrap foot-in">
-    <span class="brand small"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--accent)"/><path d="M9 10h14M16 10v13M11 23h10" stroke="var(--accent-ink)" stroke-width="2.6" stroke-linecap="round"/></svg>Tokenrein</span>
-    <nav aria-label="Footer">
-      <a href="https://github.com/geektuhin123/tokenrein">GitHub</a>
-      <a href="https://github.com/geektuhin123/tokenrein/blob/main/docs/developers.md">Developers</a>
-      <a href="https://github.com/geektuhin123/tokenrein/blob/main/docs/enterprise.md">Enterprise</a>
-      <a href="https://github.com/geektuhin123/tokenrein/blob/main/CHANGELOG.md">Changelog</a>
-      <a href="mailto:hello@tokenrein.com">Contact</a>
-    </nav>
-    <span class="muted small">© <span data-year>2026</span> Tokenrein</span>
+<footer class="foot">
+  <div class="wrap">
+    <a class="blocks" href="#top" aria-label="Tokenrein, back to top">
+      <svg viewBox="0 0 1000 330" aria-hidden="true" focusable="false"><rect x="0.0" y="92" width="105.8" height="278" rx="30" fill="var(--mint)"/><text x="52.9" y="220" text-anchor="middle">t</text><rect x="111.8" y="0" width="105.8" height="370" rx="30" fill="var(--pink)"/><text x="164.7" y="128" text-anchor="middle">o</text><rect x="223.6" y="132" width="105.8" height="238" rx="30" fill="var(--paper)"/><text x="276.4" y="260" text-anchor="middle">k</text><rect x="335.3" y="46" width="105.8" height="324" rx="30" fill="var(--surface-2)"/><text x="388.2" y="174" text-anchor="middle">e</text><rect x="447.1" y="112" width="105.8" height="258" rx="30" fill="var(--mint)"/><text x="500.0" y="240" text-anchor="middle">n</text><rect x="558.9" y="0" width="105.8" height="370" rx="30" fill="var(--pink)"/><text x="611.8" y="128" text-anchor="middle">r</text><rect x="670.7" y="73" width="105.8" height="297" rx="30" fill="var(--paper)"/><text x="723.6" y="201" text-anchor="middle">e</text><rect x="782.4" y="125" width="105.8" height="245" rx="30" fill="var(--surface-2)"/><text x="835.3" y="253" text-anchor="middle">i</text><rect x="894.2" y="26" width="105.8" height="344" rx="30" fill="var(--mint)"/><text x="947.1" y="154" text-anchor="middle">n</text></svg>
+    </a>
+    <div class="foot__cols">
+      <nav aria-label="Product">
+        <p>Product</p>
+        <a href="#guards">What stops a run</a>
+        <a href="#rollout">Rollout</a>
+        <a href="#agents">Agents</a>
+        <a href="#enterprise">Enterprise</a>
+        <a href="#pricing">Pricing</a>
+      </nav>
+      <nav aria-label="Docs">
+        <p>Docs</p>
+        <a href="https://github.com/geektuhin123/tokenrein/blob/main/docs/developers.md">Developer guide</a>
+        <a href="https://github.com/geektuhin123/tokenrein/blob/main/docs/enterprise.md">Enterprise guide</a>
+        <a href="https://github.com/geektuhin123/tokenrein/blob/main/docs/install.md">Install</a>
+        <a href="https://github.com/geektuhin123/tokenrein/blob/main/docs/api.md">Admin API</a>
+      </nav>
+      <nav aria-label="Project">
+        <p>Project</p>
+        <a href="https://github.com/geektuhin123/tokenrein">GitHub</a>
+        <a href="https://github.com/geektuhin123/tokenrein/blob/main/CHANGELOG.md">Changelog</a>
+      </nav>
+      <div class="foot__contact">
+        <p>Contact</p>
+        <a href="mailto:hello@tokenrein.com">hello@tokenrein.com</a>
+      </div>
+    </div>
+    <div class="foot__last">
+      <p>© <span data-year>2026</span> Tokenrein</p>
+      <a class="button button--small" href="#deploy">Deploy</a>
+    </div>
   </div>
 </footer>
+
 </body>
 </html>
