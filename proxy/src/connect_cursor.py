@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Connect Cursor on this machine to Tokenrein (or disconnect it).
 
 Adds user-level Cursor hooks to ~/.cursor/hooks.json that report each agent conversation to

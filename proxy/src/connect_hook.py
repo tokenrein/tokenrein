@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Tokenrein hook for coding agents whose hooks run commands (Codex CLI, Gemini CLI, Cursor).
 
 The agent runs `python3 ~/.tokenrein/hook.py <tool>` with the hook event as JSON on stdin. This

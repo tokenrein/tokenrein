@@ -148,5 +148,7 @@ Running from source is in the [developer guide](docs/developers.md#run-from-sour
 
 ## License
 
-The SDKs (`sdk/`) are Apache-2.0. The license for the server (`proxy/`) has not been published
-yet.
+The server (`proxy/`, its container image and the Helm chart) is under the
+[Elastic License 2.0](LICENSE): you can use it, change it and run it in your own infrastructure,
+but you may not offer it to others as a hosted or managed service. The SDKs (`sdk/`) and the
+coding-agent connector scripts (`proxy/src/connect_*.py`) are Apache-2.0.

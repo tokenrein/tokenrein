@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Connect OpenAI Codex CLI on this machine to Tokenrein (or disconnect it).
 
 Turns on Codex's built-in OpenTelemetry log export in ~/.codex/config.toml, so every session

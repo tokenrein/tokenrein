@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Connect Claude Code on this machine to Tokenrein (or disconnect it).
 
 Adds Claude Code's built-in usage telemetry and HTTP hooks to ~/.claude/settings.json, so every

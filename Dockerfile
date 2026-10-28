@@ -30,7 +30,7 @@ FROM gcr.io/distroless/cc-debian12:nonroot
 LABEL org.opencontainers.image.title="tokenrein" \
       org.opencontainers.image.description="Runtime spend guardrails for AI agents" \
       org.opencontainers.image.source="https://github.com/geektuhin123/tokenrein" \
-      org.opencontainers.image.licenses="Apache-2.0"
+      org.opencontainers.image.licenses="Elastic-2.0"
 COPY --from=build /out/tokenrein /usr/local/bin/tokenrein
 # Usage history (Parquet files): mount a volume here and set TOKENREIN_HISTORY_DIR to it.
 COPY --from=build --chown=65532:65532 /out/history /var/lib/tokenrein/history

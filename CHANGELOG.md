@@ -9,6 +9,8 @@ SDKs; the release workflow refuses a tag that does not match all three.
 
 ### Added
 
+- **License**: the server is published under the Elastic License 2.0 (`LICENSE`); the SDKs and
+  the coding-agent connector scripts stay Apache-2.0.
 - **Approvals**: run budgets can be in Ask mode. A run that uses up its budget is paused and
   waits for an approver, who adds budget (the run continues) or stops it. Approvals page,
   `/admin/orgs/{org}/approvals`.

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Connect Gemini CLI on this machine to Tokenrein (or disconnect it).
 
 Turns on Gemini CLI's built-in OpenTelemetry export in ~/.gemini/settings.json, so every session
