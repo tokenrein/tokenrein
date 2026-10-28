@@ -1,3 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["proxy"]
+
+# DuckDB's bundled C++ with debug info makes every test binary ~250 MB, which fills CI's disk.
+[profile.dev.package.libduckdb-sys]
+debug = false

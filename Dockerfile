@@ -19,9 +19,12 @@ RUN mkdir -p proxy/src \
     && rm -rf proxy/src target/release/deps/tokenrein-* target/release/deps/libtokenrein-* \
        target/release/.fingerprint/tokenrein-*
 COPY proxy proxy
+# The history folder gets a placeholder: Docker and Podman copy a mount point's content (and
+# with it, its owner) into a new volume only when there is some, else the volume stays root's.
 RUN cargo build --release --locked ${JOBS:+-j $JOBS} -p tokenrein \
     && install -D target/release/tokenrein /out/tokenrein \
-    && mkdir -p /out/history
+    && mkdir -p /out/history \
+    && touch /out/history/.keep
 
 FROM gcr.io/distroless/cc-debian12:nonroot
 LABEL org.opencontainers.image.title="tokenrein" \
