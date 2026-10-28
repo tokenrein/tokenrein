@@ -7,6 +7,10 @@ SDKs; the release workflow refuses a tag that does not match all three.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-29
+
+First release.
+
 ### Added
 
 - **License**: the server is published under the Elastic License 2.0 (`LICENSE`); the SDKs and
@@ -43,10 +47,6 @@ SDKs; the release workflow refuses a tag that does not match all three.
 Until v1.1 the old environment variables (with a warning), the old request headers, and keys
 and tokens made before the rename keep working. Re-run an agent connector to move its settings
 to the new names. Dashboard sessions start over once (the cookie was renamed).
-
-## [0.1.0] - Unreleased
-
-First release.
 
 ### Proxy
 
