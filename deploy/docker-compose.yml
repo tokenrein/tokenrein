@@ -11,7 +11,7 @@ name: tokenrein
 
 services:
   tokenrein:
-    image: ${TOKENREIN_IMAGE:-ghcr.io/geektuhin123/tokenrein:latest}
+    image: ${TOKENREIN_IMAGE:-ghcr.io/tokenrein/tokenrein:latest}
     build:
       context: ..
       dockerfile: Dockerfile

@@ -7,7 +7,7 @@ replicaCount: 2
 publicUrl: ""
 
 image:
-  repository: ghcr.io/geektuhin123/tokenrein
+  repository: ghcr.io/tokenrein/tokenrein
   # Defaults to the chart's appVersion.
   tag: ""
   pullPolicy: IfNotPresent

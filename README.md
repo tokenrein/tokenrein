@@ -5,7 +5,7 @@ loops before they reach the invoice, and let a person approve the runs that need
 Claude Code, Codex CLI, Gemini CLI, Cursor and your own agents on any LLM. Self-hosted, with single
 sign-on and an audit log.
 
-[![ci](https://github.com/geektuhin123/tokenrein/actions/workflows/ci.yml/badge.svg)](https://github.com/geektuhin123/tokenrein/actions/workflows/ci.yml)
+[![ci](https://github.com/tokenrein/tokenrein/actions/workflows/ci.yml/badge.svg)](https://github.com/tokenrein/tokenrein/actions/workflows/ci.yml)
 
 - **Budgets that act before the money is spent**: per run, per agent per day, per project and org
   per month. Each one can warn (Check), block (Enforce) or pause the run and ask a person (Ask).
@@ -80,7 +80,7 @@ sequenceDiagram
 ## Quick start (Docker Compose, about 5 minutes)
 
 ```bash
-git clone https://github.com/geektuhin123/tokenrein && cd tokenrein/deploy
+git clone https://github.com/tokenrein/tokenrein && cd tokenrein/deploy
 cp .env.example .env    # fill in the two secrets and the Postgres password (see comments)
 docker compose up -d
 docker compose exec tokenrein tokenrein create-owner you@company.com

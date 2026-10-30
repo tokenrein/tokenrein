@@ -4,7 +4,7 @@ description: Runtime spend guardrails for AI agents (proxy, admin API and dashbo
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
-home: https://github.com/geektuhin123/tokenrein
+home: https://github.com/tokenrein/tokenrein
 sources:
-  - https://github.com/geektuhin123/tokenrein
+  - https://github.com/tokenrein/tokenrein
 keywords: [llm, ai-agents, budgets, proxy, openai, anthropic]

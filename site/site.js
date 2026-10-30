@@ -147,14 +147,14 @@ document.querySelectorAll("[data-year]").forEach((el) => { el.textContent = Stri
     const url = (field.value.trim() || "https://tokenrein.example.com").replace(/[\s"'`$\\]/g, "");
     return target === "compose"
       ? [
-          "git clone https://github.com/geektuhin123/tokenrein",
+          "git clone https://github.com/tokenrein/tokenrein",
           "cd tokenrein/deploy && cp .env.example .env",
           `echo "TOKENREIN_PUBLIC_URL=${url}" >> .env`,
           "docker compose up -d",
           "docker compose exec tokenrein tokenrein create-owner you@company.com",
         ].join("\n")
       : [
-          "git clone https://github.com/geektuhin123/tokenrein && cd tokenrein",
+          "git clone https://github.com/tokenrein/tokenrein && cd tokenrein",
           "helm install tokenrein deploy/helm/tokenrein -n tokenrein --create-namespace \\",
           `  --set publicUrl=${url}`,
           "kubectl -n tokenrein exec deploy/tokenrein -- tokenrein create-owner you@company.com",

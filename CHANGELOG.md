@@ -7,6 +7,11 @@ SDKs; the release workflow refuses a tag that does not match all three.
 
 ## [Unreleased]
 
+### Changed
+- The repository moved to `github.com/tokenrein/tokenrein`, and the container image is now
+  `ghcr.io/tokenrein/tokenrein`. 0.1.0 stays at `ghcr.io/geektuhin123/tokenrein`.
+- Release images are built on a native runner per platform instead of under emulation.
+
 ## [0.1.0] - 2026-10-29
 
 First release.
