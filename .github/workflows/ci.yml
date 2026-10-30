@@ -54,6 +54,13 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: pip install -e ".[test]"
       - run: python -m pytest -q
+      # The same build and metadata check PyPI applies on upload.
+      - name: Package builds and passes twine check
+        if: matrix.python == '3.13'
+        run: |
+          pip install build twine
+          python -m build
+          twine check --strict dist/*
 
   sdk-typescript:
     runs-on: ubuntu-latest
@@ -75,6 +82,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      # What npm would publish, without uploading anything.
+      - run: npm publish --dry-run
 
   # Known-vulnerability checks for every dependency tree, and an SBOM of the repository.
   audit:

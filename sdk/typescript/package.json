@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "description": "Budgets, run tracing and spend reports for AI agents: wrap your OpenAI or Anthropic client in one line",
   "license": "Apache-2.0",
+  "homepage": "https://tokenrein.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tokenrein/tokenrein.git",
+    "directory": "sdk/typescript"
+  },
+  "bugs": {
+    "url": "https://github.com/tokenrein/tokenrein/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

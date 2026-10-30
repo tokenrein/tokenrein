@@ -17,6 +17,12 @@ classifiers = [
     "Typing :: Typed",
 ]
 
+[project.urls]
+Homepage = "https://tokenrein.com"
+Source = "https://github.com/tokenrein/tokenrein"
+Issues = "https://github.com/tokenrein/tokenrein/issues"
+Changelog = "https://github.com/tokenrein/tokenrein/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
 openai = ["openai>=1.0"]
 anthropic = ["anthropic>=0.30"]
