@@ -5,8 +5,9 @@ name: release
 #
 # - The container image always goes to ghcr.io/<owner>/tokenrein (linux/amd64 and linux/arm64,
 #   each built on a native runner).
-# - The Python SDK goes to PyPI only if the PYPI_TOKEN secret is set.
-# - The TypeScript SDK goes to npm only if the NPM_TOKEN secret is set.
+# - The SDKs go to PyPI and npm through trusted publishing (OpenID Connect, no stored tokens),
+#   once the repository variables PUBLISH_PYPI / PUBLISH_NPM are "true". Each registry must list
+#   this repository and release.yml as a trusted publisher first.
 
 on:
   push:
@@ -20,8 +21,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
-      pypi: ${{ steps.s.outputs.pypi }}
-      npm: ${{ steps.s.outputs.npm }}
     steps:
       - uses: actions/checkout@v4
       - name: Tag matches the package versions
@@ -36,14 +35,6 @@ jobs:
             echo "::error::tag v$tag does not match proxy $cargo / python $py / typescript $js"; exit 1; }
           grep -q "^## \[$tag\]" CHANGELOG.md || { echo "::error::CHANGELOG.md has no [$tag] section"; exit 1; }
           echo "version=$tag" >> "$GITHUB_OUTPUT"
-      - name: Which registries have tokens
-        id: s
-        env:
-          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          echo "pypi=$([ -n "$PYPI_TOKEN" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          echo "npm=$([ -n "$NPM_TOKEN" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
   # Each platform builds on its own native runner (under QEMU, arm64 took about 6 hours) and is
   # pushed by digest; image-manifest then tags one multi-platform image from the digests.
@@ -132,8 +123,11 @@ jobs:
 
   pypi:
     needs: verify
-    if: needs.verify.outputs.pypi == 'true'
+    if: vars.PUBLISH_PYPI == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -148,12 +142,14 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: sdk/python/dist
-          password: ${{ secrets.PYPI_TOKEN }}
 
   npm:
     needs: verify
-    if: needs.verify.outputs.npm == 'true'
+    if: vars.PUBLISH_NPM == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     defaults:
       run:
         working-directory: sdk/typescript
@@ -161,15 +157,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@11
       - run: npm ci
       - run: npm test
       - run: npm run build
-      # Add --provenance once the repository is public (npm requires a public source repo).
+      # npm adds a provenance statement on its own when the repository is public.
       - run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   github-release:
     needs: [verify, image-manifest]
