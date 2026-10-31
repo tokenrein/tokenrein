@@ -7,6 +7,17 @@ SDKs; the release workflow refuses a tag that does not match all three.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-31
+
+### Added
+- A security policy (private reports through GitHub or email), contributing notes, issue forms
+  and Dependabot updates.
+
+### Fixed
+- The SDK READMEs on PyPI and npm linked to `../README.md`, which does not exist there; they link
+  to tokenrein.com and the SDK guide on GitHub.
+- The container image's license label is `Elastic-2.0` (it read `NOASSERTION`).
+
 ## [0.1.1] - 2026-10-31
 
 The first public release.
