@@ -82,8 +82,9 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      # What npm would publish, without uploading anything.
-      - run: npm publish --dry-run
+      # What npm would publish, without contacting the registry (a publish dry run fails once the
+      # version is already on npm).
+      - run: npm pack --dry-run
 
   # Known-vulnerability checks for every dependency tree, and an SBOM of the repository.
   audit:
