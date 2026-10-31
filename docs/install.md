@@ -96,11 +96,14 @@ persistent volumes and healthchecks. It works with Docker Compose and with `podm
 
 ```bash
 cd deploy
-cp .env.example .env
+./setup.sh                                  # or: ./setup.sh https://tokenrein.example.com
 ```
 
-Fill in `.env`: `TOKENREIN_ADMIN_TOKEN`, `TOKENREIN_SECRETS_KEY`, `POSTGRES_PASSWORD`, and `TOKENREIN_DATABASE_URL`
-with the same password (letters and digits keep it URL-safe; `openssl rand -hex 16`). Then:
+`setup.sh` writes `.env` from `.env.example` with a new admin token, secrets key and Postgres
+password, and the dashboard address (default `http://127.0.0.1:8788`). To fill it in yourself
+instead, copy `.env.example` to `.env` and set `TOKENREIN_ADMIN_TOKEN`, `TOKENREIN_SECRETS_KEY`,
+`POSTGRES_PASSWORD` and `TOKENREIN_DATABASE_URL` with the same password (`openssl rand -hex 16`).
+Then:
 
 ```bash
 docker compose up -d

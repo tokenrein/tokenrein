@@ -19,7 +19,7 @@ pub fn weakness(password: &str, email: &str) -> Option<String> {
     }
     let lower = password.to_lowercase();
     let local = email.split('@').next().unwrap_or("").to_lowercase();
-    if lower == email.to_lowercase() || (local.len() >= 3 && lower.contains(&local)) {
+    if lower == email.to_lowercase() || (local.len() >= 5 && lower.contains(&local)) {
         return Some("don't use your email address in the password".into());
     }
     let first = password.chars().next().unwrap_or(' ');
@@ -83,5 +83,7 @@ mod tests {
         assert!(weakness("aaaaaaaaaaaaaaa", "a@b.co").is_some());
         assert!(weakness("ana.lopez-2026!", "ana.lopez@example.com").is_some());
         assert!(weakness("a much longer passphrase", "ana@example.com").is_none());
+        // Short email names are ordinary words; only longer ones count.
+        assert!(weakness("Newdev-7db24e4b90bc", "dev@example.com").is_none());
     }
 }

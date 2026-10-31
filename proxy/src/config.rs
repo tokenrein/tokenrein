@@ -207,6 +207,10 @@ pub struct AuthConfig {
     /// `https://` also marks session cookies Secure.
     #[serde(default)]
     pub public_url: Option<String>,
+    /// The proxy's address as agents reach it (e.g. `https://ai.example.com:8787`), shown in the
+    /// dashboard's connect commands. Without it the dashboard assumes its own host on port 8787.
+    #[serde(default)]
+    pub proxy_url: Option<String>,
     /// Sessions end this long after sign-in...
     #[serde(default = "default_session_hours")]
     pub session_hours: u32,
@@ -222,6 +226,7 @@ impl Default for AuthConfig {
     fn default() -> Self {
         Self {
             public_url: None,
+            proxy_url: None,
             session_hours: default_session_hours(),
             idle_minutes: default_idle_minutes(),
             password_login: true,
@@ -489,6 +494,7 @@ pub const ENV_OVERRIDES: &[(&str, &str)] = &[
     ("TOKENREIN_ADMIN_LISTEN", "server.admin_listen"),
     ("TOKENREIN_REDIS_URL", "redis.url"),
     ("TOKENREIN_PUBLIC_URL", "auth.public_url"),
+    ("TOKENREIN_PROXY_URL", "auth.proxy_url"),
     ("TOKENREIN_HISTORY_DIR", "history.dir"),
     ("TOKENREIN_HISTORY_RETENTION_DAYS", "history.retention_days"),
     (
@@ -512,6 +518,9 @@ impl Config {
         }
         if let Some(v) = get("TOKENREIN_PUBLIC_URL") {
             self.auth.public_url = Some(v.trim().trim_end_matches('/').to_string());
+        }
+        if let Some(v) = get("TOKENREIN_PROXY_URL") {
+            self.auth.proxy_url = Some(v.trim().trim_end_matches('/').to_string());
         }
         if let Some(v) = get("TOKENREIN_HISTORY_DIR") {
             self.history.dir = Some(v.trim().to_string());
@@ -1039,6 +1048,7 @@ mod tests {
             "TOKENREIN_REDIS_URL" => Some("redis://redis:6379/2".into()),
             "TOKENREIN_DATABASE_MAX_CONNECTIONS" => Some("25".into()),
             "TOKENREIN_PUBLIC_URL" => Some("https://tokenrein.example.com/".into()),
+            "TOKENREIN_PROXY_URL" => Some("https://ai.example.com:8787/".into()),
             _ => None,
         })
         .unwrap();
@@ -1048,6 +1058,8 @@ mod tests {
         assert_eq!(rt.cfg.database.max_connections, 25);
         let public = rt.cfg.auth.public_url.as_deref();
         assert_eq!(public, Some("https://tokenrein.example.com"));
+        let proxy = rt.cfg.auth.proxy_url.as_deref();
+        assert_eq!(proxy, Some("https://ai.example.com:8787"));
         // Empty values keep the file's settings.
         let rt = Resolved::from_toml(BASE, |name| (name == "TOKENREIN_LISTEN").then(String::new))
             .unwrap();

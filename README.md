@@ -81,14 +81,15 @@ sequenceDiagram
 
 ```bash
 git clone https://github.com/tokenrein/tokenrein && cd tokenrein/deploy
-cp .env.example .env    # fill in the two secrets and the Postgres password (see comments)
+./setup.sh              # writes .env with fresh secrets; pass your HTTPS address for production
 docker compose up -d
 docker compose exec tokenrein tokenrein create-owner you@company.com
 ```
 
-Open the printed link to set your password, then sign in at <http://127.0.0.1:8788/>. The
-**Get started** checklist walks you through the rest: save a provider key, create a project key,
+Open the printed link to set your password, then create your org under **Keys & limits**. The
+**Get started** checklist on the Overview walks you through the rest: create a project key,
 connect an agent, pick a guardrail pack, and switch the limits you trust from Check to Enforce.
+A step-by-step walk-through: [docs/quickstart.md](docs/quickstart.md).
 Kubernetes: `helm install tokenrein deploy/helm/tokenrein`. See [docs/install.md](docs/install.md).
 
 ## Connect your agents

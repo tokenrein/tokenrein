@@ -81,9 +81,9 @@ function gsSteps(org) {
   const packed = org.projects.find(p => p.pack);
   const enforced = packed && ["run", "agent_daily"].some(k => packed.effective[k]?.mode === "enforce");
   return [
-    { done: providerOk, title: "Connect a provider",
+    { done: providerOk, title: "Connect a provider (proxy mode only)",
       doneText: "Provider key saved.",
-      body: `<p class="help" style="margin:0">Save your Anthropic or OpenAI API key. Tokenrein uses it to call the provider; your agents never see it.</p>
+      body: `<p class="help" style="margin:0">Only needed when agents call through the Tokenrein proxy: save your Anthropic or OpenAI API key and Tokenrein calls the provider with it, so agents never see it. Coding-agent connectors and the SDKs' default mode keep calling the provider themselves; skip this step for them.</p>
         <div><button class="btn primary sm" data-goto-settings="providers">Add a provider key</button></div>` },
     { done: hasKey, title: "Create a project key",
       body: `<p class="help" style="margin:0">Agents authenticate with a Tokenrein key per project, so you can see and limit each project separately.</p>

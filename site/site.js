@@ -144,19 +144,19 @@ document.querySelectorAll("[data-year]").forEach((el) => { el.textContent = Stri
   const seg = form.querySelectorAll("[data-target]");
   let target = "compose";
   const commands = () => {
-    const url = (field.value.trim() || "https://tokenrein.example.com").replace(/[\s"'`$\\]/g, "");
+    const url = field.value.trim().replace(/[\s"'`$\\]/g, "");
     return target === "compose"
       ? [
-          "git clone https://github.com/tokenrein/tokenrein",
-          "cd tokenrein/deploy && cp .env.example .env",
-          `echo "TOKENREIN_PUBLIC_URL=${url}" >> .env`,
+          "git clone https://github.com/tokenrein/tokenrein && cd tokenrein/deploy",
+          // No address: a trial on this machine, with the dashboard on 127.0.0.1:8788.
+          url ? `./setup.sh ${url}` : "./setup.sh",
           "docker compose up -d",
           "docker compose exec tokenrein tokenrein create-owner you@company.com",
         ].join("\n")
       : [
           "git clone https://github.com/tokenrein/tokenrein && cd tokenrein",
           "helm install tokenrein deploy/helm/tokenrein -n tokenrein --create-namespace \\",
-          `  --set publicUrl=${url}`,
+          `  --set publicUrl=${url || "https://tokenrein.example.com"}`,
           "kubectl -n tokenrein exec deploy/tokenrein -- tokenrein create-owner you@company.com",
         ].join("\n");
   };

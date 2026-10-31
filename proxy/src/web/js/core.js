@@ -31,7 +31,8 @@ function liveness(ts) {
   if (age <= IDLE_SECS) return `<span class="live idle"><span class="dot"></span>Idle</span>`;
   return `<span class="live off"><span class="dot"></span>Offline</span>`;
 }
-function proxyUrl() { return `${location.protocol}//${location.hostname}:8787`; }
+// The proxy as agents reach it: TOKENREIN_PROXY_URL when the server sets it, else this host on 8787.
+function proxyUrl() { return S.overview?.proxy_url || `${location.protocol}//${location.hostname}:8787`; }
 
 function store(kind, key, value) {
   try {

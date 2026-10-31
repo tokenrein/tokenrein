@@ -390,15 +390,14 @@ with guard.run("ticket-4812",
     </div>
     <form class="dialog" data-ui data-deploy>
       <p class="dialog__title">Deploy Tokenrein</p>
-      <label class="dialog__label" for="addr">Dashboard address</label>
-      <input class="dialog__field" id="addr" name="addr" type="url" value="https://tokenrein.acme.internal" spellcheck="false" autocomplete="off">
+      <label class="dialog__label" for="addr">Dashboard address (leave empty to try it on this machine)</label>
+      <input class="dialog__field" id="addr" name="addr" type="url" value="" placeholder="https://tokenrein.acme.internal" spellcheck="false" autocomplete="off">
       <div class="dialog__seg" role="radiogroup" aria-label="Where it runs">
         <button type="button" role="radio" aria-checked="true" data-target="compose">Docker Compose</button>
         <button type="button" role="radio" aria-checked="false" data-target="helm">Kubernetes</button>
       </div>
-      <pre class="dialog__cmd"><code data-cmd>git clone https://github.com/tokenrein/tokenrein
-cd tokenrein/deploy &amp;&amp; cp .env.example .env
-echo "TOKENREIN_PUBLIC_URL=https://tokenrein.acme.internal" &gt;&gt; .env
+      <pre class="dialog__cmd"><code data-cmd>git clone https://github.com/tokenrein/tokenrein &amp;&amp; cd tokenrein/deploy
+./setup.sh
 docker compose up -d
 docker compose exec tokenrein tokenrein create-owner you@company.com</code></pre>
       <button type="submit" class="dialog__go" data-copy>Copy the commands</button>

@@ -426,6 +426,7 @@ async fn overview(State(st): State<Arc<AppState>>, admin: Admin) -> Response {
     Json(json!({
         "version": version,
         "managed": version > 0,
+        "proxy_url": rt.cfg.auth.proxy_url,
         "secrets_enabled": rt.secrets().is_some(),
         "secrets_key_env": rt.cfg.server.secrets_key_env,
         "month": ym,
