@@ -88,7 +88,7 @@ function readBudgets(root) {
 function renderSettings() {
   const org = currentOrg();
   const modeHelp = `<p class="help">Modes: <b>enforce</b> blocks a call that would go over (HTTP 402) · <b>check</b> lets it through and adds an <span class="mono">x-tr-warning</span> header · <b>skip</b> only tracks spend. Leave a limit blank for no limit${org ? " (or to inherit, for projects)" : ""}.</p>`;
-  let html = "";
+  let html = licenseCard();
   if (org) {
     html += `<div class="card" data-org-card>
       <div class="card-h"><h2>Org <span class="mono">${esc(org.id)}</span> defaults</h2>
@@ -137,7 +137,7 @@ function renderSettings() {
         <input type="text" required pattern="[A-Za-z0-9._\\-]{1,128}" placeholder="project id, e.g. research-agent" aria-label="New project id" style="min-width:240px">
         <button class="btn" type="submit">Create project</button></form></div></div>`;
   }
-  if (S.me?.instance_admin) html += `<div class="card"><div class="card-h"><h2>New org</h2></div>
+  if (S.me?.instance_admin) html += `<div class="card"><div class="card-h"><h2>New org${S.overview.orgs.length ? paidTag("multiple_orgs") : ""}</h2></div>
     <div class="card-b"><p class="help">An org has its own monthly budget and projects. It uses the proxy's provider keys.</p><form class="inline" data-new-org>
       <input type="text" required pattern="[A-Za-z0-9._\\-]{1,128}" placeholder="org id, e.g. acme" aria-label="New org id" style="min-width:240px">
       <button class="btn" type="submit">Create org</button></form></div></div>`;

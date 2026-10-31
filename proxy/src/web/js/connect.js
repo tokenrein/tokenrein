@@ -129,7 +129,7 @@ function cursorImport(projects) {
       ? `<span class="badge b-ok">Importing</span> <span class="help">last run ${when(sync.last_run)}, ${sync.imported} new call${sync.imported === 1 ? "" : "s"}; runs hourly</span>`
       : `<span class="badge b-muted">Saved</span> <span class="help">first import within the hour, or import now</span>`;
   const canSave = s.secrets_enabled;
-  return `<div class="step-h"><span class="n">3</span>Import spend from Cursor (team plans)</div>
+  return `<div class="step-h"><span class="n">3</span>Import spend from Cursor (team plans)${paidTag("cursor_import")}</div>
     <p class="help" style="margin:0">Cursor reports usage per call (model, tokens, cost) through its Admin API, about hourly. Create an Admin API key in Cursor's team settings; it is stored encrypted and never shown again.</p>
     ${status ? `<div class="inline">${status}</div>` : ""}
     <form class="inline" data-cursor-import>

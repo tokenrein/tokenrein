@@ -14,7 +14,13 @@ function renderSpend() {
   if (!sp) { $("#spend-chart").innerHTML = '<p class="muted">Loading…</p>'; return; }
   // Ranges past 40 days need the usage history (history.dir on the server).
   const kept = sp.history_days || 0;
-  document.querySelectorAll("#spend-days [data-history]").forEach(o => { o.hidden = o.disabled = kept < +o.value; });
+  document.querySelectorAll("#spend-days [data-history]").forEach(o => {
+    o.hidden = kept < +o.value;
+    // Past 90 days needs a license; the option stays visible so people know it exists.
+    const paid = +o.value > 90 && S.license && !licensed("long_history");
+    o.disabled = o.hidden || paid;
+    o.textContent = o.textContent.replace(/ \(Team license\)$/, "") + (paid ? " (Team license)" : "");
+  });
   const days = sp.days;
   const total = days.reduce((a, d) => a + d.cost_micros, 0);
   const reqs = days.reduce((a, d) => a + d.requests, 0);

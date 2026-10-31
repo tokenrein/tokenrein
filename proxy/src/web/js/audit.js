@@ -67,7 +67,7 @@ function renderAudit() {
     <div class="card-h">
       <input type="search" data-audit-q placeholder="Filter by person, action or target" aria-label="Filter audit log" value="${esc(S.auditQuery)}" style="min-width:240px">
       ${S.me?.instance_admin ? `<label class="inline status"><input type="checkbox" data-audit-org ${S.auditOrgOnly ? "checked" : ""}> Only org ${esc(S.org || "")}</label>` : `<span class="status">Org ${esc(S.org || "")}</span>`}
-      <div class="toolbar"><button class="btn sm" data-audit-csv>Download CSV</button></div>
+      <div class="toolbar"><button class="btn sm" data-audit-csv>Download CSV</button>${paidTag("audit_export")}</div>
     </div>
     <div class="table-wrap"><table>${entries.length
       ? `<thead><tr><th>When / who</th><th>Action</th><th>What changed</th></tr></thead><tbody>${rows}</tbody>`

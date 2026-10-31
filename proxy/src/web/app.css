@@ -238,3 +238,6 @@ details.changes li { margin: 2px 0; word-break: break-word; }
 .approval-b { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
 .approval-title { font-size: 15px; font-weight: 600; }
 .approval { margin-bottom: 12px; border-left: 3px solid var(--warn); }
+
+.license-banner { background: var(--warn-bg); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; font-size: 13.5px; }
+.license-banner a { font-weight: 600; }

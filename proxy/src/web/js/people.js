@@ -124,7 +124,7 @@ function ssoCard(s) {
   const orgs = (S.overview?.orgs || []).map(o => o.id);
   const mappings = (c.group_roles || []).map(m => `${m.group} = ${m.org}:${m.role}`).join("\n");
   const secret = c.client_secret ? `saved …${esc(c.client_secret.last4)}` : (c.client_secret_env ? `from $${esc(c.client_secret_env)}` : "none");
-  return `<div class="card" data-sso-card><div class="card-h"><h2>Single sign-on (OpenID Connect)</h2>
+  return `<div class="card" data-sso-card><div class="card-h"><h2>Single sign-on (OpenID Connect)${paidTag("sso")}</h2>
       <span class="badge ${c.enabled ? "b-ok" : "b-muted"}">${c.enabled ? "on" : "off"}</span></div>
     <form class="card-b sso-form" data-sso>
       <p class="help" style="margin:0">Works with Okta, Microsoft Entra ID, Google Workspace, Auth0, Keycloak and any OpenID Connect provider. Register Tokenrein as a web app there with this redirect URI:</p>

@@ -120,6 +120,7 @@ $("#spend-days").addEventListener("change", refresh);
 async function refresh() {
   try {
     S.overview = await api("/admin/overview");
+    await loadLicense(S.tab === "settings");
     const orgs = S.overview.orgs.map(o => o.id);
     if (!orgs.includes(S.org)) S.org = orgs[0] || null;
     const sel = $("#org");
@@ -168,6 +169,7 @@ function render() {
   if (S.tab === "people") renderPeople();
   if (S.tab === "approvals") renderApprovals();
   renderApprovalBadge();
+  renderLicenseBanner();
   renderWhoami();
   // Org admins see their org's audit log; instance admins see everything.
   $("nav.tabs button[data-tab=audit]").classList.toggle("hide", !can("admin"));

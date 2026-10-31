@@ -43,7 +43,7 @@ function alertsCard() {
     <div class="table-wrap"><table>${rows ? `<thead><tr><th>Channel</th><th>Events</th><th>Last delivery</th><th></th></tr></thead><tbody>${rows}</tbody>` : `<tr><td class="empty">No channels yet.</td></tr>`}</table></div>
     <form class="card-b alert-form" data-alert-new>
       <div class="inline">
-        <select name="kind" aria-label="Channel type">${Object.entries(ALERT_KINDS).map(([k, [label]]) => `<option value="${k}" ${k === kind ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>
+        <select name="kind" aria-label="Channel type">${Object.entries(ALERT_KINDS).map(([k, [label]]) => `<option value="${k}" ${k === kind ? "selected" : ""}>${esc(label)}${k === "pagerduty" && S.license && !licensed("pagerduty") ? " (Team license)" : ""}</option>`).join("")}</select>
         <input type="text" name="name" required maxlength="100" placeholder="Name, e.g. #ai-spend" aria-label="Channel name" style="min-width:180px">
         <input type="${kind === "pagerduty" ? "password" : "url"}" name="target" required autocomplete="off" placeholder="${esc(ALERT_KINDS[kind][1])}" aria-label="${kind === "pagerduty" ? "Routing key" : "Webhook URL"}" style="flex:1;min-width:260px">
       </div>

@@ -44,6 +44,7 @@ const ASSETS: &[(&str, &str, &str)] = &[
     ("js/alerts.js", JS, include_str!("web/js/alerts.js")),
     ("js/people.js", JS, include_str!("web/js/people.js")),
     ("js/audit.js", JS, include_str!("web/js/audit.js")),
+    ("js/license.js", JS, include_str!("web/js/license.js")),
     ("js/app.js", JS, include_str!("web/js/app.js")),
 ];
 const JS: &str = "text/javascript; charset=utf-8";
