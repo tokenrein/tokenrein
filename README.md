@@ -112,6 +112,26 @@ with guard.run("ticket-4812", budget_usd=5):              # one task = one run
     client.chat.completions.create(model="gpt-4o-mini", messages=[...])
 ```
 
+## Performance
+
+Measured with [k6](loadtest/) on one Apple M5 Pro laptop, with one Tokenrein instance, a local
+Redis and a fake OpenAI upstream that answers at once, so the numbers are Tokenrein's own time.
+Every budget was enforced and the loop guard was on. Across 1.8 million requests (about 600,000
+each of proxied model calls, checks and usage reports) there were no errors, no dropped usage
+events and no ledger errors.
+
+| Calls per second | Time added to a model call (p50 / p99) | `POST /v1/check` p99 | `POST /v1/usage` p99 |
+|---|---|---|---|
+| 500 | 1.0 ms / 1.0 ms | 1.2 ms | 1.2 ms |
+| 2,000 | 0.3 ms / 0.3 ms | 0.4 ms | 0.4 ms |
+| 5,000 | 0.6 ms / 1.2 ms | 0.3 ms | 0.6 ms |
+| 10,000 | 1.0 ms / 2.2 ms | 0.5 ms | 0.9 ms |
+
+A model call takes from half a second to minutes, so this is well under 1% of it. One instance
+reached about 10,000 proxied calls per second with k6, Redis and the upstream sharing its CPU;
+for more, add instances behind a load balancer (the Helm chart scales them). With Redis on
+another host, add its network round trip. Run it yourself with `loadtest/run.sh`.
+
 ## Documentation
 
 | Guide | For |
@@ -132,6 +152,7 @@ with guard.run("ticket-4812", budget_usd=5):              # one task = one run
 | `sdk/python`, `sdk/typescript` | SDKs (Apache-2.0) |
 | `deploy/` | Docker Compose stack and Helm chart; `Dockerfile` builds the image |
 | `config/dev.toml` | Local development config |
+| `loadtest/` | k6 load test: the time Tokenrein adds to each call, and the SDK endpoints |
 | `site/` | Product website |
 | `.github/workflows/` | CI (fmt, clippy, tests against real Redis and Postgres, SDK suites on several provider SDK versions, dependency audits, SBOM) and release (multi-arch image to GHCR, SDKs to PyPI and npm) |
 

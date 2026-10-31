@@ -4,3 +4,4 @@ gateway/data/
 *.log
 target/
 data/
+loadtest/results/

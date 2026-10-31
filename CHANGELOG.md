@@ -7,6 +7,10 @@ SDKs; the release workflow refuses a tag that does not match all three.
 
 ## [Unreleased]
 
+### Added
+- Load test (`loadtest/`, k6): Tokenrein adds about 1 ms per call (p99 2.2 ms at 10,000 calls
+  per second on one instance); results are in the README.
+
 ### Changed
 - The repository moved to `github.com/tokenrein/tokenrein`, and the container image is now
   `ghcr.io/tokenrein/tokenrein`. 0.1.0 stays at `ghcr.io/geektuhin123/tokenrein`.

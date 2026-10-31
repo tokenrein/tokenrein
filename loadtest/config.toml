@@ -1,0 +1,32 @@
+# Tokenrein config for loadtest/run.sh: spare ports, the fake upstream, one org with every
+# budget enforced (limits high enough never to block) and the loop guard on.
+
+[server]
+listen = "127.0.0.1:18787"
+admin_listen = "127.0.0.1:18788"
+admin_token_env = "TOKENREIN_ADMIN_TOKEN"
+upstream_timeout_secs = 30
+default_max_output_tokens = 4096
+
+[redis]
+url = "redis://127.0.0.1:16379"
+
+[providers.openai]
+base_url = "http://127.0.0.1:18080"
+api_key_env = "LOADTEST_UPSTREAM_KEY"
+
+[[orgs]]
+id = "loadtest"
+fail_mode = "open"
+
+[orgs.budgets]
+org_monthly = { limit_usd = 1000000.0, mode = "enforce" }
+project_monthly = { limit_usd = 1000000.0, mode = "enforce" }
+agent_daily = { limit_usd = 100000.0, mode = "enforce" }
+run = { limit_usd = 100.0, mode = "enforce" }
+max_run_usd = 1000.0
+loops = { action = "pause", max_repeats = 6, repeat_window_secs = 600, max_usd_per_minute = 50.0, max_calls_per_run = 300 }
+
+[[orgs.projects]]
+id = "loadtest"
+virtual_key_hashes = ["@KEY_HASH@"]
