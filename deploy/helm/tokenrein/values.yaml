@@ -180,6 +180,9 @@ metrics:
     interval: 30s
     labels: {}
 
+# Extra environment for the container, e.g. a license key from a Secret (docs/licensing.md):
+#   - name: TOKENREIN_LICENSE
+#     valueFrom: { secretKeyRef: { name: tokenrein-license, key: key } }
 extraEnv: []
 podAnnotations: {}
 podLabels: {}

@@ -8,6 +8,10 @@ SDKs; the release workflow refuses a tag that does not match all three.
 ## [Unreleased]
 
 ### Added
+- Free tier and license keys: self-hosting is free up to 25 developers and $10,000 of AI spend a
+  month with every guardrail (going over only reminds, never blocks agents); a Team key adds
+  single sign-on, audit export, history past 90 days, PagerDuty and the Cursor import, and an
+  Enterprise key adds more orgs. Keys are checked offline; see docs/licensing.md.
 - Load test (`loadtest/`, k6): Tokenrein adds about 1 ms per call (p99 2.2 ms at 10,000 calls
   per second on one instance); results are in the README.
 

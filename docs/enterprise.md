@@ -70,6 +70,14 @@ requirements, configuration, backups and upgrades. Minimum production settings:
 
 Every secret can be read from a file instead (`TOKENREIN_SECRETS_KEY_FILE=/run/secrets/…`).
 
+## Licensing
+
+Free up to 25 developers and $10,000 of AI spend a month, with every guardrail; going over never
+blocks agents. Single sign-on, audit export, history past 90 days, PagerDuty and the Cursor import
+need a Team key, and more than one org an Enterprise key. Keys are checked offline (no call home)
+and are pasted under **Keys & limits → License** or set with `TOKENREIN_LICENSE`. Details, expiry
+and the grace period: [licensing.md](licensing.md).
+
 ## People, roles and single sign-on
 
 Create the first instance admin on the server, then sign in with the one-time link it prints:

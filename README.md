@@ -139,6 +139,7 @@ another host, add its network round trip. Run it yourself with `loadtest/run.sh`
 | [Developer guide](docs/developers.md) | SDKs, runs and sub-agents, budgets and modes, errors, headers, proxy-free endpoints, local development |
 | [Enterprise guide](docs/enterprise.md) | Deployment, SSO and roles, approvals and alerts, loop guard, audit and SIEM, data handling and security, rollout |
 | [Install](docs/install.md) · [Operations](docs/operations.md) | Docker Compose, Helm, backups, upgrades; runbooks, metrics, alerts |
+| [Free tier and license keys](docs/licensing.md) | What is free, what a Team or Enterprise key adds, adding a key, expiry |
 | [Connectors](docs/connectors.md) | What each coding-agent connector reads and changes |
 | [Admin API](docs/api.md) | Every endpoint and the role it needs |
 | [SDKs](sdk/README.md) | Python and TypeScript reference |
@@ -173,3 +174,8 @@ The server (`proxy/`, its container image and the Helm chart) is under the
 [Elastic License 2.0](LICENSE): you can use it, change it and run it in your own infrastructure,
 but you may not offer it to others as a hosted or managed service. The SDKs (`sdk/`) and the
 coding-agent connector scripts (`proxy/src/connect_*.py`) are Apache-2.0.
+
+Self-hosting is free up to 25 developers and $10,000 of AI spend a month, with every guardrail.
+Single sign-on, audit export, long usage history, PagerDuty, the Cursor import and multiple orgs
+need a license key: see [docs/licensing.md](docs/licensing.md) and
+[tokenrein.com/#pricing](https://tokenrein.com/#pricing).
