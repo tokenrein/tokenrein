@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/tokenrein/tokenrein/security/advisories/new
+    about: Please report security issues privately, not as public issues.
+  - name: Questions, licensing and design partners
+    url: mailto:hello@tokenrein.com
+    about: Write to us about plans, license keys or the design partner program.

@@ -112,7 +112,7 @@ docker compose up -d
 - `docker compose ps` shows `healthy` once both listeners answer and `/readyz` reaches Redis
   and Postgres.
 - The image comes from `ghcr.io/tokenrein/tokenrein:latest`; pin a version with
-  `TOKENREIN_IMAGE=ghcr.io/tokenrein/tokenrein:0.1.1` in `.env`. `docker compose build`
+  `TOKENREIN_IMAGE=ghcr.io/tokenrein/tokenrein:0.1.2` in `.env`. `docker compose build`
   builds it from this checkout instead.
 - To keep secrets out of the environment, use Compose `secrets:` and the `*_FILE` variables
   (for example `TOKENREIN_SECRETS_KEY_FILE: /run/secrets/tl_secrets_key`).
@@ -142,7 +142,7 @@ kubectl -n tokenrein create secret generic tokenrein-redis \
 ```yaml
 # values-prod.yaml
 image:
-  tag: "0.1.1"
+  tag: "0.1.2"
 secrets:
   existingSecret: tokenrein-secrets
   mountAsFiles: true          # TOKENREIN_*_FILE instead of environment variables

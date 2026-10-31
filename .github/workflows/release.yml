@@ -63,6 +63,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/tokenrein
+          # GitHub reports the repository license as NOASSERTION; name it.
+          labels: org.opencontainers.image.licenses=Elastic-2.0
       - id: build
         uses: docker/build-push-action@v6
         with:
