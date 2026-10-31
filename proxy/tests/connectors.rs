@@ -1142,6 +1142,11 @@ async fn copilot_connect_script() {
     assert!(!home.path(".copilot/hooks/tokenrein.json").exists());
     assert!(!home.path(".tokenrein/copilot.sh").exists());
     assert!(!home.path(".tokenrein/hook.py").exists());
+    // Tokenrein's own files (they hold the key) are not left behind as backups.
+    assert_eq!(home.backups(".tokenrein"), 0);
+    assert!(!home.path(".copilot/hooks").exists());
+    // .zshrc is the only file backed up: when the line was added, and when it was removed.
+    assert_eq!(home.backups(""), 2);
 
     // Someone else's file of the same name is left alone.
     let theirs = "{\"version\": 1, \"hooks\": {}}";

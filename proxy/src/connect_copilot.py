@@ -6,7 +6,8 @@ Adds user-level Copilot hooks in ~/.copilot/hooks/tokenrein.json that stop the n
 when an admin pauses the run or an enforced budget is used up, and turns on Copilot's
 OpenTelemetry export (model and tokens of every call) for the `copilot` command through
 ~/.tokenrein/copilot.sh, sourced from your shell profile. The hooks run ~/.tokenrein/hook.py,
-which this script writes. Changed files are backed up first. Standard library only.
+which this script writes. Files of yours that it changes are backed up first. Standard library
+only.
 
 With --policy (run as root) it sets this up for every user of the machine instead: Copilot
 policy hooks in /etc/github-copilot/policy.d/tokenrein.json, which users can't turn off, and
@@ -109,11 +110,26 @@ def strip_profiles():
     return changed
 
 
+def write_own(path, text, mode=0o600):
+    """Write a file that only Tokenrein uses. No backup: it holds the key, and nothing of the
+    user's is lost by replacing it."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp-tokenrein"
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
 def remove_file(path):
+    """Delete a file of Tokenrein's, and its directory if that is left empty."""
     if not os.path.exists(path):
         return False
-    backup(path)
     os.remove(path)
+    try:
+        os.rmdir(os.path.dirname(path))
+    except OSError:
+        pass
     return True
 
 
@@ -176,7 +192,7 @@ def policy(p, a):
     # Readable by every user: hooks run as the user, and read the key from here.
     install_hook(TOOL, url, a.key, a.agent, a.user, d=d, mode=0o644)
     command = "%s %s %s" % (shlex.quote(sys.executable or "python3"), shlex.quote(os.path.join(d, "hook.py")), TOOL)
-    write_managed(hooks_path, hooks_doc(command))
+    write_own(hooks_path, json.dumps(hooks_doc(command), indent=2) + "\n", mode=0o644)
     headers = {"Authorization": "Bearer " + a.key, "x-tr-agent": a.agent}
     if a.user:
         headers["x-tr-user"] = a.user
@@ -228,8 +244,8 @@ def main():
         print("Not changed: %s exists and isn't Tokenrein's. Rename it first." % hooks_path, file=sys.stderr)
         return 1
     install_hook(TOOL, url, a.key, a.agent, a.user)
-    write_text(hooks_path, json.dumps(hooks_doc(hook_command(TOOL)), indent=2) + "\n")
-    write_text(env_path, otel_env(url, a.key, a.agent, a.user))
+    write_own(hooks_path, json.dumps(hooks_doc(hook_command(TOOL)), indent=2) + "\n")
+    write_own(env_path, otel_env(url, a.key, a.agent, a.user))
     if not a.no_profile:
         for path in profiles():
             text = read_text(path)
