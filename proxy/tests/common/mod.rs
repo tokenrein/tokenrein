@@ -213,3 +213,27 @@ impl Drop for PostgresServer {
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
+
+// A throwaway keypair; debug builds trust TOKENREIN_LICENSE_TEST_PUBLIC_KEY (see `license.rs`).
+pub const LICENSE_TEST_PRIVATE: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIF66SpbBJj+nPj6c43RYYkKnUzjgJmLDk4PGGA4RYtNR\n-----END PRIVATE KEY-----\n";
+pub const LICENSE_TEST_PUBLIC: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAMQihtaQAdJ+4uiI38NnRbraKnTV6kF1WWmAtCatLNdo=\n-----END PUBLIC KEY-----\n";
+
+/// For a config's environment function in tests of paid features: an Enterprise license key
+/// signed with the test keypair, and the public key that verifies it.
+pub fn licensed(name: &str) -> Option<String> {
+    match name {
+        "TOKENREIN_LICENSE" => {
+            let now = chrono::Utc::now().timestamp();
+            let claims = serde_json::json!({
+                "iss": "tokenrein", "sub": "Tests", "plan": "enterprise",
+                "iat": now, "exp": now + 86_400, "jti": "lic_tests",
+            });
+            let key =
+                jsonwebtoken::EncodingKey::from_ed_pem(LICENSE_TEST_PRIVATE.as_bytes()).unwrap();
+            let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::EdDSA);
+            Some(jsonwebtoken::encode(&header, &claims, &key).unwrap())
+        }
+        "TOKENREIN_LICENSE_TEST_PUBLIC_KEY" => Some(LICENSE_TEST_PUBLIC.to_string()),
+        _ => None,
+    }
+}

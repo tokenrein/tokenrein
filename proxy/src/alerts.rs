@@ -63,6 +63,7 @@ pub fn event_name(e: AlertEvent) -> &'static str {
         AlertEvent::BudgetBlocked => "budget_blocked",
         AlertEvent::ApprovalRequested => "approval_requested",
         AlertEvent::LoopDetected => "loop_detected",
+        AlertEvent::License => "license",
     }
 }
 
@@ -101,16 +102,41 @@ fn link(st: &AppState, tab: Option<&str>) -> Option<String> {
     })
 }
 
+/// Tell every org's alert channels `text` about the license, at most once a week.
+pub async fn license_reminder(st: &AppState, text: &str) {
+    for org in &st.rt().cfg.orgs {
+        notify(
+            st,
+            &org.id,
+            Alert {
+                event: AlertEvent::License,
+                severity: Severity::Info,
+                title: "Tokenrein license".into(),
+                text: text.to_string(),
+                dedup: "license".into(),
+                quiet_secs: 7 * 86_400,
+                tab: Some("settings"),
+                fields: Vec::new(),
+            },
+        )
+        .await;
+    }
+}
+
 /// Send `alert` to the org's channels that want it, unless it was sent within its quiet period.
 pub async fn notify(st: &AppState, org: &str, alert: Alert) {
     let rt = st.rt();
     let Some(o) = rt.cfg.orgs.iter().find(|o| o.id == org) else {
         return;
     };
+    // PagerDuty is a paid feature, and nobody should be paged about the license.
+    let pagerduty_ok = alert.event != AlertEvent::License
+        && crate::license::allows(st, crate::license::Feature::Pagerduty);
     let wanted: Vec<&AlertChannel> = o
         .alert_channels
         .iter()
         .filter(|c| c.events.is_empty() || c.events.contains(&alert.event))
+        .filter(|c| c.kind != AlertKind::Pagerduty || pagerduty_ok)
         .collect();
     if wanted.is_empty() {
         return;

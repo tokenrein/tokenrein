@@ -116,6 +116,9 @@ struct Metrics {
     history_rows_written: AtomicU64,
     history_rows_dropped: AtomicU64,
     history_write_failures: AtomicU64,
+    license_developers: AtomicU64,
+    license_spend_micros: AtomicU64,
+    license_over_limit: AtomicU64,
 }
 
 static METRICS: Metrics = Metrics {
@@ -129,6 +132,9 @@ static METRICS: Metrics = Metrics {
     history_rows_written: AtomicU64::new(0),
     history_rows_dropped: AtomicU64::new(0),
     history_write_failures: AtomicU64::new(0),
+    license_developers: AtomicU64::new(0),
+    license_spend_micros: AtomicU64::new(0),
+    license_over_limit: AtomicU64::new(0),
 };
 
 pub fn decision(path: Path, decision: &str) {
@@ -162,6 +168,19 @@ pub fn activity_write_failed(events: usize) {
     METRICS
         .activity_dropped_write_failed
         .fetch_add(events as u64, Ordering::Relaxed);
+}
+
+/// The latest developers and spend measured for the license, and whether they are over it.
+pub fn license_usage(u: &crate::license::Usage, over_limit: bool) {
+    METRICS
+        .license_developers
+        .store(u.developers, Ordering::Relaxed);
+    METRICS
+        .license_spend_micros
+        .store(u.spend_micros.max(0) as u64, Ordering::Relaxed);
+    METRICS
+        .license_over_limit
+        .store(u64::from(over_limit), Ordering::Relaxed);
 }
 
 pub fn audit_write_failed() {
@@ -333,6 +352,40 @@ pub fn render(config_version: u64) -> String {
         "Version of the managed config this process is serving.",
     );
     let _ = writeln!(out, "tokenrein_config_version {config_version}");
+
+    header(
+        &mut out,
+        "tokenrein_license_developers",
+        "gauge",
+        "Distinct people on runs in the last 30 days, as counted for the license.",
+    );
+    let _ = writeln!(
+        out,
+        "tokenrein_license_developers {}",
+        load(&m.license_developers)
+    );
+    header(
+        &mut out,
+        "tokenrein_license_spend_usd",
+        "gauge",
+        "AI spend this calendar month, as counted for the license.",
+    );
+    let _ = writeln!(
+        out,
+        "tokenrein_license_spend_usd {}",
+        load(&m.license_spend_micros) as f64 / 1e6
+    );
+    header(
+        &mut out,
+        "tokenrein_license_over_limit",
+        "gauge",
+        "1 when usage is over the free tier or the license (agents keep working).",
+    );
+    let _ = writeln!(
+        out,
+        "tokenrein_license_over_limit {}",
+        load(&m.license_over_limit)
+    );
     out
 }
 

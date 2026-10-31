@@ -179,7 +179,7 @@ impl H {
         let rt = Resolved::from_toml(&config(&redis.url, &cursor), |name| match name {
             "ADMIN" => Some(ADMIN_TOKEN.into()),
             "SECRETS" => Some(SECRETS_KEY.into()),
-            _ => None,
+            other => common::licensed(other),
         })
         .unwrap();
         let state = build_state(rt).await.unwrap();

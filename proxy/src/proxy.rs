@@ -40,6 +40,8 @@ pub struct AppState {
     pub activity: mpsc::Sender<Value>,
     /// Long-term usage history (Parquet files read with DuckDB), when a folder is configured.
     pub history: Option<Arc<crate::history::History>>,
+    /// Developers and spend measured for the license, refreshed every few minutes.
+    pub license_usage: crate::license::UsageCache,
 }
 
 impl AppState {
@@ -61,6 +63,7 @@ impl AppState {
             auth: Default::default(),
             http,
             activity,
+            license_usage: Default::default(),
         }
     }
 

@@ -21,6 +21,7 @@ use super::oidc::{self, GroupRole, SsoConfig, TokenAuth};
 use super::{Admin, Role, SESSION_COOKIE, Via, client_ip, db_unavailable, password, store};
 use crate::admin::err;
 use crate::audit::{self, Entry};
+use crate::license::{self, Feature};
 use crate::proxy::AppState;
 
 /// Sign-in attempts per client address per 5 minutes, and per account.
@@ -165,7 +166,7 @@ async fn auth_config(State(st): State<Arc<AppState>>) -> Response {
             Err(e) => return db_unavailable(e),
         }
         match SsoConfig::load(&st).await {
-            Ok(Some(c)) if c.enabled => {
+            Ok(Some(c)) if c.enabled && license::allows(&st, Feature::Sso) => {
                 let label = if c.label.is_empty() {
                     "single sign-on".to_string()
                 } else {
@@ -562,7 +563,12 @@ async fn sso_start(State(st): State<Arc<AppState>>, ClientIp(ip): ClientIp) -> R
         return to_login("too many sign-in attempts; wait a few minutes");
     }
     let cfg = match SsoConfig::load(&st).await {
-        Ok(Some(c)) if c.enabled => c,
+        Ok(Some(c)) if c.enabled && license::allows(&st, Feature::Sso) => c,
+        Ok(Some(c)) if c.enabled => {
+            return to_login(
+                "single sign-on needs a Tokenrein Team license here; sign in with your password",
+            );
+        }
         Ok(_) => return to_login("single sign-on is not set up here"),
         Err(e) => return db_unavailable(e),
     };
@@ -692,6 +698,12 @@ async fn put_sso(
     Json(b): Json<SsoBody>,
 ) -> Response {
     if let Err(r) = admin.instance() {
+        return r;
+    }
+    // Turning single sign-on off is always allowed.
+    if b.enabled
+        && let Err(r) = license::require(&st, Feature::Sso)
+    {
         return r;
     }
     let pool = match db(&st) {

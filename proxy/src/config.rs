@@ -417,6 +417,8 @@ pub enum AlertEvent {
     ApprovalRequested,
     /// A run looks like a runaway loop.
     LoopDetected,
+    /// A weekly reminder: over the free tier or the license, or the license key expires soon.
+    License,
 }
 
 /// Imports a Cursor team's usage events (see `crate::connectors`).
@@ -475,6 +477,10 @@ pub struct Config {
     pub pricing: Vec<PriceOverride>,
     #[serde(default)]
     pub orgs: Vec<OrgConfig>,
+    /// The license key saved from the dashboard (or set in the file); `TOKENREIN_LICENSE` is
+    /// used when this is empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
 }
 
 /// Settings a container can set from the environment instead of editing the config file.
@@ -572,6 +578,8 @@ pub struct Resolved {
     pub database_url: Option<String>,
     /// Model prices: built-in list plus `cfg.pricing` overrides.
     pub prices: crate::pricing::Catalog,
+    /// The license key in use, already checked.
+    pub license: crate::license::Key,
     secrets: Option<Arc<SecretBox>>,
     previous_secrets: Option<Arc<SecretBox>>,
     env: EnvFn,
@@ -599,15 +607,26 @@ impl Resolved {
     /// The same server settings with a different set of orgs (from the admin API / dashboard).
     /// Validates exactly like the config file.
     pub fn with_orgs(&self, orgs: Vec<OrgConfig>) -> Result<Self> {
-        self.with_managed(orgs, self.cfg.pricing.clone())
+        self.with_managed(orgs, self.cfg.pricing.clone(), self.cfg.license.clone())
     }
 
     /// Orgs and price overrides managed from the admin API / dashboard.
-    pub fn with_managed(&self, orgs: Vec<OrgConfig>, pricing: Vec<PriceOverride>) -> Result<Self> {
+    pub fn with_managed(
+        &self,
+        orgs: Vec<OrgConfig>,
+        pricing: Vec<PriceOverride>,
+        license: Option<String>,
+    ) -> Result<Self> {
         let mut cfg = self.cfg.clone();
         cfg.orgs = orgs;
         cfg.pricing = pricing;
+        cfg.license = license;
         Self::build(cfg, self.env.clone())
+    }
+
+    /// The public key license keys are checked against (see [`crate::license::public_key`]).
+    pub fn license_public_key(&self) -> String {
+        crate::license::public_key(&*self.env)
     }
 
     fn build(cfg: Config, env: EnvFn) -> Result<Self> {
@@ -758,8 +777,14 @@ impl Resolved {
         let admin_token = env(&cfg.server.admin_token_env).filter(|t| t.len() >= 16);
         let database_url = env(&cfg.database.url_env).filter(|u| !u.trim().is_empty());
         let prices = crate::pricing::Catalog::with_overrides(&cfg.pricing)?;
+        let license = crate::license::Key::load(
+            cfg.license.as_deref(),
+            env("TOKENREIN_LICENSE").as_deref(),
+            &crate::license::public_key(&*env),
+        );
         Ok(Self {
             prices,
+            license,
             cfg,
             keys,
             provider_keys,

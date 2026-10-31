@@ -40,7 +40,7 @@ async fn instance(redis: &str, db: Option<&str>) -> Arc<AppState> {
         "ADMIN" => Some(ADMIN_TOKEN.into()),
         "SECRETS" => Some(SECRETS_KEY.into()),
         "DB" => db.clone(),
-        _ => None,
+        other => common::licensed(other),
     })
     .unwrap();
     let state = build_state(rt).await.unwrap();

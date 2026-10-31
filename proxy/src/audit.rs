@@ -134,7 +134,8 @@ fn redact(v: &Value) -> Value {
         Value::Object(m) => Value::Object(
             m.iter()
                 .map(|(k, v)| {
-                    let v = if k == "sealed" || k.ends_with("_sealed") {
+                    // Sealed provider keys, and the license key (a bearer credential).
+                    let v = if k == "sealed" || k.ends_with("_sealed") || k == "license" {
                         Value::String("[redacted]".into())
                     } else {
                         redact(v)

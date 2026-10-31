@@ -64,7 +64,7 @@ impl T {
             "ADMIN" => Some(ADMIN_TOKEN.into()),
             "SECRETS" => Some(SECRETS_KEY.into()),
             "DB" => Some(db.clone()),
-            _ => None,
+            other => common::licensed(other),
         })
         .unwrap();
         let state = build_state(rt).await.unwrap();
@@ -700,7 +700,7 @@ async fn without_a_database_only_the_admin_token_works() {
     };
     let rt = Resolved::from_toml(&config(&redis.url), |name| match name {
         "ADMIN" => Some(ADMIN_TOKEN.into()),
-        _ => None,
+        other => common::licensed(other),
     })
     .unwrap();
     let state = build_state(rt).await.unwrap();
@@ -753,7 +753,7 @@ async fn the_sso_client_secret_survives_a_secrets_key_rotation() {
             "SECRETS" => Some(NEW_KEY.into()),
             "SECRETS_PREVIOUS" if previous => Some(SECRETS_KEY.into()),
             "DB" => Some(db.clone()),
-            _ => None,
+            other => common::licensed(other),
         })
         .unwrap()
     };

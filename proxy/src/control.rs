@@ -28,13 +28,25 @@ pub struct Managed {
     pub orgs: Vec<OrgConfig>,
     #[serde(default)]
     pub pricing: Vec<PriceOverride>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+}
+
+impl Managed {
+    fn of(cfg: &crate::config::Config) -> Self {
+        Self {
+            orgs: cfg.orgs.clone(),
+            pricing: cfg.pricing.clone(),
+            license: cfg.license.clone(),
+        }
+    }
 }
 
 fn parse(doc: &str) -> Result<Managed> {
     if doc.trim_start().starts_with('[') {
         return Ok(Managed {
             orgs: serde_json::from_str(doc)?,
-            pricing: Vec::new(),
+            ..Default::default()
         });
     }
     Ok(serde_json::from_str(doc)?)
@@ -88,11 +100,7 @@ pub async fn init(state: &AppState) -> Result<()> {
             (doc, "Redis")
         }
         _ => {
-            let rt = state.rt();
-            let doc = serde_json::to_string(&Managed {
-                orgs: rt.cfg.orgs.clone(),
-                pricing: rt.cfg.pricing.clone(),
-            })?;
+            let doc = serde_json::to_string(&Managed::of(&state.rt().cfg))?;
             (doc, "the config file")
         }
     };
@@ -121,7 +129,7 @@ pub async fn sync(state: &AppState) -> Result<()> {
 
 fn apply(state: &AppState, version: u64, doc: &str) -> Result<()> {
     let m = parse(doc)?;
-    let rt = state.rt().with_managed(m.orgs, m.pricing)?;
+    let rt = state.rt().with_managed(m.orgs, m.pricing, m.license)?;
     state.replace_rt(rt, version);
     Ok(())
 }
@@ -160,6 +168,19 @@ pub async fn edit<T>(
     edit_managed(state, change, |m| edit(&mut m.orgs)).await
 }
 
+/// Saves (or with `None` removes) the license key; the caller has checked it.
+pub async fn edit_license(
+    state: &AppState,
+    change: Change,
+    license: Option<String>,
+) -> Result<(), EditError> {
+    edit_managed(state, change, |m| {
+        m.license = license;
+        Ok(())
+    })
+    .await
+}
+
 /// Like [`edit`] for the model price overrides.
 pub async fn edit_pricing<T>(
     state: &AppState,
@@ -181,24 +202,20 @@ async fn edit_managed<T>(
         return Err(EditError::Disabled);
     }
     let rt = state.rt();
-    let mut m = Managed {
-        orgs: rt.cfg.orgs.clone(),
-        pricing: rt.cfg.pricing.clone(),
-    };
+    let mut m = Managed::of(&rt.cfg);
     let before = serde_json::to_value(&m).map_err(|e| EditError::Unavailable(e.into()))?;
     let out = edit(&mut m)?;
     let next = rt
-        .with_managed(m.orgs, m.pricing)
+        .with_managed(m.orgs, m.pricing, m.license)
         .map_err(|e| EditError::Invalid(format!("{e:#}")))?;
-    let after = serde_json::to_value(Managed {
-        orgs: next.cfg.orgs.clone(),
-        pricing: next.cfg.pricing.clone(),
-    })
-    .map_err(|e| EditError::Unavailable(e.into()))?;
-    let changes = audit::diff(&before, &after);
-    if changes.is_empty() {
+    let after = serde_json::to_value(Managed::of(&next.cfg))
+        .map_err(|e| EditError::Unavailable(e.into()))?;
+    // Compare before redacting: the audit diff hides secrets, so two different license keys
+    // (or sealed provider keys) look the same in it.
+    if before == after {
         return Ok(out);
     }
+    let changes = audit::diff(&before, &after);
     let entry = change.entry(serde_json::json!({ "changes": changes }));
     match store(
         state,
@@ -234,10 +251,7 @@ pub async fn rotate_secrets_key(state: &AppState, actor: &str) -> Result<Vec<Str
         .secrets()
         .with_context(|| format!("{var} (the new secrets key) is not set"))?;
     let previous = rt.previous_secrets();
-    let mut m = Managed {
-        orgs: rt.cfg.orgs.clone(),
-        pricing: rt.cfg.pricing.clone(),
-    };
+    let mut m = Managed::of(&rt.cfg);
     let (mut resealed, mut unreadable) = (Vec::new(), Vec::new());
     for org in &mut m.orgs {
         for (provider, saved) in &mut org.provider_secrets {
@@ -264,11 +278,8 @@ pub async fn rotate_secrets_key(state: &AppState, actor: &str) -> Result<Vec<Str
         return Ok(resealed);
     }
     resealed.sort();
-    let next = rt.with_managed(m.orgs, m.pricing)?;
-    let doc = serde_json::to_string(&Managed {
-        orgs: next.cfg.orgs.clone(),
-        pricing: next.cfg.pricing.clone(),
-    })?;
+    let next = rt.with_managed(m.orgs, m.pricing, m.license)?;
+    let doc = serde_json::to_string(&Managed::of(&next.cfg))?;
     // The audit diff hides sealed values, so record which keys were re-encrypted instead.
     let entry = Change {
         actor: actor.to_string(),

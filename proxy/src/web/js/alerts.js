@@ -12,6 +12,7 @@ const ALERT_EVENTS = {
   budget_blocked: "Budget used up (requests refused)",
   approval_requested: "Run waiting for approval",
   loop_detected: "Runaway loop detected",
+  license: "License reminders (weekly)",
 };
 
 async function loadAlerts() {

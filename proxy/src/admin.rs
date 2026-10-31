@@ -19,6 +19,7 @@ use crate::config::{
 };
 use crate::control::{self, EditError};
 use crate::ledger::Keys;
+use crate::license::{self, Feature};
 use crate::providers::Provider;
 use crate::proxy::AppState;
 
@@ -114,6 +115,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(test_alert_channel),
         )
         .merge(crate::auth::routes::router())
+        .merge(license::routes())
         .merge(crate::connectors::routes())
         .layer(axum::middleware::map_response(security_headers))
         .with_state(state)
@@ -493,6 +495,11 @@ async fn create_org(
     Json(body): Json<OrgBody>,
 ) -> Response {
     if let Err(r) = admin.instance() {
+        return r;
+    }
+    if !st.rt().cfg.orgs.is_empty()
+        && let Err(r) = license::require(&st, Feature::MultipleOrgs)
+    {
         return r;
     }
     let target = body.id.clone().unwrap_or_default();
@@ -1215,6 +1222,11 @@ async fn spend(
         .as_ref()
         .map_or(SPEND_REDIS_DAYS, |h| h.retention_days);
     let n = q.days.unwrap_or(30).clamp(1, max);
+    if n > license::FREE_HISTORY_DAYS
+        && let Err(r) = license::require(&st, Feature::LongHistory)
+    {
+        return r;
+    }
     if let Some(h) = history.clone()
         && (csv || n > SPEND_REDIS_DAYS)
     {
@@ -1544,6 +1556,9 @@ async fn list_audit(
             .into_response(),
             Err(e) => unavailable(e),
         };
+    }
+    if let Err(r) = license::require(&st, Feature::AuditExport) {
+        return r;
     }
     let mut rows = Vec::new();
     let mut before = q.before.clone();
@@ -1879,6 +1894,11 @@ async fn add_alert_channel(
 ) -> Response {
     use crate::config::AlertKind;
     if let Err(r) = admin.org(&st, &org, Role::Admin) {
+        return r;
+    }
+    if b.kind == AlertKind::Pagerduty
+        && let Err(r) = license::require(&st, Feature::Pagerduty)
+    {
         return r;
     }
     let name = b.name.trim();

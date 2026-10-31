@@ -101,6 +101,7 @@ async fn main() -> Result<()> {
     control::spawn_sync(state.clone());
     spawn_sweeper(state.clone());
     tokenrein::alerts::spawn_budget_watch(state.clone());
+    tokenrein::license::spawn_reminders(state.clone());
     tokenrein::history::spawn(state.clone());
     let history = state.history.clone();
 

@@ -109,7 +109,7 @@ impl H {
             "ADMIN" => Some(ADMIN_TOKEN.into()),
             "SECRETS" => Some(SECRETS_KEY.into()),
             "TOKENREIN_PAGERDUTY_URL" => Some(pd.clone()),
-            _ => None,
+            other => common::licensed(other),
         })
         .unwrap();
         let state = build_state(rt).await.unwrap();

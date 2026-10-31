@@ -25,6 +25,7 @@ use crate::config::{CursorImport, ProviderSecret, sha256_hex, valid_provider_key
 use crate::control;
 use crate::ingest::{Caller, Tool, UsageEvent, Who, record_usage, session_runs, to_id};
 use crate::ledger::{Keys, unix_now};
+use crate::license::{self, Feature};
 use crate::proxy::AppState;
 
 const CONNECT_COMMON: &str = include_str!("connect_common.py");
@@ -358,6 +359,9 @@ async fn import_event(st: &AppState, c: &Caller, org: &str, ev: &Value) -> anyho
 
 /// Start an org's hourly import; one instance runs it per org and hour.
 pub async fn sync_due(st: &Arc<AppState>, org: &str) {
+    if !license::allows(st, Feature::CursorImport) {
+        return;
+    }
     let lock = format!(
         "{}:hour:{}",
         Keys::new(org).import_state(SOURCE),
@@ -428,6 +432,9 @@ async fn set_cursor(
     Json(body): Json<CursorBody>,
 ) -> Response {
     if let Err(r) = admin.org(&st, &org, Role::Admin) {
+        return r;
+    }
+    if let Err(r) = license::require(&st, Feature::CursorImport) {
         return r;
     }
     let rt = st.rt();
@@ -521,6 +528,9 @@ async fn sync_now(
     admin: Admin,
 ) -> Response {
     if let Err(r) = admin.org(&st, &org, Role::Admin) {
+        return r;
+    }
+    if let Err(r) = license::require(&st, Feature::CursorImport) {
         return r;
     }
     let result = sync_cursor(&st, &org).await;

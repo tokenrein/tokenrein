@@ -10,6 +10,7 @@ pub mod db;
 pub mod history;
 pub mod ingest;
 pub mod ledger;
+pub mod license;
 pub mod loops;
 pub mod metrics;
 pub mod packs;
