@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tokenrein"
-version = "0.1.0"
+version = "0.1.1"
 description = "Budgets, run tracing and spend reports for AI agents: wrap your OpenAI or Anthropic client in one line"
 readme = "README.md"
 license = "Apache-2.0"

@@ -7,6 +7,10 @@ SDKs; the release workflow refuses a tag that does not match all three.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-31
+
+The first public release.
+
 ### Added
 - Free tier and license keys: self-hosting is free up to 25 developers and $10,000 of AI spend a
   month with every guardrail (going over only reminds, never blocks agents); a Team key adds
@@ -19,6 +23,9 @@ SDKs; the release workflow refuses a tag that does not match all three.
 - The repository moved to `github.com/tokenrein/tokenrein`, and the container image is now
   `ghcr.io/tokenrein/tokenrein`. 0.1.0 stays at `ghcr.io/geektuhin123/tokenrein`.
 - Release images are built on a native runner per platform instead of under emulation.
+- The SDKs are published with trusted publishing (no stored registry tokens) and name their
+  source repository and homepage.
+- The product site is at tokenrein.com.
 
 ## [0.1.0] - 2026-10-29
 

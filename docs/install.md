@@ -142,7 +142,7 @@ kubectl -n tokenrein create secret generic tokenrein-redis \
 ```yaml
 # values-prod.yaml
 image:
-  tag: "0.1.0"
+  tag: "0.1.1"
 secrets:
   existingSecret: tokenrein-secrets
   mountAsFiles: true          # TOKENREIN_*_FILE instead of environment variables
