@@ -1,6 +1,6 @@
 //! Connectors for coding agents beyond Claude Code:
 //!
-//! - `GET /connect/{codex,gemini,cursor}.py`: stdlib installers that point the agent's own
+//! - `GET /connect/{codex,gemini,cursor,copilot}.py`: stdlib installers that point the agent's own
 //!   telemetry and hooks at Tokenrein (see docs/connectors.md).
 //! - The optional Cursor usage import: a team's usage events, read from Cursor's Admin API
 //!   (`POST /teams/filtered-usage-events`) with an Admin API key saved encrypted like provider
@@ -33,6 +33,7 @@ const CONNECT_HOOK: &str = include_str!("connect_hook.py");
 const CONNECT_CODEX: &str = include_str!("connect_codex.py");
 const CONNECT_GEMINI: &str = include_str!("connect_gemini.py");
 const CONNECT_CURSOR: &str = include_str!("connect_cursor.py");
+const CONNECT_COPILOT: &str = include_str!("connect_copilot.py");
 
 /// A connect script with the shared code and the hook built in. Holds no secrets; the key is
 /// passed as an argument.
@@ -41,6 +42,7 @@ pub fn connect_script(tool: &str) -> Option<String> {
         "codex" => CONNECT_CODEX,
         "gemini" => CONNECT_GEMINI,
         "cursor" => CONNECT_CURSOR,
+        "copilot" => CONNECT_COPILOT,
         _ => return None,
     };
     let common = CONNECT_COMMON.replace("@tokenrein-hook@", CONNECT_HOOK);
@@ -75,6 +77,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/connect/cursor.py",
             get(|| async { script_response("cursor") }),
+        )
+        .route(
+            "/connect/copilot.py",
+            get(|| async { script_response("copilot") }),
         )
         .route(
             "/admin/orgs/{org}/connectors/cursor",
@@ -556,7 +562,7 @@ mod tests {
 
     #[test]
     fn scripts_are_assembled() {
-        for tool in ["codex", "gemini", "cursor"] {
+        for tool in ["codex", "gemini", "cursor", "copilot"] {
             let s = connect_script(tool).unwrap();
             assert!(s.starts_with("#!/usr/bin/env python3"));
             assert!(!s.contains("@tokenrein-"), "{tool}: placeholder left");

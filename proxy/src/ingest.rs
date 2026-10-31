@@ -5,13 +5,16 @@
 //! - `POST /v1/check`: "may this run make another call?", asked before a call or agent step.
 //! - `POST /v1/otel/v1/logs`: OpenTelemetry logs (OTLP over HTTP/JSON) from coding agents with
 //!   built-in telemetry: Claude Code, OpenAI Codex CLI and Gemini CLI.
-//! - `POST /v1/hooks/{claude-code,codex,gemini,cursor}`: coding agents' hooks; they block the
-//!   next prompt or tool call when a run is paused, killed or over an enforced budget.
+//! - `POST /v1/otel/v1/traces`: OpenTelemetry traces (OTLP over HTTP/JSON) from GitHub Copilot,
+//!   which reports each model call's tokens on a `chat` span.
+//! - `POST /v1/hooks/{claude-code,codex,gemini,cursor,copilot}`: coding agents' hooks; they block
+//!   the next prompt or tool call when a run is paused, killed or over an enforced budget.
 //!
 //! All of them authenticate with a Tokenrein virtual key, like the proxy. Reported spend is
 //! charged to the same budgets and shows up in the same dashboard. Enforcement is between calls
 //! (the call that crosses a limit has already happened), unlike the proxy's pre-call reservation.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::Json;
@@ -19,7 +22,7 @@ use axum::extract::State;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
@@ -563,9 +566,14 @@ async fn loop_stop(
 
 /// The tool call a hook is about to allow, hashed for loop detection.
 fn tool_fingerprint(input: &Value) -> Option<String> {
-    let name = input.get("tool_name").and_then(Value::as_str).unwrap_or("");
+    let name = input
+        .get("tool_name")
+        .or_else(|| input.get("toolName"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let args = input
         .get("tool_input")
+        .or_else(|| input.get("toolArgs"))
         .or_else(|| input.get("command"))
         .map(Value::to_string)
         .unwrap_or_default();
@@ -693,6 +701,7 @@ pub enum Tool {
     Codex,
     Gemini,
     Cursor,
+    Copilot,
 }
 
 impl Tool {
@@ -703,6 +712,7 @@ impl Tool {
             Tool::Codex => "codex",
             Tool::Gemini => "gemini-cli",
             Tool::Cursor => "cursor",
+            Tool::Copilot => "copilot",
         }
     }
 
@@ -713,6 +723,7 @@ impl Tool {
             Tool::Codex => "codex",
             Tool::Gemini => "gemini",
             Tool::Cursor => "cursor",
+            Tool::Copilot => "copilot",
         }
     }
 }
@@ -903,9 +914,30 @@ fn read_record(tool: Tool, event: &str, a: &Map<String, Value>) -> Option<Record
                 usage,
             })
         }
-        // Cursor has no telemetry export; its usage comes from the Admin API import.
-        Tool::Cursor => None,
+        // Cursor has no telemetry export; its usage comes from the Admin API import. Copilot
+        // reports usage on trace spans (see `read_copilot_span`).
+        Tool::Cursor | Tool::Copilot => None,
     }
+}
+
+/// An OTLP/HTTP request body, which Tokenrein reads as JSON only.
+#[allow(clippy::result_large_err)]
+fn otlp_json(headers: &HeaderMap, body: &[u8], signal: &str) -> Result<Value, Response> {
+    let content_type = header_str(headers, CONTENT_TYPE.as_str()).unwrap_or("");
+    if !content_type.starts_with("application/json") {
+        return Err(error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "tokenrein_invalid_request",
+            &format!("send OTLP {signal} as JSON (OTLP/HTTP with protocol http/json)"),
+        ));
+    }
+    serde_json::from_slice(body).map_err(|_| {
+        error(
+            StatusCode::BAD_REQUEST,
+            "tokenrein_invalid_request",
+            "invalid OTLP JSON",
+        )
+    })
 }
 
 /// OTLP logs from Claude Code, OpenAI Codex CLI and Gemini CLI.
@@ -918,23 +950,9 @@ pub async fn otel_logs(
         Ok(c) => c,
         Err(r) => return r,
     };
-    let content_type = header_str(&headers, CONTENT_TYPE.as_str()).unwrap_or("");
-    if !content_type.starts_with("application/json") {
-        return error(
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "tokenrein_invalid_request",
-            "send OTLP logs as JSON (OTLP/HTTP with protocol http/json)",
-        );
-    }
-    let doc: Value = match serde_json::from_slice(&body) {
-        Ok(v) => v,
-        Err(_) => {
-            return error(
-                StatusCode::BAD_REQUEST,
-                "tokenrein_invalid_request",
-                "invalid OTLP JSON",
-            );
-        }
+    let doc = match otlp_json(&headers, &body, "logs") {
+        Ok(d) => d,
+        Err(r) => return r,
     };
     let header_agent = header_str(&headers, "x-tr-agent").and_then(to_id);
     let header_user = header_str(&headers, "x-tr-user").filter(|u| valid_user(u));
@@ -1012,8 +1030,245 @@ pub async fn otel_logs(
     Json(json!({})).into_response()
 }
 
-/// OTLP traces and metrics: accepted and dropped. Gemini CLI exports them next to its logs when
-/// it sends OTLP over HTTP; Tokenrein only uses the logs.
+/// Whether a span comes from GitHub Copilot: the Copilot CLI runtime (`github-copilot`) or
+/// Copilot Chat in VS Code (`copilot-chat`). The service name can be changed, so the scope name
+/// and Copilot's own attributes count too.
+fn copilot_span(service: Option<&str>, scope: Option<&str>, a: &Map<String, Value>) -> bool {
+    let named = |n: &str| {
+        let n = n.to_ascii_lowercase();
+        n.starts_with("github-copilot")
+            || n.starts_with("github.copilot")
+            || n.starts_with("copilot")
+    };
+    service.is_some_and(named)
+        || scope.is_some_and(named)
+        || a.keys()
+            .any(|k| k.starts_with("github.copilot.") || k.starts_with("copilot_chat."))
+}
+
+/// Copilot's model ids as Tokenrein prices them: Copilot writes Claude versions with a dot
+/// (`claude-sonnet-4.5`), and reports its own API (`github`) as the provider of every model.
+fn copilot_model(provider: Option<&str>, model: &str) -> (Option<String>, String) {
+    let model = model.trim().to_ascii_lowercase();
+    let model = if model.starts_with("claude-") {
+        model.replace('.', "-")
+    } else {
+        model
+    };
+    let o_series = model
+        .strip_prefix('o')
+        .is_some_and(|r| r.starts_with(|c: char| c.is_ascii_digit()));
+    let inferred = if model.starts_with("claude") {
+        "anthropic"
+    } else if model.starts_with("gpt") || o_series {
+        "openai"
+    } else if model.starts_with("gemini") {
+        "google"
+    } else {
+        ""
+    };
+    let provider = match provider.map(str::to_ascii_lowercase) {
+        Some(p) if !p.is_empty() && !p.contains("github") && !p.contains("copilot") => p,
+        _ => inferred.to_string(),
+    };
+    (
+        Some(provider).filter(|p| !p.is_empty()),
+        model.chars().take(200).collect(),
+    )
+}
+
+/// A model call from a Copilot `chat` span; `None` for other spans and calls without tokens.
+/// See docs/connectors.md for the fields and where they are documented.
+fn read_copilot_span(a: &Map<String, Value>) -> Option<UsageEvent> {
+    if attr_str(a, "gen_ai.operation.name") != Some("chat") {
+        return None;
+    }
+    // The GenAI conventions count cached input (read and written) inside the input tokens, and
+    // reasoning inside the output tokens.
+    let input = attr_tokens(a, "gen_ai.usage.input_tokens");
+    let output = attr_tokens(a, "gen_ai.usage.output_tokens");
+    if input == 0 && output == 0 {
+        return None;
+    }
+    let cache_read = attr_tokens(a, "gen_ai.usage.cache_read.input_tokens").min(input);
+    // Copilot CLI 1.0.105 sends `cache_write`; its docs and VS Code say `cache_creation`.
+    let cache_write = [
+        "gen_ai.usage.cache_write.input_tokens",
+        "gen_ai.usage.cache_creation.input_tokens",
+    ]
+    .iter()
+    .map(|k| attr_tokens(a, k))
+    .max()
+    .unwrap_or(0)
+    .min(input - cache_read);
+    let model = attr_str(a, "gen_ai.response.model")
+        .or_else(|| attr_str(a, "gen_ai.request.model"))
+        .unwrap_or("unknown");
+    let (provider, model) = copilot_model(attr_str(a, "gen_ai.provider.name"), model);
+    Some(UsageEvent {
+        provider,
+        model,
+        input_tokens: input - cache_read - cache_write,
+        output_tokens: output,
+        cache_read_tokens: cache_read,
+        cache_write_tokens: cache_write,
+        request_id: attr_str(a, "gen_ai.response.id").map(|r| r.chars().take(200).collect()),
+        stream: a.get("gen_ai.request.stream").and_then(Value::as_bool),
+        ..UsageEvent::default()
+    })
+}
+
+/// A span's time as epoch nanoseconds (OTLP/JSON writes them as strings).
+fn span_nanos(span: &Value, k: &str) -> Option<i64> {
+    match span.get(k)? {
+        Value::String(s) => s.parse().ok(),
+        v => v.as_i64(),
+    }
+}
+
+/// OTLP traces. GitHub Copilot reports each model call's tokens on a `chat` span; those are
+/// charged, and `invoke_agent` spans mark the session as active. Spans from anything else (Gemini
+/// CLI exports traces next to its logs) are dropped.
+pub async fn otel_traces(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let c = match caller(&st, &headers) {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let doc = match otlp_json(&headers, &body, "traces") {
+        Ok(d) => d,
+        Err(r) => return r,
+    };
+    let header_agent = header_str(&headers, "x-tr-agent").and_then(to_id);
+    let header_user = header_str(&headers, "x-tr-user").filter(|u| valid_user(u));
+    let list = |v: &Value, k: &str| {
+        v.get(k)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    // Copilot spans, with their resource's attributes merged in.
+    let mut spans: Vec<(Value, Map<String, Value>)> = Vec::new();
+    for rs in list(&doc, "resourceSpans") {
+        let mut resource = Map::new();
+        attributes(rs.pointer("/resource/attributes"), &mut resource);
+        let service = attr_str(&resource, "service.name").map(str::to_string);
+        for ss in list(&rs, "scopeSpans") {
+            let scope = ss.pointer("/scope/name").and_then(Value::as_str);
+            for span in list(&ss, "spans") {
+                let mut a = resource.clone();
+                attributes(span.get("attributes"), &mut a);
+                if copilot_span(service.as_deref(), scope, &a) {
+                    spans.push((span, a));
+                }
+            }
+        }
+    }
+    // The session and user of each trace, from whichever span carries them: VS Code puts them
+    // on the `invoke_agent` span only, not on its `chat` spans.
+    let mut traces: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
+    for (span, a) in &spans {
+        let Some(trace) = span.get("traceId").and_then(Value::as_str) else {
+            continue;
+        };
+        let t = traces.entry(trace.to_string()).or_default();
+        if t.0.is_none() {
+            t.0 = attr_str(a, "gen_ai.conversation.id").map(str::to_string);
+        }
+        if t.1.is_none() {
+            t.1 = attr_str(a, "user.name").map(str::to_string);
+        }
+    }
+    let mut recorded = 0usize;
+    for (span, a) in &spans {
+        let usage = read_copilot_span(a);
+        if usage.is_none() && attr_str(a, "gen_ai.operation.name") != Some("invoke_agent") {
+            continue;
+        }
+        let trace_id = span.get("traceId").and_then(Value::as_str);
+        let in_trace = trace_id.and_then(|t| traces.get(t));
+        // Without a conversation id: VS Code's window (`session.id`), else the trace.
+        let session = attr_str(a, "gen_ai.conversation.id")
+            .or_else(|| in_trace.and_then(|t| t.0.as_deref()))
+            .or_else(|| attr_str(a, "session.id"))
+            .or(trace_id);
+        let Some((run, parent)) = session.and_then(|s| session_runs(Tool::Copilot, s, false))
+        else {
+            continue;
+        };
+        let who = Who {
+            run,
+            parent,
+            agent: header_agent
+                .clone()
+                .unwrap_or_else(|| Tool::Copilot.name().to_string()),
+            user: header_user
+                .or_else(|| attr_str(a, "user.name"))
+                .or_else(|| in_trace.and_then(|t| t.1.as_deref()))
+                .filter(|u| valid_user(u))
+                .map(str::to_string),
+            source: Tool::Copilot.name().into(),
+            run_budget_usd: None,
+        };
+        let result = match usage {
+            Some(mut ev) => {
+                // An exporter retries a batch that failed part-way; each span is charged once.
+                let span_id = span.get("spanId").and_then(Value::as_str).unwrap_or("");
+                let id = config::sha256_hex(&format!("{}:{span_id}", trace_id.unwrap_or("")));
+                let first = if span_id.is_empty() {
+                    Ok(true)
+                } else {
+                    st.ledger
+                        .first_time(
+                            &Keys::new(&c.org().id).import_seen(Tool::Copilot.name(), &id),
+                            2 * 24 * 3600,
+                        )
+                        .await
+                };
+                let start = span_nanos(span, "startTimeUnixNano");
+                let end = span_nanos(span, "endTimeUnixNano");
+                ev.duration_ms = start
+                    .zip(end)
+                    .map(|(s, e)| ((e - s).max(0) / 1_000_000) as u64);
+                ev.ts = end
+                    .filter(|e| *e > 0)
+                    .map(|e| Utc.timestamp_nanos(e).to_rfc3339());
+                match first {
+                    Ok(true) => record_usage(&st, &c, &ev, &who)
+                        .await
+                        .map(|_| recorded += 1),
+                    Ok(false) => Ok(()),
+                    Err(e) => Err(e),
+                }
+            }
+            None => {
+                st.ledger
+                    .touch(
+                        &c.org().id,
+                        &c.project().id,
+                        &who.agent,
+                        who.user.as_deref(),
+                        &who.run,
+                        who.parent.as_deref(),
+                        &who.source,
+                        false,
+                    )
+                    .await
+            }
+        };
+        if let Err(e) = result {
+            return unavailable(e);
+        }
+    }
+    tracing::debug!(recorded, "otlp traces ingested");
+    Json(json!({})).into_response()
+}
+
+/// OTLP metrics: accepted and dropped. Gemini CLI and Copilot export them next to their logs or
+/// traces; Tokenrein uses those instead, which say which session each call belongs to.
 pub async fn otel_discard(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     match caller(&st, &headers) {
         Ok(_) => Json(json!({})).into_response(),
@@ -1052,7 +1307,10 @@ fn read_hook(tool: Tool, input: &Value) -> Option<HookCall<'_>> {
             .and_then(Value::as_str)
             .filter(|v| !v.is_empty())
     };
-    let event = s("hook_event_name").unwrap_or("");
+    // Copilot's camelCase payloads carry no event name; the Tokenrein hook adds it.
+    let event = s("hook_event_name")
+        .or_else(|| s("hookEventName"))
+        .unwrap_or("");
     let (gate, ended) = match (tool, event) {
         (Tool::ClaudeCode | Tool::Codex, "UserPromptSubmit") => (Some(Gate::Prompt), false),
         (Tool::ClaudeCode | Tool::Codex, "PreToolUse") => (Some(Gate::Tool), false),
@@ -1068,6 +1326,10 @@ fn read_hook(tool: Tool, input: &Value) -> Option<HookCall<'_>> {
         }
         (Tool::Cursor, "subagentStart") => (Some(Gate::Subagent), false),
         (Tool::Cursor, "sessionEnd") => (None, true),
+        // Copilot only lets preToolUse refuse anything: prompt hooks' answers are dropped, and
+        // subagentStart can't stop a sub-agent.
+        (Tool::Copilot, "PreToolUse" | "preToolUse") => (Some(Gate::Tool), false),
+        (Tool::Copilot, "SessionEnd" | "sessionEnd") => (None, true),
         _ => (None, false),
     };
     let (session, subagent) = match tool {
@@ -1085,6 +1347,9 @@ fn read_hook(tool: Tool, input: &Value) -> Option<HookCall<'_>> {
                 .or_else(|| s("session_id"))?,
             false,
         ),
+        // The VS Code-compatible (PascalCase) events send snake_case fields, the native ones
+        // camelCase. Sub-agents' hooks carry the session's id, like their usage.
+        Tool::Copilot => (s("session_id").or_else(|| s("sessionId"))?, false),
     };
     Some(HookCall {
         event,
@@ -1127,6 +1392,10 @@ fn hook_block(tool: Tool, gate: Gate, event: &str, reason: &str) -> Value {
             "permission": "deny",
             "user_message": reason,
             "agent_message": reason,
+        }),
+        (Tool::Copilot, _) => json!({
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
         }),
     }
 }
@@ -1252,6 +1521,15 @@ pub async fn cursor_hook(
     Json(input): Json<Value>,
 ) -> Response {
     agent_hook(&st, &headers, &input, Tool::Cursor).await
+}
+
+/// GitHub Copilot CLI command hooks, forwarded by the Tokenrein hook script.
+pub async fn copilot_hook(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(input): Json<Value>,
+) -> Response {
+    agent_hook(&st, &headers, &input, Tool::Copilot).await
 }
 
 #[cfg(test)]
@@ -1393,5 +1671,102 @@ mod tests {
         let input = json!({"hook_event_name": "subagentStart", "parent_conversation_id": "c1"});
         let call = read_hook(Tool::Cursor, &input).unwrap();
         assert_eq!((call.session, call.gate), ("c1", Some(Gate::Subagent)));
+        let block = hook_block(Tool::Copilot, Gate::Tool, "preToolUse", r);
+        assert_eq!(
+            block,
+            json!({"permissionDecision": "deny", "permissionDecisionReason": "over"})
+        );
+        assert_eq!(hook_allow(Tool::Copilot, Some(Gate::Tool)), json!({}));
+    }
+
+    #[test]
+    fn copilot_hooks_in_both_payload_formats() {
+        // Native events (camelCase fields; the Tokenrein hook adds the event name).
+        let native = json!({"hook_event_name": "preToolUse", "sessionId": "s1",
+                            "timestamp": 1704614600000_i64, "cwd": "/repo",
+                            "toolName": "bash", "toolArgs": {"command": "ls"}});
+        let call = read_hook(Tool::Copilot, &native).unwrap();
+        assert_eq!((call.session, call.gate), ("s1", Some(Gate::Tool)));
+        assert!(tool_fingerprint(&native).is_some());
+        // VS Code-compatible events (snake_case fields).
+        let vscode = json!({"hook_event_name": "PreToolUse", "session_id": "s1",
+                            "tool_name": "Bash", "tool_input": {"command": "ls"}});
+        assert_eq!(
+            read_hook(Tool::Copilot, &vscode).unwrap().gate,
+            Some(Gate::Tool)
+        );
+        // Prompt hooks can't block in Copilot; they only mark the session active.
+        let prompt = json!({"hook_event_name": "userPromptSubmitted", "sessionId": "s1"});
+        assert_eq!(read_hook(Tool::Copilot, &prompt).unwrap().gate, None);
+        let end = json!({"hook_event_name": "sessionEnd", "sessionId": "s1", "reason": "complete"});
+        assert!(read_hook(Tool::Copilot, &end).unwrap().ended);
+        let (run, parent) = session_runs(Tool::Copilot, "s1", false).unwrap();
+        assert_eq!((run.as_str(), parent), ("copilot-s1", None));
+    }
+
+    #[test]
+    fn copilot_chat_spans() {
+        let a = attrs(json!([
+            {"key": "gen_ai.operation.name", "value": {"stringValue": "chat"}},
+            {"key": "gen_ai.provider.name", "value": {"stringValue": "github"}},
+            {"key": "gen_ai.request.model", "value": {"stringValue": "claude-sonnet-4.5"}},
+            {"key": "gen_ai.usage.input_tokens", "value": {"intValue": "10000"}},
+            {"key": "gen_ai.usage.output_tokens", "value": {"intValue": "500"}},
+            {"key": "gen_ai.usage.cache_read.input_tokens", "value": {"intValue": "8000"}},
+            {"key": "gen_ai.usage.cache_write.input_tokens", "value": {"intValue": "1000"}},
+        ]));
+        let u = read_copilot_span(&a).unwrap();
+        assert_eq!(u.provider.as_deref(), Some("anthropic"));
+        assert_eq!(u.model, "claude-sonnet-4-5");
+        // Cached input, read and written, is counted inside the input tokens.
+        assert_eq!(
+            (
+                u.input_tokens,
+                u.cache_read_tokens,
+                u.cache_write_tokens,
+                u.output_tokens
+            ),
+            (1000, 8000, 1000, 500)
+        );
+        // The documented name for cache writes is read too.
+        let mut documented = a.clone();
+        let w = documented
+            .remove("gen_ai.usage.cache_write.input_tokens")
+            .unwrap();
+        documented.insert("gen_ai.usage.cache_creation.input_tokens".into(), w);
+        assert_eq!(
+            read_copilot_span(&documented).unwrap().cache_write_tokens,
+            1000
+        );
+        assert_eq!(
+            copilot_model(Some("openai"), "gpt-5.1"),
+            (Some("openai".into()), "gpt-5.1".into())
+        );
+        assert_eq!(
+            copilot_model(Some("github"), "o4-mini").0.as_deref(),
+            Some("openai")
+        );
+        assert_eq!(
+            copilot_model(None, "gemini-2.5-pro").0.as_deref(),
+            Some("google")
+        );
+        assert_eq!(copilot_model(Some("github"), "raptor").0, None);
+        // Agent invocations carry the session's totals; they are not counted again.
+        let agent = attrs(json!([
+            {"key": "gen_ai.operation.name", "value": {"stringValue": "invoke_agent"}},
+            {"key": "gen_ai.usage.input_tokens", "value": {"intValue": "10000"}},
+        ]));
+        assert!(read_copilot_span(&agent).is_none());
+        assert!(copilot_span(Some("github-copilot"), None, &Map::new()));
+        assert!(copilot_span(
+            Some("my-copilot"),
+            Some("github.copilot"),
+            &Map::new()
+        ));
+        assert!(!copilot_span(
+            Some("gemini-cli"),
+            Some("gemini-cli"),
+            &agent
+        ));
     }
 }

@@ -7,6 +7,13 @@ SDKs; the release workflow refuses a tag that does not match all three.
 
 ## [Unreleased]
 
+### Added
+- GitHub Copilot CLI connector (`/connect/copilot.py`): usage (model and tokens of each call)
+  from Copilot's OpenTelemetry traces, read at `POST /v1/otel/v1/traces`, and command hooks at
+  `POST /v1/hooks/copilot` that refuse the next tool call when a run is paused, over budget or
+  looping. `--policy` sets up every user of a machine with Copilot policy hooks and managed
+  telemetry settings. Spend is an estimate at API prices; GitHub bills premium requests.
+
 ## [0.1.2] - 2026-10-31
 
 ### Added

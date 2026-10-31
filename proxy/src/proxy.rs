@@ -93,7 +93,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/usage", post(crate::ingest::usage))
         .route("/v1/check", post(crate::ingest::check))
         .route("/v1/otel/v1/logs", post(crate::ingest::otel_logs))
-        .route("/v1/otel/v1/traces", post(crate::ingest::otel_discard))
+        .route("/v1/otel/v1/traces", post(crate::ingest::otel_traces))
         .route("/v1/otel/v1/metrics", post(crate::ingest::otel_discard))
         .route(
             "/v1/hooks/claude-code",
@@ -102,6 +102,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/hooks/codex", post(crate::ingest::codex_hook))
         .route("/v1/hooks/gemini", post(crate::ingest::gemini_hook))
         .route("/v1/hooks/cursor", post(crate::ingest::cursor_hook))
+        .route("/v1/hooks/copilot", post(crate::ingest::copilot_hook))
         .route("/healthz", get(|| async { "ok" }))
         .layer(DefaultBodyLimit::max(limit))
         .layer(axum::middleware::map_request(legacy_headers))

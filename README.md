@@ -2,8 +2,8 @@
 
 **Spend guardrails for AI agents.** Give every agent run, agent and project a budget, stop runaway
 loops before they reach the invoice, and let a person approve the runs that need more. Works with
-Claude Code, Codex CLI, Gemini CLI, Cursor and your own agents on any LLM. Self-hosted, with single
-sign-on and an audit log.
+Claude Code, Codex CLI, Gemini CLI, Cursor, GitHub Copilot CLI and your own agents on any LLM.
+Self-hosted, with single sign-on and an audit log.
 
 [![ci](https://github.com/tokenrein/tokenrein/actions/workflows/ci.yml/badge.svg)](https://github.com/tokenrein/tokenrein/actions/workflows/ci.yml)
 
@@ -25,7 +25,7 @@ sign-on and an audit log.
 ```mermaid
 flowchart LR
   subgraph agents["Your agents"]
-    cc["Claude Code · Codex CLI<br/>Gemini CLI · Cursor"]
+    cc["Claude Code · Codex CLI<br/>Gemini CLI · Cursor · Copilot CLI"]
     app["Your app<br/>(Python / TypeScript SDK)"]
     tool["Any tool with a base URL"]
   end
@@ -96,7 +96,7 @@ Kubernetes: `helm install tokenrein deploy/helm/tokenrein`. See [docs/install.md
 | Agent | How |
 |---|---|
 | Claude Code | `curl -fsSL http://127.0.0.1:8788/connect/claude-code.py \| python3 - --key tr_… --url http://127.0.0.1:8787` |
-| Codex CLI · Gemini CLI · Cursor | the same command with `codex.py`, `gemini.py` or `cursor.py` |
+| Codex CLI · Gemini CLI · Cursor · GitHub Copilot CLI | the same command with `codex.py`, `gemini.py`, `cursor.py` or `copilot.py` (`sudo … --policy` sets Copilot up for every user of a machine) |
 | Python | `client = guard.openai(OpenAI(), agent="support-bot")` ([sdk/python](sdk/python)) |
 | TypeScript | `const client = guard.anthropic(new Anthropic(), { agent: 'support-bot' })` ([sdk/typescript](sdk/typescript)) |
 | Anything else | base URL `http://127.0.0.1:8787` (OpenAI-style: `…/v1`), API key `tr_…` |

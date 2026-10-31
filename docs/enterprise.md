@@ -19,7 +19,7 @@ and what it stores.
 ```mermaid
 flowchart TB
   subgraph clients["Developer machines and services"]
-    agents["Coding agents (Claude Code, Codex CLI,<br/>Gemini CLI, Cursor)"]
+    agents["Coding agents (Claude Code, Codex CLI,<br/>Gemini CLI, Cursor, Copilot CLI)"]
     apps["Apps with the SDK"]
     tools["Tools using the proxy"]
   end

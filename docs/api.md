@@ -31,7 +31,7 @@ to read, approver for run actions, admin to change things); `/admin/orgs` (creat
 | `GET` | `/admin/packs` | Guardrail packs and their budgets |
 | `GET` | `/admin/models?org=` | Priced models (built-in and yours), models seen recently, unpriced ones |
 | `PUT` | `/admin/pricing` | Replace your price overrides `{overrides: [{provider, model, input_per_mtok, output_per_mtok, cached_input_per_mtok?, cache_write_per_mtok?}]}` |
-| `GET` | `/connect/{claude-code,codex,gemini,cursor}.py` | The coding-agent connector scripts (no secrets; run with `--key`, undo with `--remove`) |
+| `GET` | `/connect/{claude-code,codex,gemini,cursor,copilot}.py` | The coding-agent connector scripts (no secrets; run with `--key`, undo with `--remove`) |
 | `GET` / `PUT` / `DELETE` | `/admin/orgs/{org}/connectors/cursor` | Cursor usage import: status (last run, calls imported, error) / save `{project, api_key?}` (encrypted; omit the key to keep it) / remove |
 | `POST` | `/admin/orgs/{org}/connectors/cursor/sync` | Import Cursor usage now (it also runs hourly) |
 | `POST` | `/admin/orgs/{org}/projects/{project}/pack` | Apply `{pack}`: replaces the project's budgets, all in Check mode |

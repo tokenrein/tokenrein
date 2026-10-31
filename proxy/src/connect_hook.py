@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Tokenrein hook for coding agents whose hooks run commands (Codex CLI, Gemini CLI, Cursor).
+"""Tokenrein hook for coding agents whose hooks run commands (Codex CLI, Gemini CLI, Cursor,
+GitHub Copilot CLI).
 
 The agent runs `python3 ~/.tokenrein/hook.py <tool>` with the hook event as JSON on stdin. This
 forwards it to Tokenrein and prints Tokenrein's answer, which blocks the prompt or tool call when
-a run is paused or a budget is used up. The URL and key come from ~/.tokenrein/<tool>.json,
-written by the connect script. It never blocks the agent because Tokenrein is unreachable.
+a run is paused or a budget is used up. The URL and key come from <tool>.json next to this file
+(~/.tokenrein, or /etc/tokenrein for machine-wide Copilot policy hooks), written by the connect
+script. An event name after the tool is added to payloads that don't name their event. It never blocks the agent because Tokenrein is unreachable.
 Standard library only.
 """
 
@@ -14,7 +16,7 @@ import os
 import sys
 import urllib.request
 
-TOOLS = {"codex", "gemini", "cursor"}
+TOOLS = {"codex", "gemini", "cursor", "copilot"}
 
 
 def allow(tool, event):
@@ -31,14 +33,18 @@ def main():
     tool = sys.argv[1] if len(sys.argv) > 1 else ""
     raw = sys.stdin.buffer.read()
     try:
-        event = json.loads(raw or b"{}").get("hook_event_name", "")
-    except (ValueError, AttributeError):
+        doc = json.loads(raw or b"{}")
+        event = doc.get("hook_event_name", "")
+        if not event and len(sys.argv) > 2:
+            event = doc["hook_event_name"] = sys.argv[2]
+            raw = json.dumps(doc).encode()
+    except (ValueError, AttributeError, TypeError):
         event = ""
     answer = allow(tool, event)
     try:
         if tool not in TOOLS:
             raise ValueError("unknown tool " + tool)
-        home = os.path.join(os.path.expanduser("~"), ".tokenrein")
+        home = os.path.dirname(os.path.abspath(__file__))
         with open(os.path.join(home, tool + ".json")) as f:
             cfg = json.load(f)
         headers = {

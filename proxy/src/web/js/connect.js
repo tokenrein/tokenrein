@@ -28,6 +28,12 @@ const AGENTS = [
     checks: ["Each agent conversation shows up as a run, with the user's email",
       "Stops the next prompt, tool call or sub-agent when a run is paused or an enforced limit is used up",
       "Spend comes from Cursor's Admin API (team plans): add the key below"] },
+  { id: "copilot", name: "GitHub Copilot CLI", script: "copilot", prefix: "copilot-", tag: "No code · org-wide policy",
+    files: "~/.copilot/hooks/tokenrein.json and your shell profile",
+    after: "Then open a new terminal and start <span class=\"mono\">copilot</span>.", policy: true,
+    checks: ["Every model call from its OpenTelemetry traces: model, tokens (cached input priced as such)",
+      "Stops the next tool call when a run is paused or an enforced limit is used up",
+      "GitHub bills premium requests, so spend is an estimate at the model's API prices"] },
 ];
 
 function agentState(id) {
@@ -95,7 +101,10 @@ function agentCard(a, projects) {
        ${cmdBlock(connectCommand(a, st.key))}
        <p class="help" style="margin:0">It contains your new key, shown only now. It edits <span class="mono">${esc(a.files)}</span> (with a backup) and checks the key first. ${a.after}</p>
        ${a.id === "claude-code" ? `<details class="more"><summary>Prefer to edit the settings yourself?</summary>
-         <p class="help">Merge this into <span class="mono">~/.claude/settings.json</span>, keeping your existing hooks:</p>${cmdBlock(claudeCodeSettings(st.key))}</details>` : ""}`
+         <p class="help">Merge this into <span class="mono">~/.claude/settings.json</span>, keeping your existing hooks:</p>${cmdBlock(claudeCodeSettings(st.key))}</details>` : ""}
+       ${a.policy ? `<details class="more"><summary>Set it up for every user of a machine instead</summary>
+         <p class="help">Run as root (from MDM or a machine image): Copilot policy hooks users can't turn off, and telemetry in Copilot's managed settings with each developer's GitHub login.</p>
+         ${cmdBlock(`curl -fsSL ${adminUrl()}/connect/${a.script}.py | sudo python3 - --policy --key ${st.key} --url ${proxyUrl()}`)}</details>` : ""}`
     : `<div class="step-h"><span class="n">2</span>Create a key and get the command</div>
        <div>${can("admin") ? `<button class="btn primary" data-agent-key="${a.id}" ${st.project ? "" : "disabled"}>Create key &amp; show command</button>` : `<span class="muted">Ask an admin of ${esc(S.org)} to create a key.</span>`}</div>`;
   return `<div class="card connect-card">
@@ -110,7 +119,8 @@ function agentCard(a, projects) {
       </div>
       ${keyStep}
       ${a.id === "cursor" ? cursorImport(projects) : ""}
-      <details class="more"><summary>Disconnect later</summary>${cmdBlock(`curl -fsSL ${adminUrl()}/connect/${a.script}.py | python3 - --remove`)}</details>
+      <details class="more"><summary>Disconnect later</summary>${cmdBlock(`curl -fsSL ${adminUrl()}/connect/${a.script}.py | python3 - --remove`)}
+        ${a.policy ? cmdBlock(`curl -fsSL ${adminUrl()}/connect/${a.script}.py | sudo python3 - --policy --remove`) : ""}</details>
     </div>
   </div>`;
 }

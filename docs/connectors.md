@@ -6,7 +6,7 @@ its hooks to refuse the next prompt or tool call when a run is paused or killed,
 budget is used up. This page lists the exact fields Tokenrein relies on, and where each is
 documented, so the mappers can be checked when the agents change.
 
-Checked against the agents' docs and source on 2026-10-22.
+Checked against the agents' docs and source on 2026-10-22 (GitHub Copilot: 2026-10-31).
 
 | Agent | Usage from | Blocks with | Run id | Connect script |
 |---|---|---|---|---|
@@ -14,15 +14,16 @@ Checked against the agents' docs and source on 2026-10-22.
 | OpenAI Codex CLI | OTLP logs, `codex.sse_event` (`response.completed`) | command hooks | `codex-<conversation.id>` | `/connect/codex.py` |
 | Gemini CLI | OTLP logs, `gemini_cli.api_response` | command hooks | `gemini-<session.id>` (`-sub` for sub-agents) | `/connect/gemini.py` |
 | Cursor | Admin API usage events (team plans) | command hooks | `cursor-<conversation_id>` | `/connect/cursor.py` |
+| GitHub Copilot CLI | OTLP traces, `chat` spans | command hooks (tool calls only) | `copilot-<sessionId>` | `/connect/copilot.py` |
 
 All endpoints are on the proxy listener (`:8787`) and take a Tokenrein key
 (`Authorization: Bearer tr_…`). `x-tr-agent` and `x-tr-user` headers override the agent name
-(default: `claude-code`, `codex`, `gemini-cli`, `cursor`) and the user.
+(default: `claude-code`, `codex`, `gemini-cli`, `cursor`, `copilot`) and the user.
 
-Codex CLI, Gemini CLI and Cursor only run *command* hooks (no HTTP hooks), so their connect
+Codex CLI, Gemini CLI, Cursor and Copilot CLI get *command* hooks, so their connect
 scripts install `~/.tokenrein/hook.py` (Python standard library). The agent runs
 `python3 ~/.tokenrein/hook.py <tool>` with the hook event on stdin; it posts the event to
-`/v1/hooks/<tool>` with the key from `~/.tokenrein/<tool>.json` (mode 0600) and prints
+`/v1/hooks/<tool>` with the key from `<tool>.json` next to it (`~/.tokenrein`, mode 0600) and prints
 Tokenrein's answer. If Tokenrein can't be reached in 4 seconds it prints the agent's "allow"
 answer: a Tokenrein outage never stops anyone's agent. The server also fails open when its
 ledger is down.
@@ -169,10 +170,123 @@ provider keys, bound to the org, and never returned.
 - Imported spend is charged to today's budgets when it arrives, up to an hour after the calls.
   The hooks then stop the next prompt once an enforced budget is used up.
 
+## GitHub Copilot CLI
+
+Docs: [hooks reference](https://docs.github.com/en/copilot/reference/hooks-reference),
+[Copilot CLI OpenTelemetry monitoring](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference#opentelemetry-monitoring),
+[OpenTelemetry for agent monitoring](https://docs.github.com/en/copilot/concepts/enterprise/opentelemetry),
+[enterprise managed settings](https://docs.github.com/en/copilot/reference/enterprise-administrators/enterprise-managed-settings)
+(`telemetry`), [CLI configuration directory](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference)
+(managed settings locations), and VS Code's [Monitor agent usage with OpenTelemetry](https://code.visualstudio.com/docs/agents/guides/monitoring-agents).
+Checked end to end with Copilot CLI 1.0.105 on macOS (`copilot -p`, user-level setup): the
+hooks, the trace export, the session id and the token fields below are as Copilot sent them. Where
+the docs differ, this page follows what Copilot sent. The `--policy` setup and VS Code were not
+tried with a real client.
+
+**Telemetry.** Copilot CLI exports OpenTelemetry *traces and metrics* (no logs) when
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set; the default protocol is `http/json`. The connect script
+writes `~/.tokenrein/copilot.sh` (mode 0600), sourced from `~/.zshrc` / `~/.bashrc`, which runs
+the `copilot` command with:
+
+```sh
+COPILOT_OTEL_ENABLED=true
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:8787/v1/otel     # Copilot appends /v1/traces, /v1/metrics
+OTEL_EXPORTER_OTLP_PROTOCOL=http/json
+OTEL_EXPORTER_OTLP_HEADERS='Authorization=Bearer tr_…,x-tr-agent=copilot'
+OTEL_BSP_SCHEDULE_DELAY=1000     # send spans within a second, not when the session ends
+```
+
+Only the `copilot` command gets them (a shell function), so other OpenTelemetry programs keep their
+own setup. `--no-profile` leaves the shell profiles alone and prints the line to add.
+
+Without `OTEL_BSP_SCHEDULE_DELAY`, Copilot CLI 1.0.105 sent a short session's spans only when
+the session ended, so a session's own spend could not stop its later tool calls (only the next
+session's, through agent, project and org budgets). With it, spans arrive about a second after
+each model call.
+
+- Each model call is a `chat` span (`gen_ai.operation.name = "chat"`, kind CLIENT) carrying
+  `gen_ai.conversation.id` (the session; the run), `gen_ai.provider.name`,
+  `gen_ai.request.model` / `gen_ai.response.model`, `gen_ai.usage.input_tokens`,
+  `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`,
+  `gen_ai.usage.cache_write.input_tokens`, `gen_ai.response.id`, `github.copilot.cost` (the
+  premium-request multiplier, not money) and `github.copilot.nano_aiu`. Token counts arrive as
+  strings (`intValue`). GitHub's docs and VS Code name the cache-write count
+  `gen_ai.usage.cache_creation.input_tokens`; Tokenrein reads either.
+- The GenAI conventions count cached input inside `input_tokens`, so Tokenrein charges
+  `input − cache_read − cache_write` at the input price, `cache_read` at the cached price and
+  `cache_write` at the cache-write price (in a real export, `cache_read + cache_write` stayed
+  within `input_tokens`). Reasoning is inside `output_tokens`.
+- Copilot reports its own API (`github`) as the provider; Tokenrein prices the model at its
+  maker's API price (`claude-*` → Anthropic, `gpt-*`/`o<N>` → OpenAI, `gemini-*` → Google), and
+  writes Copilot's Claude ids with dashes (`claude-sonnet-4.5` → `claude-sonnet-4-5`). Spend is an
+  estimate: GitHub bills premium requests (and AI units), not tokens. Copilot also serves models
+  with no public API price (e.g. `gpt-6-luna`, or `mai-code-1.1-flash`, which its automatic model
+  choice picked); they are charged at the most expensive price Tokenrein knows (for a model with no
+  known maker, $15 / $75 per million tokens) and listed as unpriced under Models & prices until an
+  admin adds a price. Add prices for the models your developers use, or spend is overstated.
+- The `invoke_agent` span carries the totals of one agent invocation; it only marks the session as
+  active, so nothing is counted twice. `execute_tool` spans and metrics are dropped.
+- Spans count as Copilot's if the resource's `service.name` or the scope name starts with
+  `github-copilot`, `github.copilot` or `copilot`, or the span has `github.copilot.*` /
+  `copilot_chat.*` attributes. Other agents' spans are dropped.
+- `user.name` (the GitHub login) is only sent when identity capture is on (managed settings
+  `telemetry.capture.identity`, which `--policy` sets); otherwise pass `--user`.
+- Exporters retry failed batches, so each span (`traceId` + `spanId`) is charged once (remembered
+  for two days).
+- VS Code's Copilot Chat puts the session only on the `invoke_agent` span; Tokenrein takes it from
+  the span with the same `traceId` in the same batch, else the resource's `session.id` (one VS Code
+  window), else the trace.
+
+**Hooks.** `~/.copilot/hooks/tokenrein.json` (`$COPILOT_HOME/hooks` if set), `{"version": 1,
+"hooks": {…}}`, command entries (`bash`, `timeoutSec`). The native camelCase events send camelCase
+fields and don't name the event, so the command passes it: `python3 ~/.tokenrein/hook.py copilot
+preToolUse`, and the hook adds `hook_event_name`. VS Code-compatible PascalCase events
+(`PreToolUse`, snake_case fields) are read too.
+
+| Event | Input used | Blocking answer |
+|---|---|---|
+| `preToolUse` | `sessionId`, `toolName`, `toolArgs` (loop guard) | `{"permissionDecision": "deny", "permissionDecisionReason": …}` |
+| `userPromptSubmitted` | `sessionId` | — (Copilot drops command hooks' answers to prompts; marks the session active) |
+| `sessionEnd` | `sessionId` | — (marks the run ended) |
+
+Allowing is `{}` (Copilot's default permission flow). A denied tool call is not run; Copilot
+shows "Command blocked: budget limit reached." and passes the reason to the model. `sessionEnd`
+also carries a `traceparent` (the session's trace), which isn't used. `subagentStart` can't stop a sub-agent, and
+sub-agents' hooks carry the session's id, so their tool calls are checked against the session's
+run. Command `preToolUse` hooks fail *closed* when the command crashes or exits non-zero, but open
+on a timeout; the hook always exits 0 and prints `{}` when Tokenrein can't be reached.
+
+**Every user of a machine (`--policy`, as root).** For MDM or machine images:
+
+- `/etc/github-copilot/policy.d/tokenrein.json`: Copilot *policy hooks*, loaded before all others,
+  not turned off by `disableAllHooks`, and run on the host even in a sandboxed session. Root-owned,
+  mode 0644 (Copilot ignores group- or world-writable policy files).
+- `/etc/tokenrein/hook.py` and `/etc/tokenrein/copilot.json` (mode 0644: every user's hooks read
+  the key there).
+- Copilot's managed settings, `/Library/Application Support/GitHubCopilot/managed-settings.json`
+  on macOS or `/etc/github-copilot/managed-settings.json` on Linux: `telemetry` with `enabled`,
+  `endpoint` (`…/v1/otel`), `protocol: "http/json"`, `headers` and `capture: {"identity": true}`.
+  Managed values override users' settings and environment. Other keys in the file are kept; an
+  existing `telemetry` block that isn't Tokenrein's is left alone and the script stops.
+
+Undo with `sudo python3 copilot.py --policy --remove`. Managed settings have no export-interval
+setting, so with `--policy` alone a session's spend may only arrive when it ends; set
+`OTEL_BSP_SCHEDULE_DELAY=1000` in users' environment as well for tool calls to be stopped within
+the session.
+
 ## Not covered
 
 - Codex and Gemini report tokens, not cost: unknown models are charged at the provider's most
   expensive price until you add one under Models & prices.
 - Cursor without a team Admin API key: conversations are tracked and can be paused, but their
   spend is not known to Tokenrein.
-- Cloud agents (Cursor background agents, Codex cloud) don't run user-level hooks.
+- Cloud agents (Cursor background agents, Codex cloud, Copilot cloud agent) don't run user-level
+  hooks. Copilot's cloud agent only runs `.github/hooks/*.json` from the repository, behind its
+  firewall.
+- Copilot can only be stopped before a tool call: its prompt hooks can't refuse a prompt, so a
+  paused run still gets one model answer to the next prompt.
+- Copilot in VS Code: managed settings (`--policy`) also turn on VS Code's export, but VS Code may
+  send OTLP as protobuf, which Tokenrein refuses (415); it reads OTLP/JSON only. VS Code's own
+  agent hooks are not installed by the script.
+- Copilot spend is priced from tokens; `github.copilot.nano_aiu` and premium-request multipliers
+  are not converted to dollars.
