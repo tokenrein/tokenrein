@@ -90,6 +90,7 @@ curl -fsSL https://tokenrein.example.com/connect/claude-code.py | python3 - --ke
 curl -fsSL https://tokenrein.example.com/connect/codex.py       | python3 - --key tr_… --url …
 curl -fsSL https://tokenrein.example.com/connect/gemini.py      | python3 - --key tr_… --url …
 curl -fsSL https://tokenrein.example.com/connect/cursor.py      | python3 - --key tr_… --url …
+curl -fsSL https://tokenrein.example.com/connect/copilot.py     | python3 - --key tr_… --url …
 ```
 
 The scripts use only the Python standard library, back up every file they change, and are undone
@@ -101,9 +102,10 @@ with `--remove`. Optional: `--agent NAME`, `--user EMAIL`.
 | Codex CLI | its OpenTelemetry logs | command hooks (run `/hooks` once in Codex to trust them) |
 | Gemini CLI | its OpenTelemetry logs | command hooks, including before each model call |
 | Cursor | the team's Admin API (an admin saves its key on the Connect page; imported hourly) | hooks before prompts, tool calls, shell and MCP commands |
+| GitHub Copilot CLI | its OpenTelemetry traces (model and tokens per call; spend is an estimate at API prices, since GitHub bills premium requests) | command hooks before each tool call (Copilot can't refuse a prompt from a hook) |
 
 Each session is a run (`cc-<session>`, `codex-<session>`, `gemini-<session>`,
-`cursor-<conversation>`); sub-agents get their own runs under it. Hooks also feed the loop guard:
+`cursor-<conversation>`, `copilot-<session>`); sub-agents get their own runs under it. Hooks also feed the loop guard:
 the same tool call with the same input over and over pauses the session. What each connector reads
 and changes is in [connectors.md](connectors.md).
 
@@ -180,7 +182,7 @@ them; you can call them from anything.
 | `POST /v1/check` | "May this run make another call?" Body: `run_id`, `parent_run_id`, `agent`, `user`, `model`, `max_output_tokens` or `estimate_usd`, `fingerprint` (16-128 hex). Answers `{allowed, reason, scope, run_state}` |
 | `POST /v1/usage` | Report calls that happened: `{"events": [{run_id, parent_run_id, agent, user, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd?, duration_ms}]}`. Priced from the model list unless `cost_usd` is given. Answers the enforced limits now used up |
 | `POST /v1/otel/v1/logs` | OpenTelemetry logs (HTTP/JSON) from Claude Code, Codex CLI and Gemini CLI |
-| `POST /v1/hooks/{claude-code,codex,gemini,cursor}` | The agents' hooks; answers in each agent's own format and fails open |
+| `POST /v1/hooks/{claude-code,codex,gemini,cursor,copilot}` | The agents' hooks; answers in each agent's own format and fails open |
 
 ## Model prices
 

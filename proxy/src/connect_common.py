@@ -130,31 +130,33 @@ def write_json(path, doc):
     write_text(path, json.dumps(doc, indent=2) + "\n")
 
 
-def install_hook(tool, url, key, agent, user):
-    """Write ~/.tokenrein/hook.py and the tool's settings for it (URL and key, owner-only)."""
-    d = tokenrein_dir()
-    os.makedirs(d, mode=0o700, exist_ok=True)
+def install_hook(tool, url, key, agent, user, d=None, mode=0o600):
+    """Write ~/.tokenrein/hook.py and the tool's settings for it (URL and key, owner-only unless
+    `mode` says otherwise)."""
+    d = d or tokenrein_dir()
+    os.makedirs(d, mode=0o700 if mode == 0o600 else 0o755, exist_ok=True)
     with open(os.path.join(d, "hook.py"), "w") as f:
         f.write(HOOK_PY)
+    os.chmod(os.path.join(d, "hook.py"), 0o644)
     cfg = {"url": url, "key": key, "agent": agent, "user": user or None, "timeout": 4}
     path = os.path.join(d, tool + ".json")
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(cfg, f, indent=2)
         f.write("\n")
-    os.chmod(tmp, 0o600)
+    os.chmod(tmp, mode)
     os.replace(tmp, path)
 
 
-def remove_hook(tool):
+def remove_hook(tool, d=None):
     """Delete the tool's hook settings, and the hook once no tool uses it."""
-    d = tokenrein_dir()
+    d = d or tokenrein_dir()
     removed = False
     path = os.path.join(d, tool + ".json")
     if os.path.exists(path):
         os.remove(path)
         removed = True
-    others = [t for t in ("codex", "gemini", "cursor") if os.path.exists(os.path.join(d, t + ".json"))]
+    others = [t for t in ("codex", "gemini", "cursor", "copilot") if os.path.exists(os.path.join(d, t + ".json"))]
     if not others and os.path.exists(os.path.join(d, "hook.py")):
         os.remove(os.path.join(d, "hook.py"))
     return removed

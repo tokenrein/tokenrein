@@ -1,5 +1,5 @@
-//! Coding-agent connectors (Codex CLI, Gemini CLI, Cursor) against a real redis-server: their
-//! telemetry, their hooks, the Cursor usage import and the connect scripts.
+//! Coding-agent connectors (Codex CLI, Gemini CLI, Cursor, GitHub Copilot) against a real
+//! redis-server: their telemetry, their hooks, the Cursor usage import and the connect scripts.
 
 mod common;
 
@@ -519,6 +519,154 @@ async fn cursor_hooks() {
     assert_eq!(body, json!({}));
 }
 
+/// Copilot's OTLP/JSON trace export, built from the span attributes in GitHub's docs (Copilot
+/// CLI's command reference and VS Code's agent monitoring guide), not captured from a client:
+/// an `invoke_agent` span over `chat` spans. The CLI puts the session on every span; VS Code's
+/// `chat` spans leave it to the `invoke_agent` span.
+fn copilot_traces(session: &str) -> Value {
+    const TRACE: &str = "5b8efff798038103d269b633813fc60c";
+    let span = |id: &str, name: &str, attrs: Vec<Value>| {
+        json!({"traceId": TRACE, "spanId": id, "parentSpanId": "eee19b7ec3c1b174",
+               "name": name, "kind": 3, "startTimeUnixNano": "1792641600000000000",
+               "endTimeUnixNano": "1792641602500000000", "attributes": attrs,
+               "status": {"code": 1}})
+    };
+    let chat = |model: &str, input: i64, cached: i64, with_session: bool| {
+        let mut a = vec![
+            s("gen_ai.operation.name", "chat"),
+            s("gen_ai.provider.name", "github"),
+            s("gen_ai.request.model", model),
+            s("gen_ai.response.model", model),
+            s("gen_ai.response.id", "chatcmpl-1"),
+            json!({"key": "gen_ai.response.finish_reasons",
+                   "value": {"arrayValue": {"values": [{"stringValue": "tool_calls"}]}}}),
+            i("gen_ai.usage.input_tokens", input),
+            i("gen_ai.usage.output_tokens", 500),
+            i("gen_ai.usage.cache_read.input_tokens", cached),
+            i("gen_ai.usage.cache_creation.input_tokens", 1000),
+            json!({"key": "github.copilot.cost", "value": {"doubleValue": 1.0}}),
+            i("github.copilot.nano_aiu", 2_500_000),
+            s("github.copilot.turn_id", "t-1"),
+            s("server.address", "api.githubcopilot.com"),
+        ];
+        if with_session {
+            a.push(s("gen_ai.conversation.id", session));
+        }
+        a
+    };
+    let agent = vec![
+        s("gen_ai.operation.name", "invoke_agent"),
+        s("gen_ai.agent.id", "github.copilot.default"),
+        s("gen_ai.conversation.id", session),
+        s("gen_ai.request.model", "claude-sonnet-4.5"),
+        s("user.name", "octocat"),
+        // The invocation's totals: not counted again.
+        i("gen_ai.usage.input_tokens", 20000),
+        i("gen_ai.usage.output_tokens", 1000),
+    ];
+    let tool = vec![
+        s("gen_ai.operation.name", "execute_tool"),
+        s("gen_ai.tool.name", "bash"),
+        s("gen_ai.tool.call.id", "call_1"),
+    ];
+    // Plain GenAI conventions, without Copilot's own attributes.
+    let other: Vec<Value> = chat("gemini-2.5-pro", 9000, 0, true)
+        .into_iter()
+        .filter(|a| !a["key"].as_str().unwrap().starts_with("github.copilot."))
+        .collect();
+    json!({"resourceSpans": [
+        {"resource": {"attributes": [s("service.name", "github-copilot"), s("service.version", "1.0.40")]},
+         "scopeSpans": [{"scope": {"name": "github.copilot", "version": "1.0.40"}, "spans": [
+             span("eee19b7ec3c1b174", "invoke_agent", agent),
+             span("eee19b7ec3c1b175", "chat claude-sonnet-4.5", chat("claude-sonnet-4.5", 10000, 8000, true)),
+             span("eee19b7ec3c1b176", "execute_tool bash", tool),
+         ]}]},
+        {"resource": {"attributes": [s("service.name", "copilot-chat"), s("session.id", "vscode-window-1")]},
+         "scopeSpans": [{"scope": {"name": "copilot-chat"}, "spans": [
+             span("eee19b7ec3c1b177", "chat gpt-5", chat("gpt-5", 3000, 0, false)),
+         ]}]},
+        // A GenAI span from another agent's trace export is not Copilot's.
+        {"resource": {"attributes": [s("service.name", "gemini-cli")]},
+         "scopeSpans": [{"scope": {"name": "gemini-cli"}, "spans": [
+             span("eee19b7ec3c1b178", "chat", other),
+         ]}]},
+    ]})
+}
+
+#[tokio::test]
+async fn copilot_telemetry_and_hooks() {
+    let Some(h) = H::start().await else { return };
+    let (status, body) = h.post("/v1/otel/v1/traces", copilot_traces("cs-1")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let tl = h.timeline("copilot-cs-1", 2).await;
+    let events = tl["events"].as_array().unwrap();
+    let claude = events
+        .iter()
+        .find(|e| e["provider"] == "anthropic")
+        .unwrap();
+    assert_eq!(claude["agent"], "copilot");
+    assert_eq!(claude["source"], "copilot");
+    assert_eq!(claude["user"], "octocat");
+    assert_eq!(claude["model"], "claude-sonnet-4-5");
+    assert_eq!(claude["usage"]["input"], 1000);
+    assert_eq!(claude["usage"]["cached_input"], 8000);
+    assert_eq!(claude["usage"]["cache_write"], 1000);
+    assert_eq!(claude["upstream_ms"], 2500);
+    // claude-sonnet-4: 1000 * $3/M + 8000 * $0.30/M + 1000 * $3.75/M + 500 * $15/M
+    assert_eq!(claude["actual_micros"], 16_650);
+    assert_eq!(claude["price_known"], true);
+    // VS Code's chat span: the session and user come from the trace's invoke_agent span.
+    let gpt = events.iter().find(|e| e["provider"] == "openai").unwrap();
+    assert_eq!(gpt["user"], "octocat");
+    assert_eq!(gpt["usage"]["input"], 2000);
+    let spent = tl["runs"][0]["budget"]["spent_micros"].clone();
+    // An exporter retrying the same batch charges nothing twice.
+    let (status, _) = h.post("/v1/otel/v1/traces", copilot_traces("cs-1")).await;
+    assert_eq!(status, StatusCode::OK);
+    let tl = h.timeline("copilot-cs-1", 2).await;
+    assert_eq!(tl["runs"][0]["budget"]["spent_micros"], spent);
+    // Only OTLP/JSON is read.
+    let resp = h
+        .http
+        .post(format!("{}/v1/otel/v1/traces", h.proxy))
+        .bearer_auth(KEY)
+        .header("content-type", "application/x-protobuf")
+        .body(vec![0u8; 4])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+    // Native hook payloads, with the event name the Tokenrein hook adds.
+    let hook = |event: &str| {
+        json!({"hook_event_name": event, "sessionId": "cs-1", "timestamp": 1792641600000_i64,
+               "cwd": "/repo", "toolName": "bash", "toolArgs": {"command": "cargo test"},
+               "prompt": "fix the build"})
+    };
+    let (s, body) = h.post("/v1/hooks/copilot", hook("preToolUse")).await;
+    assert_eq!((s, body), (StatusCode::OK, json!({})));
+    h.pause("copilot-cs-1").await;
+    let (_, body) = h.post("/v1/hooks/copilot", hook("preToolUse")).await;
+    assert_eq!(body["permissionDecision"], "deny");
+    assert!(
+        body["permissionDecisionReason"]
+            .as_str()
+            .unwrap()
+            .contains("paused")
+    );
+    // VS Code-compatible payloads are read the same way.
+    let vscode = json!({"hook_event_name": "PreToolUse", "session_id": "cs-1",
+                        "timestamp": "2026-10-31T10:00:00.000Z", "cwd": "/repo",
+                        "tool_name": "Bash", "tool_input": {"command": "ls"}});
+    let (_, body) = h.post("/v1/hooks/copilot", vscode).await;
+    assert_eq!(body["permissionDecision"], "deny");
+    // Copilot drops prompt hooks' answers, so they never block.
+    let (_, body) = h
+        .post("/v1/hooks/copilot", hook("userPromptSubmitted"))
+        .await;
+    assert_eq!(body, json!({}));
+}
+
 #[tokio::test]
 async fn cursor_usage_import() {
     let Some(h) = H::start().await else { return };
@@ -687,6 +835,7 @@ async fn run(home: &Home, program: &str, args: &[&str], stdin: &str) -> (i32, St
         .args(args)
         .env("HOME", &home.0)
         .env_remove("CODEX_HOME")
+        .env_remove("COPILOT_HOME")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -907,4 +1056,174 @@ async fn cursor_connect_script() {
     let doc: Value = serde_json::from_str(&home.read(".cursor/hooks.json")).unwrap();
     assert_eq!(doc, json!({"version": 1, "hooks": {}}));
     assert!(!Path::new(&cfg_path).exists());
+}
+
+#[tokio::test]
+async fn copilot_connect_script() {
+    let Some(h) = H::start().await else { return };
+    if !have_python().await {
+        return;
+    }
+    let home = Home::new();
+    let zshrc = "export EDITOR=vim\n";
+    home.write(".zshrc", zshrc);
+    let script = h.script(&home, "copilot").await;
+    let args = ["-I", &script, "--key", KEY, "--url", &h.proxy];
+    let (code, out, err) = run(&home, "python3", &args, "").await;
+    assert_eq!(code, 0, "{out}{err}");
+    // Running it again replaces its own settings rather than adding more.
+    let (code, _, err) = run(&home, "python3", &args, "").await;
+    assert_eq!(code, 0, "{err}");
+
+    let doc: Value = serde_json::from_str(&home.read(".copilot/hooks/tokenrein.json")).unwrap();
+    assert_eq!(doc["version"], 1);
+    for event in ["preToolUse", "userPromptSubmitted", "sessionEnd"] {
+        let cmd = doc["hooks"][event][0]["bash"].as_str().unwrap();
+        assert!(
+            cmd.ends_with(&format!(".tokenrein/hook.py copilot {event}")),
+            "{cmd}"
+        );
+        assert_eq!(doc["hooks"][event][0]["type"], "command");
+    }
+    let zsh = home.read(".zshrc");
+    assert!(zsh.starts_with(zshrc));
+    assert_eq!(zsh.matches(".tokenrein/copilot.sh").count(), 2, "{zsh}");
+    // The telemetry settings reach the copilot command, and only it.
+    home.write(
+        "bin/copilot",
+        "#!/bin/sh\necho \"$OTEL_EXPORTER_OTLP_ENDPOINT|$OTEL_EXPORTER_OTLP_PROTOCOL|$OTEL_EXPORTER_OTLP_HEADERS\"\n",
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let exe = std::fs::Permissions::from_mode(0o755);
+        std::fs::set_permissions(home.path("bin/copilot"), exe).unwrap();
+    }
+    let sh = format!(
+        "PATH={}:$PATH; . \"$HOME/.tokenrein/copilot.sh\"; copilot; echo \"[$OTEL_EXPORTER_OTLP_ENDPOINT]\"",
+        home.path("bin").display()
+    );
+    let (code, out, err) = run(&home, "sh", &["-c", &sh], "").await;
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out,
+        format!(
+            "{}/v1/otel|http/json|Authorization=Bearer {KEY},x-tr-agent=copilot\n[]\n",
+            h.proxy
+        )
+    );
+
+    let cmd = doc["hooks"]["preToolUse"][0]["bash"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // Copilot's native payload, which doesn't name its event.
+    let event = json!({"sessionId": "cs-9", "timestamp": 1792641600000_i64, "cwd": "/repo",
+                       "toolName": "bash", "toolArgs": {"command": "ls"}});
+    assert_eq!(run_hook(&home, &cmd, event.clone()).await, json!({}));
+    h.pause("copilot-cs-9").await;
+    let answer = run_hook(&home, &cmd, event).await;
+    assert_eq!(answer["permissionDecision"], "deny");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for f in [".tokenrein/copilot.json", ".tokenrein/copilot.sh"] {
+            let mode = std::fs::metadata(home.path(f))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o077, 0, "{f}");
+        }
+    }
+
+    let (code, _, err) = run(&home, "python3", &["-I", &script, "--remove"], "").await;
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(home.read(".zshrc"), zshrc);
+    assert!(!home.path(".copilot/hooks/tokenrein.json").exists());
+    assert!(!home.path(".tokenrein/copilot.sh").exists());
+    assert!(!home.path(".tokenrein/hook.py").exists());
+
+    // Someone else's file of the same name is left alone.
+    let theirs = "{\"version\": 1, \"hooks\": {}}";
+    home.write(".copilot/hooks/tokenrein.json", theirs);
+    let (code, _, err) = run(&home, "python3", &args, "").await;
+    assert_eq!(code, 1);
+    assert!(err.contains("isn't Tokenrein's"), "{err}");
+    assert_eq!(home.read(".copilot/hooks/tokenrein.json"), theirs);
+}
+
+#[tokio::test]
+async fn copilot_policy_setup() {
+    let Some(h) = H::start().await else { return };
+    if !have_python().await {
+        return;
+    }
+    let home = Home::new();
+    let root = home.path("root").to_string_lossy().into_owned();
+    let managed = if cfg!(target_os = "macos") {
+        "root/Library/Application Support/GitHubCopilot/managed-settings.json"
+    } else {
+        "root/etc/github-copilot/managed-settings.json"
+    };
+    let policy_hooks = "root/etc/github-copilot/policy.d/tokenrein.json";
+    home.write(managed, "{\"model\": \"auto\"}");
+    let script = h.script(&home, "copilot").await;
+    let base = ["-I", &script, "--policy", "--policy-root", &root];
+    let mut args = base.to_vec();
+    args.extend(["--key", KEY, "--url", &h.proxy]);
+    let (code, out, err) = run(&home, "python3", &args, "").await;
+    assert_eq!(code, 0, "{out}{err}");
+
+    let settings: Value = serde_json::from_str(&home.read(managed)).unwrap();
+    assert_eq!(settings["model"], "auto");
+    let t = &settings["telemetry"];
+    assert_eq!(t["enabled"], true);
+    assert_eq!(t["endpoint"], format!("{}/v1/otel", h.proxy));
+    assert_eq!(t["protocol"], "http/json");
+    assert_eq!(t["headers"]["Authorization"], format!("Bearer {KEY}"));
+    assert_eq!(t["capture"], json!({"identity": true}));
+    let doc: Value = serde_json::from_str(&home.read(policy_hooks)).unwrap();
+    let cmd = doc["hooks"]["preToolUse"][0]["bash"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(cmd.contains("etc/tokenrein/hook.py"), "{cmd}");
+    // Nothing in the user's own home.
+    assert!(!home.path(".tokenrein").exists());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for f in ["root/etc/tokenrein/copilot.json", policy_hooks, managed] {
+            let mode = std::fs::metadata(home.path(f))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o644, "{f}");
+        }
+    }
+    let event = json!({"sessionId": "cs-pol", "cwd": "/repo", "toolName": "edit", "toolArgs": {}});
+    assert_eq!(run_hook(&home, &cmd, event.clone()).await, json!({}));
+    h.pause("copilot-cs-pol").await;
+    assert_eq!(
+        run_hook(&home, &cmd, event).await["permissionDecision"],
+        "deny"
+    );
+
+    let mut undo = base.to_vec();
+    undo.push("--remove");
+    let (code, _, err) = run(&home, "python3", &undo, "").await;
+    assert_eq!(code, 0, "{err}");
+    let settings: Value = serde_json::from_str(&home.read(managed)).unwrap();
+    assert_eq!(settings, json!({"model": "auto"}));
+    assert!(!home.path(policy_hooks).exists());
+    assert!(!home.path("root/etc/tokenrein/hook.py").exists());
+
+    // Another telemetry destination is left alone.
+    let foreign =
+        "{\"telemetry\": {\"enabled\": true, \"endpoint\": \"https://otel.example.com\"}}";
+    home.write(managed, foreign);
+    let (code, _, err) = run(&home, "python3", &args, "").await;
+    assert_eq!(code, 1);
+    assert!(err.contains("telemetry"), "{err}");
+    assert_eq!(home.read(managed), foreign);
 }
