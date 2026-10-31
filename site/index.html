@@ -320,25 +320,26 @@ with guard.run("ticket-4812",
 <section class="pricing wrap" id="pricing" aria-labelledby="pricing-title">
   <div class="plans" role="group" aria-labelledby="pricing-title">
     <h2 class="plans__title" id="pricing-title">Pricing</h2>
-    <button type="button" class="plan" aria-pressed="false" data-plan="0">Self-hosted</button>
-    <button type="button" class="plan" aria-pressed="true" data-plan="1">Design partner</button>
+    <button type="button" class="plan" aria-pressed="false" data-plan="0">Free</button>
+    <button type="button" class="plan" aria-pressed="true" data-plan="1">Team</button>
     <button type="button" class="plan" aria-pressed="false" data-plan="2">Enterprise</button>
   </div>
   <div class="plan-stage" aria-live="polite">
     <div class="plan-card" data-plan-card="0" hidden>
-      <p class="plan-card__price nums">$0<span>forever</span></p>
-      <p>Everything on this page, on your own servers: run budgets, approvals, the loop guard, alerts, single sign-on and the audit log. Help from the community on GitHub.</p>
+      <p class="plan-card__price nums">$0<span>up to 25 developers</span></p>
+      <p>Every guardrail on your own servers: run budgets, the loop guard, approvals, alerts to Slack and Teams, every connector and SDK. Up to 25 developers and $10,000 of AI spend a month; going over never blocks your agents.</p>
       <a class="button" href="#deploy">Deploy self-hosted</a>
     </div>
     <div class="plan-card" data-plan-card="1">
-      <p class="plan-card__price nums">$0<span>for the first year</span></p>
-      <p>For ten teams rolling out coding agents now: the enterprise licence free for a year, a shared Slack channel with the people who build Tokenrein, and the connectors you need built first. In return, fifteen minutes of feedback a week.</p>
-      <a class="button" href="mailto:hello@tokenrein.com?subject=Design%20partner&amp;body=Team%20size%3A%0AAgents%20you%20use%3A%0A">Apply as a design partner</a>
+      <p class="plan-card__price nums">$15<span>per developer a month, billed yearly</span></p>
+      <p>No limits, plus single sign-on, audit export for your SIEM, spend history past 90 days, PagerDuty alerts and the Cursor usage import. Email support.</p>
+      <a class="button" href="mailto:hello@tokenrein.com?subject=Tokenrein%20Team&amp;body=Developers%3A%0A">Get a Team key</a>
     </div>
     <div class="plan-card" data-plan-card="2" hidden>
-      <p class="plan-card__price">Quoted<span>per year</span></p>
-      <p>An annual licence sized to your team, support with agreed response times, help through your security review, and a say in what is built next.</p>
+      <p class="plan-card__price nums">From $25k<span>per year</span></p>
+      <p>Everything in Team, more than one org, support with agreed response times, help through your security review, and a say in what is built next.</p>
       <a class="button" href="mailto:hello@tokenrein.com?subject=Tokenrein%20Enterprise">Talk to us about Enterprise</a>
+      <p class="plan-card__note">Design partners: ten teams rolling out coding agents now get Enterprise free for the first year, for fifteen minutes of feedback a week. <a href="mailto:hello@tokenrein.com?subject=Design%20partner&amp;body=Team%20size%3A%0AAgents%20you%20use%3A%0A">Apply</a></p>
     </div>
   </div>
 </section>
@@ -376,7 +377,7 @@ with guard.run("ticket-4812",
     </details>
     <details name="faq">
       <summary>Is it open source?</summary>
-      <p>The server is source-available under the Elastic License 2.0: run it and change it in your own infrastructure, but not resell it as a hosted service. The SDKs and connectors are Apache-2.0.</p>
+      <p>The server is source-available under the Elastic License 2.0: run it and change it in your own infrastructure, but not resell it as a hosted service. It is free up to 25 developers and $10,000 of AI spend a month; a license key adds single sign-on, audit export, long history, PagerDuty, the Cursor import and more orgs. The SDKs and connectors are Apache-2.0.</p>
     </details>
   </div>
 </section>
