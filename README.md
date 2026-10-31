@@ -153,7 +153,7 @@ another host, add its network round trip. Run it yourself with `loadtest/run.sh`
 | `deploy/` | Docker Compose stack and Helm chart; `Dockerfile` builds the image |
 | `config/dev.toml` | Local development config |
 | `loadtest/` | k6 load test: the time Tokenrein adds to each call, and the SDK endpoints |
-| `site/` | Product website |
+| `site/` | Product website (tokenrein.com); `cd site && wrangler deploy` publishes it |
 | `.github/workflows/` | CI (fmt, clippy, tests against real Redis and Postgres, SDK suites on several provider SDK versions, dependency audits, SBOM) and release (multi-arch image to GHCR, SDKs to PyPI and npm) |
 
 ## Develop

@@ -1,0 +1,11 @@
+// The product site on Cloudflare (static files served by a Worker) at tokenrein.com.
+// Deploy from this folder: wrangler deploy
+{
+  "name": "tokenrein-site",
+  "compatibility_date": "2026-10-23",
+  "assets": { "directory": "." },
+  "routes": [
+    { "pattern": "tokenrein.com", "custom_domain": true },
+    { "pattern": "www.tokenrein.com", "custom_domain": true }
+  ]
+}
