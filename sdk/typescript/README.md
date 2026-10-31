@@ -2,7 +2,7 @@
 
 Budgets, run tracing and spend reports for AI agents, in one line around your existing OpenAI
 or Anthropic client. By default (direct mode) the client keeps calling its provider and only
-token usage goes to [Tokenrein](../README.md); `mode="proxy"` sends calls through the Tokenrein
+token usage goes to [Tokenrein](https://tokenrein.com); `mode="proxy"` sends calls through the Tokenrein
 proxy instead. Errors: `BudgetExceeded`, `RunPaused`, `RunKilled`. Works with any
 OpenAI-compatible provider (Gemini, Groq, Mistral, DeepSeek, OpenRouter, Ollama, ...).
 
@@ -22,7 +22,7 @@ await guard.run({ runId: 'ticket-4812', budgetUsd: 5 }, async () => {
 });
 ```
 
-Node ≥ 20 (uses `AsyncLocalStorage`). See [../README.md](../README.md) for the full API.
+Node ≥ 20 (uses `AsyncLocalStorage`). See [the SDK guide](https://github.com/tokenrein/tokenrein/blob/main/sdk/README.md) for the full API.
 
 ## Develop
 

@@ -1,0 +1,38 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Image tag (e.g. 0.1.1) or commit, and SDK version if relevant.
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      options: [Server / proxy, Dashboard, Python SDK, TypeScript SDK, Claude Code connector, Codex CLI connector, Gemini CLI connector, Cursor connector, Helm / Docker Compose, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant server logs (JSON on stderr). Remove keys and anything private.
+      render: text

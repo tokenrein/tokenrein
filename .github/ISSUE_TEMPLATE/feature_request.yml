@@ -1,0 +1,20 @@
+name: Feature request
+description: An agent, provider, guardrail or report you need.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+  - type: input
+    id: scale
+    attributes:
+      label: Your setup
+      description: Optional. Agents you use, rough team size, how you deploy.
