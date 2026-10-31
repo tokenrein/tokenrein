@@ -1091,8 +1091,16 @@ fn read_copilot_span(a: &Map<String, Value>) -> Option<UsageEvent> {
         return None;
     }
     let cache_read = attr_tokens(a, "gen_ai.usage.cache_read.input_tokens").min(input);
-    let cache_write =
-        attr_tokens(a, "gen_ai.usage.cache_creation.input_tokens").min(input - cache_read);
+    // Copilot CLI 1.0.105 sends `cache_write`; its docs and VS Code say `cache_creation`.
+    let cache_write = [
+        "gen_ai.usage.cache_write.input_tokens",
+        "gen_ai.usage.cache_creation.input_tokens",
+    ]
+    .iter()
+    .map(|k| attr_tokens(a, k))
+    .max()
+    .unwrap_or(0)
+    .min(input - cache_read);
     let model = attr_str(a, "gen_ai.response.model")
         .or_else(|| attr_str(a, "gen_ai.request.model"))
         .unwrap_or("unknown");
@@ -1705,7 +1713,7 @@ mod tests {
             {"key": "gen_ai.usage.input_tokens", "value": {"intValue": "10000"}},
             {"key": "gen_ai.usage.output_tokens", "value": {"intValue": "500"}},
             {"key": "gen_ai.usage.cache_read.input_tokens", "value": {"intValue": "8000"}},
-            {"key": "gen_ai.usage.cache_creation.input_tokens", "value": {"intValue": "1000"}},
+            {"key": "gen_ai.usage.cache_write.input_tokens", "value": {"intValue": "1000"}},
         ]));
         let u = read_copilot_span(&a).unwrap();
         assert_eq!(u.provider.as_deref(), Some("anthropic"));
@@ -1719,6 +1727,16 @@ mod tests {
                 u.output_tokens
             ),
             (1000, 8000, 1000, 500)
+        );
+        // The documented name for cache writes is read too.
+        let mut documented = a.clone();
+        let w = documented
+            .remove("gen_ai.usage.cache_write.input_tokens")
+            .unwrap();
+        documented.insert("gen_ai.usage.cache_creation.input_tokens".into(), w);
+        assert_eq!(
+            read_copilot_span(&documented).unwrap().cache_write_tokens,
+            1000
         );
         assert_eq!(
             copilot_model(Some("openai"), "gpt-5.1"),

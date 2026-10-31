@@ -62,6 +62,9 @@ def otel_env(url, key, agent, user):
         ("OTEL_EXPORTER_OTLP_ENDPOINT", url + OTEL_PATH),
         ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json"),
         ("OTEL_EXPORTER_OTLP_HEADERS", headers),
+        # Copilot otherwise sends a short session's spans only when it ends, too late for its
+        # spend to stop the session's next tool call.
+        ("OTEL_BSP_SCHEDULE_DELAY", "1000"),
     ]
     # Only the copilot command gets these, so other OpenTelemetry programs keep their own setup.
     assigns = " ".join("%s=%s" % (k, shlex.quote(v)) for k, v in env)

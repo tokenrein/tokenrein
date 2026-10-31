@@ -178,8 +178,10 @@ Docs: [hooks reference](https://docs.github.com/en/copilot/reference/hooks-refer
 [enterprise managed settings](https://docs.github.com/en/copilot/reference/enterprise-administrators/enterprise-managed-settings)
 (`telemetry`), [CLI configuration directory](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference)
 (managed settings locations), and VS Code's [Monitor agent usage with OpenTelemetry](https://code.visualstudio.com/docs/agents/guides/monitoring-agents).
-The payloads and spans below are from those docs; the mappers and tests were not checked against
-a captured export from a real Copilot client.
+Checked end to end with Copilot CLI 1.0.105 on macOS (`copilot -p`, user-level setup): the
+hooks, the trace export, the session id and the token fields below are as Copilot sent them. Where
+the docs differ, this page follows what Copilot sent. The `--policy` setup and VS Code were not
+tried with a real client.
 
 **Telemetry.** Copilot CLI exports OpenTelemetry *traces and metrics* (no logs) when
 `OTEL_EXPORTER_OTLP_ENDPOINT` is set; the default protocol is `http/json`. The connect script
@@ -191,24 +193,37 @@ COPILOT_OTEL_ENABLED=true
 OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:8787/v1/otel     # Copilot appends /v1/traces, /v1/metrics
 OTEL_EXPORTER_OTLP_PROTOCOL=http/json
 OTEL_EXPORTER_OTLP_HEADERS='Authorization=Bearer tr_…,x-tr-agent=copilot'
+OTEL_BSP_SCHEDULE_DELAY=1000     # send spans within a second, not when the session ends
 ```
 
 Only the `copilot` command gets them (a shell function), so other OpenTelemetry programs keep their
 own setup. `--no-profile` leaves the shell profiles alone and prints the line to add.
 
+Without `OTEL_BSP_SCHEDULE_DELAY`, Copilot CLI 1.0.105 sent a short session's spans only when
+the session ended, so a session's own spend could not stop its later tool calls (only the next
+session's, through agent, project and org budgets). With it, spans arrive about a second after
+each model call.
+
 - Each model call is a `chat` span (`gen_ai.operation.name = "chat"`, kind CLIENT) carrying
   `gen_ai.conversation.id` (the session; the run), `gen_ai.provider.name`,
   `gen_ai.request.model` / `gen_ai.response.model`, `gen_ai.usage.input_tokens`,
   `gen_ai.usage.output_tokens`, `gen_ai.usage.cache_read.input_tokens`,
-  `gen_ai.usage.cache_creation.input_tokens`, `gen_ai.response.id`, `github.copilot.cost` (the
-  premium-request multiplier, not money) and `github.copilot.nano_aiu`.
+  `gen_ai.usage.cache_write.input_tokens`, `gen_ai.response.id`, `github.copilot.cost` (the
+  premium-request multiplier, not money) and `github.copilot.nano_aiu`. Token counts arrive as
+  strings (`intValue`). GitHub's docs and VS Code name the cache-write count
+  `gen_ai.usage.cache_creation.input_tokens`; Tokenrein reads either.
 - The GenAI conventions count cached input inside `input_tokens`, so Tokenrein charges
-  `input − cache_read − cache_creation` at the input price, `cache_read` at the cached price and
-  `cache_creation` at the cache-write price. Reasoning is inside `output_tokens`.
+  `input − cache_read − cache_write` at the input price, `cache_read` at the cached price and
+  `cache_write` at the cache-write price (in a real export, `cache_read + cache_write` stayed
+  within `input_tokens`). Reasoning is inside `output_tokens`.
 - Copilot reports its own API (`github`) as the provider; Tokenrein prices the model at its
   maker's API price (`claude-*` → Anthropic, `gpt-*`/`o<N>` → OpenAI, `gemini-*` → Google), and
   writes Copilot's Claude ids with dashes (`claude-sonnet-4.5` → `claude-sonnet-4-5`). Spend is an
-  estimate: GitHub bills premium requests (and AI units), not tokens.
+  estimate: GitHub bills premium requests (and AI units), not tokens. Copilot also serves models
+  with no public API price (e.g. `gpt-6-luna`, or `mai-code-1.1-flash`, which its automatic model
+  choice picked); they are charged at the most expensive price Tokenrein knows (for a model with no
+  known maker, $15 / $75 per million tokens) and listed as unpriced under Models & prices until an
+  admin adds a price. Add prices for the models your developers use, or spend is overstated.
 - The `invoke_agent` span carries the totals of one agent invocation; it only marks the session as
   active, so nothing is counted twice. `execute_tool` spans and metrics are dropped.
 - Spans count as Copilot's if the resource's `service.name` or the scope name starts with
@@ -234,7 +249,9 @@ preToolUse`, and the hook adds `hook_event_name`. VS Code-compatible PascalCase 
 | `userPromptSubmitted` | `sessionId` | — (Copilot drops command hooks' answers to prompts; marks the session active) |
 | `sessionEnd` | `sessionId` | — (marks the run ended) |
 
-Allowing is `{}` (Copilot's default permission flow). `subagentStart` can't stop a sub-agent, and
+Allowing is `{}` (Copilot's default permission flow). A denied tool call is not run; Copilot
+shows "Command blocked: budget limit reached." and passes the reason to the model. `sessionEnd`
+also carries a `traceparent` (the session's trace), which isn't used. `subagentStart` can't stop a sub-agent, and
 sub-agents' hooks carry the session's id, so their tool calls are checked against the session's
 run. Command `preToolUse` hooks fail *closed* when the command crashes or exits non-zero, but open
 on a timeout; the hook always exits 0 and prints `{}` when Tokenrein can't be reached.
@@ -252,7 +269,10 @@ on a timeout; the hook always exits 0 and prints `{}` when Tokenrein can't be re
   Managed values override users' settings and environment. Other keys in the file are kept; an
   existing `telemetry` block that isn't Tokenrein's is left alone and the script stops.
 
-Undo with `sudo python3 copilot.py --policy --remove`.
+Undo with `sudo python3 copilot.py --policy --remove`. Managed settings have no export-interval
+setting, so with `--policy` alone a session's spend may only arrive when it ends; set
+`OTEL_BSP_SCHEDULE_DELAY=1000` in users' environment as well for tool calls to be stopped within
+the session.
 
 ## Not covered
 

@@ -519,10 +519,10 @@ async fn cursor_hooks() {
     assert_eq!(body, json!({}));
 }
 
-/// Copilot's OTLP/JSON trace export, built from the span attributes in GitHub's docs (Copilot
-/// CLI's command reference and VS Code's agent monitoring guide), not captured from a client:
-/// an `invoke_agent` span over `chat` spans. The CLI puts the session on every span; VS Code's
-/// `chat` spans leave it to the `invoke_agent` span.
+/// Copilot's OTLP/JSON trace export: an `invoke_agent` span over `chat` spans. The CLI part
+/// follows a real export from Copilot CLI 1.0.105 (attribute names and value types; ids and
+/// counts changed); the VS Code part follows VS Code's agent monitoring guide, which puts the
+/// session only on the `invoke_agent` span.
 fn copilot_traces(session: &str) -> Value {
     const TRACE: &str = "5b8efff798038103d269b633813fc60c";
     let span = |id: &str, name: &str, attrs: Vec<Value>| {
@@ -543,7 +543,7 @@ fn copilot_traces(session: &str) -> Value {
             i("gen_ai.usage.input_tokens", input),
             i("gen_ai.usage.output_tokens", 500),
             i("gen_ai.usage.cache_read.input_tokens", cached),
-            i("gen_ai.usage.cache_creation.input_tokens", 1000),
+            i("gen_ai.usage.cache_write.input_tokens", 1000),
             json!({"key": "github.copilot.cost", "value": {"doubleValue": 1.0}}),
             i("github.copilot.nano_aiu", 2_500_000),
             s("github.copilot.turn_id", "t-1"),
@@ -1091,7 +1091,7 @@ async fn copilot_connect_script() {
     // The telemetry settings reach the copilot command, and only it.
     home.write(
         "bin/copilot",
-        "#!/bin/sh\necho \"$OTEL_EXPORTER_OTLP_ENDPOINT|$OTEL_EXPORTER_OTLP_PROTOCOL|$OTEL_EXPORTER_OTLP_HEADERS\"\n",
+        "#!/bin/sh\necho \"$OTEL_EXPORTER_OTLP_ENDPOINT|$OTEL_EXPORTER_OTLP_PROTOCOL|$OTEL_EXPORTER_OTLP_HEADERS|$OTEL_BSP_SCHEDULE_DELAY\"\n",
     );
     #[cfg(unix)]
     {
@@ -1108,7 +1108,7 @@ async fn copilot_connect_script() {
     assert_eq!(
         out,
         format!(
-            "{}/v1/otel|http/json|Authorization=Bearer {KEY},x-tr-agent=copilot\n[]\n",
+            "{}/v1/otel|http/json|Authorization=Bearer {KEY},x-tr-agent=copilot|1000\n[]\n",
             h.proxy
         )
     );
