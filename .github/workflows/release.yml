@@ -166,12 +166,9 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
-      # npm adds a provenance statement on its own when the repository is public. A trusted
-      # publisher can only be added to a package that exists, so the very first publish may use
-      # a temporary NPM_TOKEN secret instead; npm tries trusted publishing first.
+      # Trusted publishing: no stored token. npm adds a provenance statement on its own when the
+      # repository is public.
       - run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   github-release:
     needs: [verify, image-manifest]
