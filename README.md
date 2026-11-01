@@ -1,24 +1,53 @@
+<div align="center">
+
 # Tokenrein
 
-**Spend guardrails for AI agents.** Give every agent run, agent and project a budget, stop runaway
-loops before they reach the invoice, and let a person approve the runs that need more. Works with
-Claude Code, Codex CLI, Gemini CLI, Cursor, GitHub Copilot CLI and your own agents on any LLM.
-Self-hosted, with single sign-on and an audit log.
+### Your agents spend money while you sleep.<br>Tokenrein keeps a hand on the reins.
+
+Give every AI agent a budget, catch runaway loops before they reach the invoice,<br>
+and let a person decide when a run needs more. Self-hosted, one binary, about 1 ms per call.
 
 [![ci](https://github.com/tokenrein/tokenrein/actions/workflows/ci.yml/badge.svg)](https://github.com/tokenrein/tokenrein/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/tokenrein/tokenrein?color=f5a524)](https://github.com/tokenrein/tokenrein/releases)
+[![PyPI](https://img.shields.io/pypi/v/tokenrein?label=pip%20install%20tokenrein)](https://pypi.org/project/tokenrein/)
+[![npm](https://img.shields.io/npm/v/@tokenrein/sdk?label=%40tokenrein%2Fsdk)](https://www.npmjs.com/package/@tokenrein/sdk)
+[![license](https://img.shields.io/badge/license-ELv2%20%2F%20Apache--2.0-blue)](#license)
 
-- **Budgets that act before the money is spent**: per run, per agent per day, per project and org
-  per month. Each one can warn (Check), block (Enforce) or pause the run and ask a person (Ask).
-- **Loop guard**: the same request or tool call over and over, too much spend in a minute, or too
-  many calls in one run, and the run is paused for approval (or stopped).
-- **Approvals and alerts**: Slack, Microsoft Teams, PagerDuty and signed webhooks; approve or stop
-  from the dashboard.
-- **Connect in a minute**: one command per coding agent, one line for your app, or a base URL.
-  Prompts never have to pass through Tokenrein.
-- **Built for teams**: SSO (OpenID Connect), roles per org, API tokens, every change versioned and
-  audited, Docker Compose and Helm.
-- **Spend you can charge back**: by project, agent, person and model, over up to 13 months, with
-  CSV export (usage history in Parquet files, queried with DuckDB).
+**[Quick start](#quick-start-docker-compose-about-5-minutes)** · **[Connect your agents](#connect-your-agents)** · **[Docs](#documentation)** · **[tokenrein.com](https://tokenrein.com)**
+
+<a href="docs/assets/demo.mp4"><img src="docs/assets/demo.gif" alt="Demo: four AI agents through Tokenrein. One gets a token warning, one pauses at its budget and is approved in the console, one is caught in a loop and stopped, one is blocked at a hard limit." width="100%"></a>
+
+<sub>51 seconds, recorded live: real Tokenrein, a mock model, no real spend. Click for the sharp MP4, or <a href="#see-it-without-an-api-key">run it yourself</a>.</sub>
+
+</div>
+
+## Four agents, four ways to burn money
+
+| Your agent… | Tokenrein… | You set |
+|---|---|---|
+| 💸 **drifts over a limit** | warns on the response and logs it; nothing breaks | **Check** |
+| ✋ **runs out of its run budget** | pauses the run and asks a person; approve and it picks up where it stopped | **Ask** |
+| 🔁 **repeats itself** | spots the same request or tool call, too much spend a minute, or too many calls, then warns, pauses or kills the run | **Loop guard** |
+| 🛑 **hits a hard limit** | refuses the call before it reaches the model | **Enforce** |
+
+Works with **Claude Code, Codex CLI, Gemini CLI, Cursor, GitHub Copilot CLI** and your own agents on any LLM.
+
+- **Budgets per run, agent, project and org**, each one warning, blocking or asking.
+- **Approvals and alerts** in the dashboard, Slack, Microsoft Teams, PagerDuty and signed webhooks.
+- **One command per coding agent**, one line for your app, or a base URL. Prompts never have to pass through Tokenrein.
+- **Spend you can charge back**: by project, agent, person and model, over up to 13 months, with CSV export.
+- **Built for teams**: SSO (OpenID Connect), roles per org, API tokens, every change versioned and audited, Docker Compose and Helm.
+- **Free to self-host** up to 25 developers and $10,000 of AI spend a month, with every guardrail.
+
+## See it without an API key
+
+The agents in the video are in [`demo/`](demo/). Run them against a fake model, then approve or stop
+their runs in your own dashboard. Needs Rust, Redis, Postgres, Node and Python.
+
+```bash
+git clone https://github.com/tokenrein/tokenrein && cd tokenrein
+cargo build --release -p tokenrein && demo/run.sh
+```
 
 ## How it works
 
@@ -155,6 +184,7 @@ another host, add its network round trip. Run it yourself with `loadtest/run.sh`
 | `deploy/` | Docker Compose stack and Helm chart; `Dockerfile` builds the image |
 | `config/dev.toml` | Local development config |
 | `loadtest/` | k6 load test: the time Tokenrein adds to each call, and the SDK endpoints |
+| `demo/` | The agents in the README video, a fake model and the script that records it |
 | `site/` | Product website (tokenrein.com); `cd site && wrangler deploy` publishes it |
 | `.github/workflows/` | CI (fmt, clippy, tests against real Redis and Postgres, SDK suites on several provider SDK versions, dependency audits, SBOM) and release (multi-arch image to GHCR, SDKs to PyPI and npm) |
 

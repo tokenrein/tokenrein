@@ -1,0 +1,19 @@
+# Tokenrein config for demo/run.sh: spare ports and the fake model. The org and its budgets are
+# created through the admin API, the way the dashboard does it.
+
+[server]
+listen = "127.0.0.1:19787"
+admin_listen = "127.0.0.1:19788"
+admin_token_env = "TOKENREIN_ADMIN_TOKEN"
+upstream_timeout_secs = 30
+default_max_output_tokens = 2000
+
+[redis]
+url = "redis://127.0.0.1:19379"
+
+[database]
+url_env = "TOKENREIN_DATABASE_URL"
+
+[providers.openai]
+base_url = "http://127.0.0.1:19080"
+api_key_env = "DEMO_UPSTREAM_KEY"

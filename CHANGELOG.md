@@ -7,6 +7,10 @@ SDKs; the release workflow refuses a tag that does not match all three.
 
 ## [Unreleased]
 
+### Added
+- `demo/run.sh`: four misbehaving agents against a fake model, no API key needed. The README's demo
+  video is recorded from it (`demo/record.cjs`).
+
 ## [0.1.3] - 2026-11-01
 
 ### Added
