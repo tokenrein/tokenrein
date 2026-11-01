@@ -4,8 +4,7 @@
 
 ### Your agents spend money while you sleep.<br>Tokenrein keeps a hand on the reins.
 
-Give every AI agent a budget, catch runaway loops before they reach the invoice,<br>
-and let a person decide when a run needs more. Self-hosted, one binary, about 1 ms per call.
+Give every AI agent a budget, catch runaway loops before they reach the invoice, and let a person decide when a run needs more. Self-hosted, one binary, about 1 ms per call.
 
 [![ci](https://github.com/tokenrein/tokenrein/actions/workflows/ci.yml/badge.svg)](https://github.com/tokenrein/tokenrein/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/tokenrein/tokenrein?color=f5a524)](https://github.com/tokenrein/tokenrein/releases)
@@ -15,9 +14,9 @@ and let a person decide when a run needs more. Self-hosted, one binary, about 1 
 
 **[Quick start](#quick-start-docker-compose-about-5-minutes)** · **[Connect your agents](#connect-your-agents)** · **[Docs](#documentation)** · **[tokenrein.com](https://tokenrein.com)**
 
-<a href="docs/assets/demo.mp4"><img src="docs/assets/demo.gif" alt="Demo: four AI agents through Tokenrein. One gets a token warning, one pauses at its budget and is approved in the console, one is caught in a loop and stopped, one is blocked at a hard limit." width="100%"></a>
+<img src="docs/assets/demo.gif" alt="Demo: four AI agents through Tokenrein. One gets a token warning, one pauses at its budget and is approved in the console, one is caught in a loop and stopped, one is blocked at a hard limit." width="100%">
 
-<sub>51 seconds, recorded live: real Tokenrein, a mock model, no real spend. Click for the sharp MP4, or <a href="#see-it-without-an-api-key">run it yourself</a>.</sub>
+<sub>51 seconds, recorded live: real Tokenrein, a mock model, no real spend. <a href="https://github.com/tokenrein/tokenrein/raw/main/docs/assets/demo.mp4">Download the sharp MP4</a>, or <a href="#see-it-without-an-api-key">run it yourself</a>.</sub>
 
 </div>
 
