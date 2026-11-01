@@ -248,6 +248,13 @@ a.strap:hover { transform: translateY(-0.4rem); }
 .plan-card__price span { display: block; margin-top: 0.75rem; font-size: var(--step-body); font-weight: 400; letter-spacing: 0; }
 .plan-card p:not(.plan-card__price) { max-width: 44ch; }
 .plan-card__note { font-size: var(--step-small); color: var(--soft); }
+.buy { grid-column: 1 / -1; margin-top: calc(var(--section) / 3); padding-top: 2rem; border-top: 1px solid var(--surface-2); display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gutter); row-gap: 1.25rem; }
+.buy__title { grid-column: 1 / span 4; font-size: var(--step-lead); font-weight: 700; }
+.buy__steps { grid-column: 5 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem var(--gutter); counter-reset: buy; list-style: none; padding: 0; margin: 0; }
+.buy__steps li { counter-increment: buy; }
+.buy__steps li::before { content: counter(buy); display: block; margin-bottom: 0.35rem; font-weight: 700; color: var(--soft); }
+.buy__steps b { display: block; margin-bottom: 0.2rem; }
+.buy__note { grid-column: 5 / -1; font-size: var(--step-small); color: var(--soft); max-width: 70ch; }
 .plan-card__note a { color: inherit; font-weight: 600; }
 
 /* ---------- faq ---------- */
@@ -344,6 +351,8 @@ a.strap:hover { transform: translateY(-0.4rem); }
   .plans, .plan-stage { grid-column: 1 / -1; }
   .plans { padding-left: 1.1rem; }
   .plan-stage { margin-top: 2.5rem; }
+  .buy__title, .buy__steps, .buy__note { grid-column: 1 / -1; }
+  .buy__steps { grid-template-columns: 1fr; }
   .faq__title, .faq__list { grid-column: 1 / -1; }
   .faq__title { position: static; margin-bottom: 2rem; }
   .deploy__close, .dialog { grid-column: 1 / -1; }
