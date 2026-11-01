@@ -2,8 +2,8 @@ apiVersion: v2
 name: tokenrein
 description: Runtime spend guardrails for AI agents (proxy, admin API and dashboard)
 type: application
-version: 0.1.2
-appVersion: "0.1.2"
+version: 0.1.3
+appVersion: "0.1.3"
 home: https://github.com/tokenrein/tokenrein
 sources:
   - https://github.com/tokenrein/tokenrein

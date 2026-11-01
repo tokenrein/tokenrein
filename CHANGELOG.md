@@ -7,12 +7,24 @@ SDKs; the release workflow refuses a tag that does not match all three.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-01
+
 ### Added
 - GitHub Copilot CLI connector (`/connect/copilot.py`): usage (model and tokens of each call)
   from Copilot's OpenTelemetry traces, read at `POST /v1/otel/v1/traces`, and command hooks at
   `POST /v1/hooks/copilot` that refuse the next tool call when a run is paused, over budget or
   looping. `--policy` sets up every user of a machine with Copilot policy hooks and managed
   telemetry settings. Spend is an estimate at API prices; GitHub bills premium requests.
+- `deploy/setup.sh` writes `deploy/.env` with fresh secrets, and `docs/quickstart.md` walks
+  through a first install step by step.
+- `TOKENREIN_PROXY_URL`: where agents reach the proxy, used in the dashboard's connect commands
+  (they assumed this host on port 8787).
+
+### Fixed
+- The site's deploy commands stopped at a missing Postgres password; they now run `setup.sh`.
+- The dashboard's Get started checklist no longer suggests a provider key is required; it is only
+  for proxy mode.
+- Passwords are no longer refused for containing a short email name (`dev@`, `sam@`).
 
 ## [0.1.2] - 2026-10-31
 
