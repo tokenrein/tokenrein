@@ -11,6 +11,12 @@ SDKs; the release workflow refuses a tag that does not match all three.
 - `demo/run.sh`: four misbehaving agents against a fake model, no API key needed. The README's demo
   video is recorded from it (`demo/record.cjs`).
 
+### Fixed
+- Retries refused while a run waited for an approver counted toward the loop guard, so approving
+  a budget could pause the run again at once as a loop. Only calls that are let through count now.
+- Letting a looping run continue now resets its repeat counts, as documented; the next identical
+  request used to trip the guard again straight away.
+
 ## [0.1.3] - 2026-11-01
 
 ### Added

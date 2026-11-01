@@ -110,7 +110,16 @@ pub async fn observe(
         let key = keys.loop_key(seen.run, &format!("fp:{fp}"));
         let n: u64 = conn.incr(&key, 1).await?;
         if n == 1 {
-            let _: () = conn.expire(&key, i64::from(p.repeat_window_secs)).await?;
+            let counted = keys.loop_key(seen.run, "fps");
+            let _: () = redis::pipe()
+                .expire(&key, i64::from(p.repeat_window_secs))
+                .ignore()
+                .sadd(&counted, fp)
+                .ignore()
+                .expire(&counted, RUN_TTL_SECS as i64)
+                .ignore()
+                .query_async(&mut conn)
+                .await?;
         }
         if n >= u64::from(p.max_repeats) {
             trip = Some(Trip::Repeats(n));
@@ -221,9 +230,16 @@ async fn tripped(st: &AppState, seen: &Seen<'_>, action: LoopAction, detail: &st
 pub async fn reset(st: &AppState, org: &str, run: &str) -> Result<()> {
     let keys = Keys::new(org);
     let mut conn = st.ledger.conn();
-    let _: () = conn
-        .del(&[keys.loop_key(run, "tripped"), keys.loop_key(run, "calls")])
-        .await?;
+    let counted = keys.loop_key(run, "fps");
+    let fingerprints: Vec<String> = conn.smembers(&counted).await?;
+    let mut stale = vec![keys.loop_key(run, "tripped"), keys.loop_key(run, "calls")];
+    stale.extend(
+        fingerprints
+            .iter()
+            .map(|fp| keys.loop_key(run, &format!("fp:{fp}"))),
+    );
+    stale.push(counted);
+    let _: () = conn.del(&stale).await?;
     Ok(())
 }
 

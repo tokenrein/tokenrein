@@ -292,6 +292,95 @@ async fn repeated_requests_pause_a_looping_run() {
 }
 
 #[tokio::test]
+async fn retries_refused_during_a_budget_pause_are_not_a_loop() {
+    let budgets = r#"run = { limit_usd = 0.00001, mode = "ask" }
+                     loops = { action = "pause", max_repeats = 3 }"#;
+    let Some(h) = H::start(budgets).await else {
+        return;
+    };
+    // The agent keeps retrying the same request while it waits for a person.
+    for _ in 0..6 {
+        let (status, body) = h.chat("patient", "same thing").await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"]["type"], "tokenrein_run_paused");
+    }
+    let list = h.approvals().await;
+    assert_eq!(list["pending"], 1);
+    assert_eq!(list["approvals"][0]["kind"], "budget");
+
+    // The approver adds budget, and the retried request goes through.
+    let more = Some(json!({"add_usd": 1.0}));
+    let approve = "/admin/orgs/acme/approvals/patient/approve";
+    assert_eq!(h.admin(Method::POST, approve, more).await.0, StatusCode::OK);
+    let (status, body) = h.chat("patient", "same thing").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(h.approvals().await["pending"], 0);
+}
+
+#[tokio::test]
+async fn checks_and_hooks_refused_while_paused_are_not_a_loop() {
+    let Some(h) = H::start(r#"loops = { action = "pause", max_repeats = 3 }"#).await else {
+        return;
+    };
+    let fingerprint = "00ff00ff00ff00ff00ff00ff00ff00ff";
+    let check = json!({"run_id": "sdk-run", "model": "gpt-4o-mini", "fingerprint": fingerprint});
+    let hook = json!({"hook_event_name": "PreToolUse", "session_id": "s1", "tool_name": "Bash",
+                      "tool_input": {"command": "npm test"}});
+    for run in ["sdk-run", "cc-s1"] {
+        let pause = format!("/admin/orgs/acme/runs/{run}/pause");
+        assert_eq!(h.admin(Method::POST, &pause, None).await.0, StatusCode::OK);
+    }
+    for _ in 0..6 {
+        let (_, v) = h.ingest("/v1/check", check.clone()).await;
+        assert_eq!(v["allowed"], false, "{v}");
+        let (_, v) = h.ingest("/v1/hooks/claude-code", hook.clone()).await;
+        let decision = &v["hookSpecificOutput"]["permissionDecision"];
+        assert_eq!(decision, "deny", "{v}");
+    }
+    for run in ["sdk-run", "cc-s1"] {
+        let resume = format!("/admin/orgs/acme/runs/{run}/resume");
+        assert_eq!(h.admin(Method::POST, &resume, None).await.0, StatusCode::OK);
+    }
+    let (_, v) = h.ingest("/v1/check", check).await;
+    assert_eq!(v["allowed"], true, "{v}");
+    let (_, v) = h.ingest("/v1/hooks/claude-code", hook).await;
+    assert_eq!(v, json!({}));
+    assert_eq!(h.approvals().await["pending"], 0);
+}
+
+#[tokio::test]
+async fn a_call_stopped_by_the_loop_guard_keeps_nothing_reserved() {
+    let budgets = r#"run = { limit_usd = 1.0, mode = "enforce" }
+                     loops = { action = "pause", max_repeats = 2 }"#;
+    let Some(h) = H::start(budgets).await else {
+        return;
+    };
+    assert_eq!(h.chat("held", "same thing").await.0, StatusCode::OK);
+    assert_eq!(h.chat("held", "same thing").await.0, StatusCode::FORBIDDEN);
+    let (_, run) = h
+        .admin(Method::GET, "/admin/orgs/acme/runs/held", None)
+        .await;
+    assert_eq!(run["budget"]["reserved_micros"], 0, "{run}");
+}
+
+#[tokio::test]
+async fn letting_a_looping_run_continue_resets_the_guard() {
+    let Some(h) = H::start(r#"loops = { action = "pause", max_repeats = 3 }"#).await else {
+        return;
+    };
+    assert_eq!(h.chat("loopy", "same thing").await.0, StatusCode::OK);
+    assert_eq!(h.chat("loopy", "same thing").await.0, StatusCode::OK);
+    assert_eq!(h.chat("loopy", "same thing").await.0, StatusCode::FORBIDDEN);
+    let approve = "/admin/orgs/acme/approvals/loopy/approve";
+    assert_eq!(h.admin(Method::POST, approve, None).await.0, StatusCode::OK);
+    // The count starts over: the same request gets the same allowance again, then trips again.
+    assert_eq!(h.chat("loopy", "same thing").await.0, StatusCode::OK);
+    assert_eq!(h.chat("loopy", "same thing").await.0, StatusCode::OK);
+    assert_eq!(h.chat("loopy", "same thing").await.0, StatusCode::FORBIDDEN);
+    assert_eq!(h.approvals().await["pending"], 1);
+}
+
+#[tokio::test]
 async fn sdk_checks_and_agent_hooks_catch_loops_too() {
     let policy = r#"loops = { action = "kill", max_repeats = 2, max_usd_per_minute = 0.01 }"#;
     let Some(h) = H::start(policy).await else {

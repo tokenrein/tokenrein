@@ -414,50 +414,6 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         tracing::warn!(request_id, model = %ctx.model, "unknown model price; reserving at the provider's most expensive rate");
     }
 
-    // Loop detection, before anything is reserved: a run caught looping stops here.
-    let loop_policy = crate::loops::policy_for(&rt, &org.id, &project.id);
-    if loop_policy.is_some() {
-        let fingerprint = serde_json::from_slice::<serde_json::Value>(&body)
-            .ok()
-            .and_then(|v| crate::loops::request_fingerprint(&ctx.model, &v));
-        let seen = crate::loops::Seen {
-            org: &org.id,
-            project: &project.id,
-            agent: &ctx.agent,
-            run: &run_id,
-            fingerprint: fingerprint.as_deref(),
-            call: true,
-            cost: 0,
-        };
-        match crate::loops::observe(&st, loop_policy, seen).await {
-            Ok(Some(action)) => {
-                emit(
-                    &st,
-                    &ctx,
-                    &Outcome::blocked("blocked_loop", &format!("run:{run_id}")),
-                );
-                let (kind, message) = if action == config::LoopAction::Kill {
-                    (
-                        "tokenrein_run_killed",
-                        format!(
-                            "Tokenrein: run {run_id} looks like a runaway loop and was stopped"
-                        ),
-                    )
-                } else {
-                    (
-                        "tokenrein_run_paused",
-                        format!(
-                            "Tokenrein: run {run_id} looks like a runaway loop and is paused until an approver lets it continue"
-                        ),
-                    )
-                };
-                return with_run_header(reject(StatusCode::FORBIDDEN, kind, &message), &run_id);
-            }
-            Ok(None) => {}
-            Err(e) => tracing::warn!(request_id, error = %e, "loop detection failed; continuing"),
-        }
-    }
-
     let reservation_ttl = rt.cfg.server.upstream_timeout_secs + RESERVATION_GRACE_SECS;
     let mut runs = Vec::with_capacity(ancestors.len() + 1);
     runs.push(run_id.clone());
@@ -565,6 +521,54 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
             ctx.degraded = true;
         }
     }
+    // Loop detection, once the call has been let through: a refused retry is not a call, so a run
+    // waiting for an approver does not look like a loop. A run caught looping stops here.
+    let loop_policy = crate::loops::policy_for(&rt, &org.id, &project.id);
+    if loop_policy.is_some() {
+        let fingerprint = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| crate::loops::request_fingerprint(&ctx.model, &v));
+        let seen = crate::loops::Seen {
+            org: &org.id,
+            project: &project.id,
+            agent: &ctx.agent,
+            run: &run_id,
+            fingerprint: fingerprint.as_deref(),
+            call: true,
+            cost: 0,
+        };
+        match crate::loops::observe(&st, loop_policy, seen).await {
+            Ok(Some(action)) => {
+                if let Err(e) = st.ledger.settle(&org.id, &request_id, 0, &ctx.scopes).await {
+                    tracing::warn!(request_id, error = %e, "could not release the reservation; the sweep will");
+                }
+                emit(
+                    &st,
+                    &ctx,
+                    &Outcome::blocked("blocked_loop", &format!("run:{run_id}")),
+                );
+                let (kind, message) = if action == config::LoopAction::Kill {
+                    (
+                        "tokenrein_run_killed",
+                        format!(
+                            "Tokenrein: run {run_id} looks like a runaway loop and was stopped"
+                        ),
+                    )
+                } else {
+                    (
+                        "tokenrein_run_paused",
+                        format!(
+                            "Tokenrein: run {run_id} looks like a runaway loop and is paused until an approver lets it continue"
+                        ),
+                    )
+                };
+                return with_run_header(reject(StatusCode::FORBIDDEN, kind, &message), &run_id);
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!(request_id, error = %e, "loop detection failed; continuing"),
+        }
+    }
+
     ctx.pre_upstream_us = started.elapsed().as_micros() as u64;
 
     let url = format!("{base}{}", api.path());

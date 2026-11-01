@@ -650,12 +650,15 @@ pub async fn check(
         .fingerprint
         .as_deref()
         .filter(|f| crate::loops::valid_fingerprint(f));
-    let v = match loop_stop(&st, &c, &who, fingerprint).await {
-        Some(v) => v,
-        None => match verdict(&st, &c, &who, estimate).await {
-            Ok(v) => v,
-            Err(e) => return unavailable(e),
-        },
+    let v = match verdict(&st, &c, &who, estimate).await {
+        Ok(v) => v,
+        Err(e) => return unavailable(e),
+    };
+    // Only a call that may go ahead counts: a refused retry is not a loop.
+    let v = if v.allowed {
+        loop_stop(&st, &c, &who, fingerprint).await.unwrap_or(v)
+    } else {
+        v
     };
     if let Err(e) = st
         .ledger
@@ -1458,20 +1461,18 @@ async fn agent_hook(st: &AppState, headers: &HeaderMap, input: &Value, tool: Too
     } else {
         None
     };
-    let stopped = match fingerprint {
-        Some(fp) => loop_stop(st, &c, &who, Some(&fp)).await,
-        None => None,
+    let v = match verdict(st, &c, &who, 0).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "hook budget check failed; allowing");
+            crate::metrics::ledger_error();
+            return allow;
+        }
     };
-    let v = match stopped {
-        Some(v) => v,
-        None => match verdict(st, &c, &who, 0).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!(error = %e, "hook budget check failed; allowing");
-                crate::metrics::ledger_error();
-                return allow;
-            }
-        },
+    // Only a tool call that may go ahead counts: a refused retry is not a loop.
+    let v = match fingerprint {
+        Some(fp) if v.allowed => loop_stop(st, &c, &who, Some(&fp)).await.unwrap_or(v),
+        _ => v,
     };
     if v.allowed {
         return allow;

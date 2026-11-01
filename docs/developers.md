@@ -170,7 +170,8 @@ loops = { action = "pause", max_repeats = 6, repeat_window_secs = 600, max_usd_p
 | Calls | the run makes more than `max_calls_per_run` model calls |
 
 `action`: `warn` (alert only), `pause` (the run waits for an approver; letting it continue resets
-the guard for that run) or `kill`. Only hashes of requests are kept.
+the guard for that run) or `kill`. Calls Tokenrein refuses are not counted, so an agent retrying
+while its run waits for an approver does not look like a loop. Only hashes of requests are kept.
 
 ## Proxy-free endpoints
 
