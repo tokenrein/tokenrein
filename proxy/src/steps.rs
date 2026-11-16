@@ -140,7 +140,9 @@ pub fn from_hook(event: &str, input: &Value, capture: bool) -> Option<Step> {
         | "AfterTool"
         | "postToolUse"
         | "afterShellExecution"
-        | "afterMCPExecution" => Kind::ToolResult,
+        | "afterMCPExecution"
+        | "PostToolUseFailure"
+        | "postToolUseFailure" => Kind::ToolResult,
         "SubagentStart" | "subagentStart" => Kind::Subagent,
         "Stop" | "stop" => Kind::TurnEnd,
         "SessionEnd" | "sessionEnd" => Kind::SessionEnd,
@@ -185,7 +187,8 @@ pub fn from_hook(event: &str, input: &Value, capture: bool) -> Option<Step> {
                     step.content = Some(redact(&text));
                 }
             } else {
-                let failed = result_failed(input);
+                // Claude Code, Cursor and Copilot report a failed tool on its own event.
+                let failed = event.ends_with("ToolUseFailure") || result_failed(input);
                 step.status = Some(if failed { "error" } else { "ok" });
                 let output = first_value(
                     input,
@@ -683,6 +686,14 @@ mod tests {
             assert_eq!(
                 from_hook("postToolUse", &failed, false).unwrap().status,
                 Some("error")
+            );
+        }
+        let failure = json!({"tool_name": "Bash", "tool_use_id": "toolu_9", "error": "exit 1"});
+        for event in ["PostToolUseFailure", "postToolUseFailure"] {
+            let r = from_hook(event, &failure, false).unwrap();
+            assert_eq!(
+                (r.kind, r.status, r.call_id.as_deref()),
+                (Kind::ToolResult, Some("error"), Some("toolu_9"))
             );
         }
     }

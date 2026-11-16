@@ -7,6 +7,8 @@ SDKs; the release workflow refuses a tag that does not match all three.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-17
+
 ### Added
 - Agent logs: what agents do between model calls (prompts, tool calls with outcome and duration,
   sub-agents, turn and session ends), from the connectors' hooks and from `guard.log()` /
@@ -26,8 +28,18 @@ SDKs; the release workflow refuses a tag that does not match all three.
   for data and status (a dot and a word instead of filled pills), stats in one strip, sentence-case
   labels, tabular numbers, shorter page copy, and a new logo mark. Light and dark themes, still no
   external fonts or scripts.
-- The connect scripts add an after-tool hook (`PostToolUse`, `AfterTool` or `postToolUse`) so tool
-  results are logged. Run a connect script again to add it to an existing connection.
+- The connect scripts add an after-tool hook (`PostToolUse`, `AfterTool` or `postToolUse`) and, for
+  Claude Code, Cursor and Copilot, the tool-failure hook (`PostToolUseFailure` /
+  `postToolUseFailure`), so tool results and failures are logged. Run a connect script again to add
+  them to an existing connection.
+- The dashboard opens in light mode; a Dark mode button in the sidebar switches it.
+
+### Fixed
+- Integration tests could fail when two tests started Redis on the same free port.
+
+### Security
+- `cargo audit` ignores RUSTSEC-2026-0459 (SQLite): `libsqlite3-sys` is listed in `Cargo.lock` by
+  sqlx but never compiled (see `.cargo/audit.toml`).
 
 ## [0.1.4] - 2026-11-01
 

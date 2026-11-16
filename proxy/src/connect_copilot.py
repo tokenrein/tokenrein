@@ -22,7 +22,7 @@ OpenTelemetry export with each user's GitHub login in Copilot's managed settings
 
 TOOL = "copilot"
 # Native (camelCase) events. Their payloads don't name the event, so the hook command passes it.
-HOOK_EVENTS = ["preToolUse", "postToolUse", "userPromptSubmitted", "sessionEnd"]
+HOOK_EVENTS = ["preToolUse", "postToolUse", "postToolUseFailure", "userPromptSubmitted", "sessionEnd"]
 OTEL_PATH = "/v1/otel"
 PROFILE_MARK = "# Tokenrein: GitHub Copilot telemetry (undo: copilot.py --remove)"
 

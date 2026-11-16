@@ -6,7 +6,8 @@ its hooks to refuse the next prompt or tool call when a run is paused or killed,
 budget is used up. This page lists the exact fields Tokenrein relies on, and where each is
 documented, so the mappers can be checked when the agents change.
 
-Checked against the agents' docs and source on 2026-10-22 (GitHub Copilot: 2026-10-31).
+Checked against the agents' docs and source on 2026-10-22 (GitHub Copilot: 2026-10-31; after-tool and
+failure hooks: 2026-11-17).
 
 | Agent | Usage from | Blocks with | Run id | Connect script |
 |---|---|---|---|---|
@@ -40,6 +41,7 @@ Connections made before agent logs existed need the connect script run again to 
 | Prompt | `UserPromptSubmit` | `UserPromptSubmit` | `BeforeAgent` | `beforeSubmitPrompt` | `userPromptSubmitted` |
 | Tool call | `PreToolUse` | `PreToolUse` | `BeforeTool` | `preToolUse` | `preToolUse` |
 | Tool result (added) | `PostToolUse` | `PostToolUse` | `AfterTool` | `postToolUse` | `postToolUse` |
+| Failed tool (added) | `PostToolUseFailure` | (in `PostToolUse`) | (in `AfterTool`) | `postToolUseFailure` | `postToolUseFailure` |
 | Sub-agent | `SubagentStart` | — | — | `subagentStart` | — |
 | Turn / session end | `Stop`, `SessionEnd` | `SessionEnd` | `SessionEnd` | `sessionEnd` | `sessionEnd` |
 
@@ -47,7 +49,7 @@ Fields read: `tool_name` / `toolName`; `tool_use_id` (or `toolUseId`, `tool_call
 call with its result; `tool_input` / `toolArgs` / `command` for the input's size and a hash of name
 and input (repeated calls show up without the input being kept); `tool_response` / `toolResult` for
 the outcome: `is_error`, `success: false`, a non-empty `error`, `resultType` other than `success`, or
-a non-zero `exit_code` count as an error; `prompt` for a prompt's size; `reason` on session end.
+a non-zero `exit_code`, or a `…ToolUseFailure` event (it carries `error`) count as an error; `prompt` for a prompt's size; `reason` on session end.
 
 Prompt and tool text is kept only for projects with **content capture** on (Keys & limits, or
 `capture_content` on the project in the admin API): redacted (API keys, tokens, JWTs, passwords,

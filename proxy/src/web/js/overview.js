@@ -222,7 +222,9 @@ function renderActivity() {
   const lat = (a.latency_buckets_ms || []).map((_, i) => mins.reduce((x, m) => x + (m.latency[i] || 0), 0));
   const models = sum("model_calls"), steps = sum("steps"), problems = sum("problems"), spend = sum("cost_micros");
   const all = models + steps + problems;
-  const W = 760, H = 170, L = 40, R = 6, T = 10, B = 22;
+  // Drawn at its real width (beside the stats, or full width on small screens) so labels keep their size.
+  const wide = window.innerWidth > 860;
+  const W = Math.max(280, Math.round((el.clientWidth || 760) - 34 - (wide ? 284 : 0))), H = 170, L = 40, R = 6, T = 10, B = 22;
   const max = niceMax(Math.max(...buckets.map(b => b.model + b.tool + b.bad), 1));
   const slot = (W - L - R) / N, bw = Math.max(3, slot - 4);
   const y = v => T + (H - T - B) * (1 - v / max);
@@ -258,3 +260,8 @@ function renderActivity() {
       </div>
     </div></div>`;
 }
+let activityResize;
+window.addEventListener("resize", () => {
+  clearTimeout(activityResize);
+  activityResize = setTimeout(() => { if (S.tab === "overview" && S.activity) renderActivity(); }, 150);
+});

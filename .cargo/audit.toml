@@ -1,0 +1,10 @@
+# cargo audit settings (CI runs `cargo audit`). Every ignore says why and when to remove it.
+
+[advisories]
+ignore = [
+    # libsqlite3-sys < 0.39 (SQLite CVE-2026-119375). It is in Cargo.lock only because sqlx lists
+    # every database driver there; Tokenrein builds sqlx with Postgres only, so SQLite is not
+    # compiled on any platform (`cargo tree -i libsqlite3-sys --target all` is empty). Remove this
+    # once an sqlx release moves to libsqlite3-sys 0.39 or later.
+    "RUSTSEC-2026-0459",
+]

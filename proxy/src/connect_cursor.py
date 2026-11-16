@@ -15,7 +15,7 @@ usage from Cursor's Admin API on the Tokenrein Connect page. Standard library on
 # @tokenrein-common@
 
 TOOL = "cursor"
-HOOK_EVENTS = ["beforeSubmitPrompt", "preToolUse", "postToolUse", "subagentStart", "sessionEnd"]
+HOOK_EVENTS = ["beforeSubmitPrompt", "preToolUse", "postToolUse", "postToolUseFailure", "subagentStart", "sessionEnd"]
 
 
 def is_our_entry(entry):
