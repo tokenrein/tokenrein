@@ -12,6 +12,7 @@
 <script src="/assets/js/models.js" defer></script>
 <script src="/assets/js/spend.js" defer></script>
 <script src="/assets/js/activity.js" defer></script>
+<script src="/assets/js/logs.js" defer></script>
 <script src="/assets/js/settings.js" defer></script>
 <script src="/assets/js/approvals.js" defer></script>
 <script src="/assets/js/alerts.js" defer></script>
@@ -64,6 +65,7 @@
       <button role="tab" data-tab="agents" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6"/></svg>Agents</button>
       <button role="tab" data-tab="spend" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Spend</button>
       <button role="tab" data-tab="activity" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Activity</button>
+      <button role="tab" data-tab="logs" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h13"/><circle cx="19" cy="12" r="1.5"/></svg>Logs</button>
       <button role="tab" data-tab="approvals" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3 8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg>Approvals<span class="nav-count hide" id="approvals-count"></span></button>
       <div class="nav-group">Set up</div>
       <button role="tab" data-tab="connect" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0V7zM12 16v5"/></svg>Connect</button>
@@ -87,6 +89,7 @@
       <p class="sub" id="ov-sub"></p>
       <div id="get-started"></div>
       <div class="grid kpis" id="kpis"></div>
+      <div id="ov-activity"></div>
       <div id="review"></div>
       <div class="card">
         <div class="card-h"><h2>Projects this month</h2></div>
@@ -167,6 +170,37 @@
           </select>
         </div>
         <div class="table-wrap"><table id="events-table" class="wide"></table></div>
+      </div>
+    </section>
+
+    <section data-view="logs" class="hide">
+      <h1>Logs</h1>
+      <p class="sub">What your agents did, step by step: prompts, tool calls and their outcomes, sub-agents and model calls, newest first. Kept for 7 days. Click a row for details.</p>
+      <p class="help" id="logs-note"></p>
+      <div class="card">
+        <div class="card-h">
+          <input type="search" id="logs-q" placeholder="Search tool, run, agent or content" aria-label="Search logs" style="min-width:240px">
+          <select id="logs-kind" aria-label="Kind">
+            <option value="">All kinds</option>
+            <option value="tool_call">Tool calls</option>
+            <option value="model_call">Model calls</option>
+            <option value="prompt">Prompts</option>
+            <option value="subagent">Sub-agents</option>
+            <option value="log">SDK logs</option>
+            <option value="turn_end,session_end">Turn and session ends</option>
+          </select>
+          <select id="logs-status" aria-label="Status">
+            <option value="">Any status</option>
+            <option value="problems">Errors and blocked</option>
+            <option value="error">Errors</option>
+            <option value="blocked">Blocked</option>
+            <option value="ok">OK</option>
+          </select>
+          <select id="logs-agent" aria-label="Agent"><option value="">All agents</option></select>
+          <div class="toolbar"><span class="status" id="logs-count"></span></div>
+        </div>
+        <div class="table-wrap"><table id="logs-table" class="wide"></table></div>
+        <div class="card-b" style="text-align:center"><button class="btn sm hide" id="logs-more" type="button">Load older entries</button></div>
       </div>
     </section>
 

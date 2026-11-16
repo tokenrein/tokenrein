@@ -92,6 +92,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         // Tokenrein out of the request path: reported usage, budget checks, agent telemetry.
         .route("/v1/usage", post(crate::ingest::usage))
         .route("/v1/check", post(crate::ingest::check))
+        .route("/v1/steps", post(crate::ingest::steps))
         .route("/v1/otel/v1/logs", post(crate::ingest::otel_logs))
         .route("/v1/otel/v1/traces", post(crate::ingest::otel_traces))
         .route("/v1/otel/v1/metrics", post(crate::ingest::otel_discard))

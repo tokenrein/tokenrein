@@ -116,6 +116,8 @@ class FakeTokenrein(Server):
             return 200, "application/json", json.dumps(self.verdict).encode()
         if path == "/v1/usage":
             return 200, "application/json", json.dumps({"accepted": len(body["events"]), "over": self.over}).encode()
+        if path == "/v1/steps":
+            return 200, "application/json", json.dumps({"accepted": len(body["steps"]), "rejected": []}).encode()
         return 404, "application/json", b"{}"
 
     def checks(self) -> List[Dict[str, Any]]:
@@ -124,6 +126,10 @@ class FakeTokenrein(Server):
     def usage(self) -> List[Dict[str, Any]]:
         guard.flush(5)
         return [e for r in self.requests if r["path"] == "/v1/usage" for e in r["body"]["events"]]
+
+    def steps(self) -> List[Dict[str, Any]]:
+        guard.flush(5)
+        return [e for r in self.requests if r["path"] == "/v1/steps" for e in r["body"]["steps"]]
 
 
 @pytest.fixture
@@ -259,3 +265,35 @@ def test_checks_carry_a_fingerprint_not_the_content(env):
     assert fps[0] == fps[1] != fps[2]
     assert len(fps[0]) == 32 and all(ch in "0123456789abcdef" for ch in fps[0])
     assert "same" not in json.dumps(tl.checks())
+
+
+def test_steps_are_logged_with_the_current_run(env):
+    tl, _ = env
+    with guard.run("job-7", agent="researcher", user="ana@example.com"):
+        with guard.run("job-7-sub"):
+            guard.log("retrieve", content="query", attrs={"hits": 3}, level="warn")
+    [s] = tl.steps()
+    assert (s["run_id"], s["parent_run_id"], s["name"], s["level"]) == ("job-7-sub", "job-7", "retrieve", "warn")
+    assert s["user"] == "ana@example.com" and s["content"] == "query" and s["attrs"] == {"hits": 3}
+    assert "_step" not in s
+    assert tl.usage() == []
+
+
+def test_step_blocks_are_timed_and_record_errors(env):
+    tl, _ = env
+    with guard.run("job-8"):
+        with guard.step("tool:search", kind="tool_call") as st:
+            st.attrs["n"] = 1
+        with pytest.raises(KeyError):
+            with guard.step("tool:fetch"):
+                raise KeyError("x")
+    ok, failed = tl.steps()
+    assert (ok["name"], ok["kind"], ok["status"], ok["attrs"]) == ("tool:search", "tool_call", "ok", {"n": 1})
+    assert isinstance(ok["duration_ms"], int)
+    assert (failed["status"], failed["level"], failed["attrs"]) == ("error", "error", {"error": "KeyError"})
+
+
+def test_log_rejects_bad_arguments(env):
+    for bad in [dict(name=""), dict(name="x", level="loud"), dict(name="x", kind="other"), dict(name="x", status="maybe")]:
+        with pytest.raises(ValueError):
+            guard.log(**bad)

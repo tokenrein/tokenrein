@@ -16,7 +16,7 @@ Standard library only.
 
 TOOL = "gemini"
 HOOK_NAME = "tokenrein-budget"
-HOOK_EVENTS = ["BeforeAgent", "BeforeTool", "SessionEnd"]
+HOOK_EVENTS = ["BeforeAgent", "BeforeTool", "AfterTool", "SessionEnd"]
 OUR_TELEMETRY = ["enabled", "target", "otlpEndpoint", "otlpProtocol", "otlpHeaders", "logPrompts"]
 OTEL_PATH = "/v1/otel"
 
@@ -110,7 +110,7 @@ def main():
             "description": "Tokenrein: stop when the run is paused or a budget is used up",
         }
         group = {"hooks": [handler]}
-        if event == "BeforeTool":
+        if event in ("BeforeTool", "AfterTool"):
             group = {"matcher": "*", "hooks": [handler]}
         hooks.setdefault(event, []).append(group)
     write_json(path, settings)

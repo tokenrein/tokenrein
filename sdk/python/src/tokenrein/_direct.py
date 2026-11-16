@@ -203,6 +203,10 @@ class Reporter:
 
     # --- reports ---
 
+    def log(self, step: Dict[str, Any]) -> None:
+        """Queue an agent step for ``POST /v1/steps`` (sent with the usage reports)."""
+        self.report(dict(step, _step=True))
+
     def report(self, event: Dict[str, Any]) -> None:
         with self._lock:
             if self._thread is None or not self._thread.is_alive():
@@ -238,16 +242,20 @@ class Reporter:
                     break
                 if ev:
                     batch.append(ev)
-            if batch:
-                self._send(batch)
+            usage = [e for e in batch if not e.get("_step")]
+            steps = [{k: v for k, v in e.items() if k != "_step"} for e in batch if e.get("_step")]
+            if usage:
+                self._send("/v1/usage", {"events": usage})
+            if steps:
+                self._send("/v1/steps", {"steps": steps})
             with self._lock:
                 self._pending -= len(batch)
                 self._idle.notify_all()
 
-    def _send(self, batch: List[Dict[str, Any]]) -> None:
+    def _send(self, path: str, body: Dict[str, Any]) -> None:
         for attempt in range(3):
             try:
-                out = self._post("/v1/usage", {"events": batch}, 10.0)
+                out = self._post(path, body, 10.0)
                 now = time.time()
                 for label in out.get("over", []):
                     self.over[label] = now

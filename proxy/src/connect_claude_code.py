@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 
 HOOK_PATH = "/v1/hooks/claude-code"
-HOOK_EVENTS = ["UserPromptSubmit", "PreToolUse", "SubagentStart", "Stop", "SessionEnd"]
+HOOK_EVENTS = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "SubagentStart", "Stop", "SessionEnd"]
 OUR_ENV = [
     "CLAUDE_CODE_ENABLE_TELEMETRY",
     "OTEL_LOGS_EXPORTER",
@@ -152,7 +152,7 @@ def main():
         hooks = settings.setdefault("hooks", {})
         for event in HOOK_EVENTS:
             group = {"hooks": [hook]}
-            if event == "PreToolUse":
+            if event in ("PreToolUse", "PostToolUse"):
                 group = {"matcher": "*", "hooks": [hook]}
             hooks.setdefault(event, []).append(group)
 

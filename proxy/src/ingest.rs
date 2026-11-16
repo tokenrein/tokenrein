@@ -1453,7 +1453,9 @@ async fn agent_hook(st: &AppState, headers: &HeaderMap, input: &Value, tool: Too
         }
         return unavailable(e);
     }
+    let step = crate::steps::from_hook(call.event, input, c.project().capture_content);
     let Some(gate) = call.gate else {
+        publish_step(st, &c, &who, step, false);
         return allow;
     };
     let fingerprint = if gate == Gate::Tool {
@@ -1475,8 +1477,10 @@ async fn agent_hook(st: &AppState, headers: &HeaderMap, input: &Value, tool: Too
         _ => v,
     };
     if v.allowed {
+        publish_step(st, &c, &who, step, false);
         return allow;
     }
+    publish_step(st, &c, &who, step, true);
     crate::metrics::publish(
         &st.activity,
         crate::metrics::Path::Ingest,
@@ -1486,6 +1490,93 @@ async fn agent_hook(st: &AppState, headers: &HeaderMap, input: &Value, tool: Too
         .reason
         .unwrap_or_else(|| "Tokenrein: budget used up".into());
     Json(hook_block(tool, gate, call.event, &reason)).into_response()
+}
+
+/// Queues an agent step for the dashboard's logs (best effort, like request events).
+fn publish_step(
+    st: &AppState,
+    c: &Caller,
+    who: &Who,
+    step: Option<crate::steps::Step>,
+    blocked: bool,
+) {
+    let Some(mut step) = step else { return };
+    if blocked {
+        step.status = Some("blocked");
+    }
+    let place = crate::steps::Place {
+        org: &c.org().id,
+        project: &c.project().id,
+        agent: &who.agent,
+        user: who.user.as_deref(),
+        run: &who.run,
+        parent: who.parent.as_deref(),
+        source: &who.source,
+    };
+    crate::metrics::publish(
+        &st.activity,
+        crate::metrics::Path::Ingest,
+        crate::steps::event(&place, &step),
+    );
+}
+
+/// Most steps accepted in one `/v1/steps` request.
+const MAX_STEPS: usize = 500;
+
+#[derive(Deserialize)]
+pub struct StepsBody {
+    #[serde(default)]
+    steps: Vec<Value>,
+}
+
+/// `POST /v1/steps`: agent steps logged by an SDK (`guard.log()`), for the run's trace and the
+/// org's logs. Steps are not charged to any budget.
+pub async fn steps(
+    State(st): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<StepsBody>,
+) -> Response {
+    let c = match caller(&st, &headers) {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    if body.steps.len() > MAX_STEPS {
+        return error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "tokenrein_invalid_request",
+            "at most 500 steps per request",
+        );
+    }
+    let capture = c.project().capture_content;
+    let mut rejected = Vec::new();
+    for (i, raw) in body.steps.iter().enumerate() {
+        let ids: UsageEvent = match serde_json::from_value(json!({
+            "run_id": raw.get("run_id"),
+            "parent_run_id": raw.get("parent_run_id"),
+            "agent": raw.get("agent"),
+            "user": raw.get("user"),
+            "source": raw.get("source"),
+            "model": "-",
+        })) {
+            Ok(ids) => ids,
+            Err(_) => {
+                rejected.push(json!({ "index": i, "error": "run_id, parent_run_id, agent, user and source must be strings" }));
+                continue;
+            }
+        };
+        let step = who_from_event(&ids, "sdk")
+            .and_then(|who| crate::steps::from_sdk(raw, capture).map(|s| (who, s)));
+        match step {
+            Ok((who, step)) => publish_step(&st, &c, &who, Some(step), false),
+            Err(e) => rejected.push(json!({ "index": i, "error": e })),
+        }
+    }
+    Json(json!({
+        "accepted": body.steps.len() - rejected.len(),
+        "rejected": rejected,
+        "content_kept": capture,
+    }))
+    .into_response()
 }
 
 /// Claude Code HTTP hooks.

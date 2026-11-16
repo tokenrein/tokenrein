@@ -242,11 +242,24 @@ impl<'a> Keys<'a> {
     pub fn run_events(&self, run: &str) -> String {
         format!("tl:{{{}}}:re:{run}", self.org)
     }
+    /// The latest agent steps of one run (agent logs), newest first.
+    pub fn run_steps(&self, run: &str) -> String {
+        format!("tl:{{{}}}:rst:{run}", self.org)
+    }
+    /// Agent steps and shortened model calls, oldest first (capped stream): the org's logs.
+    pub fn logs(&self) -> String {
+        format!("tl:{{{}}}:logs", self.org)
+    }
     /// Runs whose parent is `run`.
     pub fn run_children(&self, run: &str) -> String {
         format!("tl:{{{}}}:rc:{run}", self.org)
     }
     /// Spend and request counts for one UTC day, by model, user, project and agent.
+    /// Calls, steps, problems, cost and model latency for one minute (unix time / 60), for the
+    /// overview's last hour.
+    pub fn activity_minute(&self, minute: i64) -> String {
+        format!("tl:{{{}}}:am:{minute}", self.org)
+    }
     pub fn spend_day(&self, ymd: &str) -> String {
         format!("tl:{{{}}}:sp:{ymd}", self.org)
     }
@@ -812,6 +825,10 @@ impl Ledger {
                 continue;
             }
             let keys = Keys::new(org);
+            if s("event") == "step" {
+                record_step(&mut pipe, &keys, e, now);
+                continue;
+            }
             pipe.cmd("XADD")
                 .arg(keys.events())
                 .arg("MAXLEN")
@@ -821,6 +838,7 @@ impl Ledger {
                 .arg("e")
                 .arg(e.to_string())
                 .ignore();
+            add_log(&mut pipe, &keys, &crate::steps::model_call_entry(e));
             pipe.zadd(keys.runs_seen(), run, now).ignore();
             pipe.zadd(keys.agents_seen(), format!("{project}/{agent}"), now)
                 .ignore();
@@ -872,6 +890,16 @@ impl Ledger {
                 }
             }
             pipe.expire(&spend, MONTHLY_TTL_SECS as i64).ignore();
+            let ok = s("decision") == "allowed";
+            let ms = e.get("upstream_ms").and_then(|v| v.as_i64()).unwrap_or(0);
+            count_minute(
+                &mut pipe,
+                &keys,
+                now,
+                if ok { "m" } else { "b" },
+                cost,
+                ok.then_some(ms),
+            );
             pipe.hset(&info, "last_seen", now).ignore();
             pipe.hset_nx(&info, "first_seen", now).ignore();
             pipe.hincr(&info, "requests", 1).ignore();
@@ -894,6 +922,12 @@ impl Ledger {
             .zrembyscore(keys.runs_seen(), "-inf", cutoff)
             .ignore()
             .zrembyscore(keys.agents_seen(), "-inf", cutoff)
+            .ignore()
+            .cmd("XTRIM")
+            .arg(keys.logs())
+            .arg("MINID")
+            .arg("~")
+            .arg(cutoff.max(0) * 1000)
             .ignore()
             .query_async(&mut conn)
             .await?;
@@ -993,6 +1027,83 @@ impl Ledger {
             ts(a).cmp(&ts(b))
         });
         Ok((runs, events))
+    }
+
+    /// Per-minute activity counters for the last `minutes` minutes, oldest first.
+    pub async fn activity_minutes(
+        &self,
+        org: &str,
+        minutes: i64,
+    ) -> Result<Vec<(i64, HashMap<String, i64>)>> {
+        let keys = Keys::new(org);
+        let now = unix_now() / 60;
+        let range: Vec<i64> = (now - minutes + 1..=now).collect();
+        let mut pipe = redis::pipe();
+        for m in &range {
+            pipe.hgetall(keys.activity_minute(*m));
+        }
+        let mut conn = self.conn.clone();
+        let maps: Vec<HashMap<String, i64>> = pipe.query_async(&mut conn).await?;
+        Ok(range.into_iter().zip(maps).collect())
+    }
+
+    /// Agent steps of the given runs, oldest first.
+    pub async fn run_steps(&self, org: &str, runs: &[String]) -> Result<Vec<serde_json::Value>> {
+        if runs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let keys = Keys::new(org);
+        let mut pipe = redis::pipe();
+        for r in runs {
+            pipe.lrange(keys.run_steps(r), 0, -1);
+        }
+        let mut conn = self.conn.clone();
+        let lists: Vec<Vec<String>> = pipe.query_async(&mut conn).await?;
+        // Lists are newest first; reversed, the stable sort keeps arrival order for equal times.
+        let mut steps: Vec<serde_json::Value> = lists
+            .into_iter()
+            .flat_map(|l| l.into_iter().rev())
+            .filter_map(|e| serde_json::from_str(&e).ok())
+            .collect();
+        let ts = |v: &serde_json::Value| {
+            v.get("ts")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+        steps.sort_by_key(ts);
+        Ok(steps)
+    }
+
+    /// A page of the org's logs, newest first: (stream id, entry). `before` is a stream id
+    /// (exclusive).
+    pub async fn logs_page(
+        &self,
+        org: &str,
+        before: Option<&str>,
+        count: usize,
+    ) -> Result<Vec<(String, serde_json::Value)>> {
+        let end = match before {
+            Some(id) if valid_stream_id(id) => format!("({id}"),
+            _ => "+".to_string(),
+        };
+        let mut conn = self.conn.clone();
+        let reply: redis::streams::StreamRangeReply = redis::cmd("XREVRANGE")
+            .arg(Keys::new(org).logs())
+            .arg(end)
+            .arg("-")
+            .arg("COUNT")
+            .arg(count)
+            .query_async(&mut conn)
+            .await?;
+        Ok(reply
+            .ids
+            .iter()
+            .filter_map(|item| {
+                let e: String = item.get("e")?;
+                Some((item.id.clone(), serde_json::from_str(&e).ok()?))
+            })
+            .collect())
     }
 
     /// Spend hashes for the given UTC days (`YYYYMMDD`).
@@ -1145,6 +1256,93 @@ pub struct RunDetail {
 const CONTROL_ORGS: &str = "tl:control:orgs";
 const CONTROL_VERSION: &str = "tl:control:version";
 const EVENTS_MAX: usize = 5000;
+/// Entries kept in an org's log stream (steps and model calls), and steps kept per run.
+const LOGS_MAX: usize = 50_000;
+const RUN_STEPS_MAX: usize = 2000;
+
+fn add_log(pipe: &mut redis::Pipeline, keys: &Keys, entry: &serde_json::Value) {
+    pipe.cmd("XADD")
+        .arg(keys.logs())
+        .arg("MAXLEN")
+        .arg("~")
+        .arg(LOGS_MAX)
+        .arg("*")
+        .arg("e")
+        .arg(entry.to_string())
+        .ignore();
+}
+
+/// Upper bounds (ms) of the model latency histogram kept per minute; the last one is open.
+pub const LATENCY_BUCKETS_MS: [i64; 9] =
+    [100, 250, 500, 1000, 2000, 5000, 10_000, 30_000, i64::MAX];
+const ACTIVITY_TTL_SECS: i64 = 2 * 3600;
+
+/// One call or step in this minute's counters: `m` model calls, `t` agent steps, `b` errors and
+/// blocked; `c` cost; `l<i>` model latency histogram (see [`LATENCY_BUCKETS_MS`]).
+fn count_minute(
+    pipe: &mut redis::Pipeline,
+    keys: &Keys,
+    now: i64,
+    field: &str,
+    cost: i64,
+    latency_ms: Option<i64>,
+) {
+    let key = keys.activity_minute(now / 60);
+    pipe.hincr(&key, field, 1).ignore();
+    if cost != 0 {
+        pipe.hincr(&key, "c", cost).ignore();
+    }
+    if let Some(ms) = latency_ms.filter(|ms| *ms > 0) {
+        let i = LATENCY_BUCKETS_MS
+            .iter()
+            .position(|b| ms <= *b)
+            .unwrap_or(LATENCY_BUCKETS_MS.len() - 1);
+        pipe.hincr(&key, format!("l{i}"), 1).ignore();
+    }
+    pipe.expire(&key, ACTIVITY_TTL_SECS).ignore();
+}
+
+/// An agent step: into the org's logs and the run's steps. It counts as activity for the run
+/// and agent, but not as a request or spend.
+fn record_step(pipe: &mut redis::Pipeline, keys: &Keys, e: &serde_json::Value, now: i64) {
+    let s = |k: &str| e.get(k).and_then(|v| v.as_str()).unwrap_or("");
+    let (run, project, agent) = (s("run_id"), s("project"), s("agent"));
+    add_log(pipe, keys, e);
+    let steps = keys.run_steps(run);
+    pipe.lpush(&steps, e.to_string()).ignore();
+    pipe.ltrim(&steps, 0, RUN_STEPS_MAX as isize - 1).ignore();
+    pipe.expire(&steps, RUN_TTL_SECS as i64).ignore();
+    pipe.zadd(keys.runs_seen(), run, now).ignore();
+    pipe.zadd(keys.agents_seen(), format!("{project}/{agent}"), now)
+        .ignore();
+    let info = keys.run_info(run);
+    for field in ["project", "agent", "source", "user"] {
+        if !s(field).is_empty() {
+            pipe.hset(&info, field, s(field)).ignore();
+        }
+    }
+    if let Some(p) = e.get("parent_run_id").and_then(|v| v.as_str()) {
+        pipe.hset(&info, "parent", p).ignore();
+        let children = keys.run_children(p);
+        pipe.sadd(&children, run).ignore();
+        pipe.expire(&children, RUN_TTL_SECS as i64).ignore();
+    }
+    let field = match (s("status"), s("kind")) {
+        ("error" | "blocked", _) => Some("b"),
+        (_, "tool_result") => None,
+        _ => Some("t"),
+    };
+    if let Some(f) = field {
+        count_minute(pipe, keys, now, f, 0, None);
+    }
+    pipe.hincr(&info, "steps", 1).ignore();
+    if s("status") == "error" {
+        pipe.hincr(&info, "errors", 1).ignore();
+    }
+    pipe.hset(&info, "last_seen", now).ignore();
+    pipe.hset_nx(&info, "first_seen", now).ignore();
+    pipe.expire(&info, RUN_TTL_SECS as i64).ignore();
+}
 const AUDIT_STREAM: &str = "tl:audit";
 const AUDIT_MAX: usize = 10_000;
 const RUN_EVENTS_MAX: usize = 500;

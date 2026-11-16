@@ -39,6 +39,7 @@ const ASSETS: &[(&str, &str, &str)] = &[
     ("js/models.js", JS, include_str!("web/js/models.js")),
     ("js/spend.js", JS, include_str!("web/js/spend.js")),
     ("js/activity.js", JS, include_str!("web/js/activity.js")),
+    ("js/logs.js", JS, include_str!("web/js/logs.js")),
     ("js/settings.js", JS, include_str!("web/js/settings.js")),
     ("js/approvals.js", JS, include_str!("web/js/approvals.js")),
     ("js/alerts.js", JS, include_str!("web/js/alerts.js")),
@@ -96,6 +97,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/admin/orgs/{org}/runs", get(list_runs))
         .route("/admin/orgs/{org}/agents", get(list_agents))
         .route("/admin/orgs/{org}/events", get(list_events))
+        .route("/admin/orgs/{org}/logs", get(list_logs))
+        .route("/admin/orgs/{org}/activity", get(activity))
         .route("/admin/orgs/{org}/runs/{run}", get(get_run))
         .route("/admin/orgs/{org}/runs/{run}/pause", post(pause))
         .route("/admin/orgs/{org}/runs/{run}/resume", post(resume))
@@ -404,6 +407,7 @@ async fn overview(State(st): State<Arc<AppState>>, admin: Admin) -> Response {
                     json!({
                         "id": p.id,
                         "pack": p.pack,
+                        "capture_content": p.capture_content,
                         "budgets": p.budgets,
                         "effective": Budgets::effective(&org.budgets, &p.budgets),
                         "keys": keys,
@@ -453,6 +457,7 @@ struct OrgBody {
 struct ProjectBody {
     id: Option<String>,
     budgets: Option<Budgets>,
+    capture_content: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -617,6 +622,7 @@ async fn create_project(
                 keys: Vec::new(),
                 budgets: body.budgets.unwrap_or_default(),
                 pack: None,
+                capture_content: body.capture_content.unwrap_or(false),
             });
             Ok(id)
         },
@@ -649,6 +655,9 @@ async fn update_project(
                 // Only the org can set an org-wide budget.
                 b.org_monthly = None;
                 p.budgets = b;
+            }
+            if let Some(capture) = body.capture_content {
+                p.capture_content = capture;
             }
             Ok(())
         },
@@ -1359,6 +1368,8 @@ async fn list_runs(
                 "last_decision": d.info.get("last_decision"),
                 "requests": num("requests").unwrap_or(0),
                 "blocked": num("blocked").unwrap_or(0),
+                "steps": num("steps").unwrap_or(0),
+                "errors": num("errors").unwrap_or(0),
                 "first_seen": num("first_seen"),
                 "last_seen": last_seen,
                 "budget": budget_json(&d.budget),
@@ -1435,8 +1446,13 @@ async fn run_timeline(
         Ok(t) => t,
         Err(e) => return unavailable(e),
     };
+    let steps = match st.ledger.run_steps(&org, &runs).await {
+        Ok(s) => s,
+        Err(e) => return unavailable(e),
+    };
     // Redis keeps run detail for 7 days; older runs come from the usage history.
     if events.is_empty()
+        && steps.is_empty()
         && let Some(h) = st.history.clone()
         && let Some(found) = run_timeline_history(h, &org, &run).await
     {
@@ -1459,13 +1475,142 @@ async fn run_timeline(
                 "agent": d.info.get("agent"),
                 "requests": num("requests").unwrap_or(0),
                 "blocked": num("blocked").unwrap_or(0),
+                "steps": num("steps").unwrap_or(0),
+                "errors": num("errors").unwrap_or(0),
                 "first_seen": num("first_seen"),
                 "last_seen": num("last_seen"),
                 "budget": budget_json(&d.budget),
             })
         })
         .collect();
-    Json(json!({ "run_id": run, "runs": runs, "events": events })).into_response()
+    Json(json!({ "run_id": run, "runs": runs, "events": events, "steps": steps })).into_response()
+}
+
+/// `GET /admin/orgs/{org}/activity`: per minute over the last hour, model calls, agent steps,
+/// errors and blocked, cost, and a model latency histogram (upper bounds in `latency_buckets_ms`;
+/// `null` is open-ended).
+async fn activity(
+    State(st): State<Arc<AppState>>,
+    Path(org): Path<String>,
+    admin: Admin,
+) -> Response {
+    if let Err(r) = admin.org(&st, &org, Role::Viewer) {
+        return r;
+    }
+    let minutes = match st.ledger.activity_minutes(&org, 60).await {
+        Ok(m) => m,
+        Err(e) => return unavailable(e),
+    };
+    let buckets = crate::ledger::LATENCY_BUCKETS_MS;
+    let minutes: Vec<Value> = minutes
+        .into_iter()
+        .map(|(minute, m)| {
+            let n = |k: &str| m.get(k).copied().unwrap_or(0);
+            json!({
+                "minute": minute * 60,
+                "model_calls": n("m"),
+                "steps": n("t"),
+                "problems": n("b"),
+                "cost_micros": n("c"),
+                "latency": (0..buckets.len()).map(|i| n(&format!("l{i}"))).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    let bounds: Vec<Option<i64>> = buckets
+        .iter()
+        .map(|b| (*b != i64::MAX).then_some(*b))
+        .collect();
+    Json(json!({ "minutes": minutes, "latency_buckets_ms": bounds })).into_response()
+}
+
+#[derive(Deserialize)]
+struct LogsQuery {
+    kind: Option<String>,
+    status: Option<String>,
+    project: Option<String>,
+    agent: Option<String>,
+    run: Option<String>,
+    q: Option<String>,
+    before: Option<String>,
+    limit: Option<usize>,
+}
+
+/// Log entries scanned per `/logs` request when filtering, at most.
+const LOGS_SCAN_MAX: usize = 10_000;
+
+/// `GET /admin/orgs/{org}/logs`: the org's agent steps and model calls, newest first, filtered.
+/// `next` is the cursor for the following page (pass it as `before`).
+async fn list_logs(
+    State(st): State<Arc<AppState>>,
+    Path(org): Path<String>,
+    Query(q): Query<LogsQuery>,
+    admin: Admin,
+) -> Response {
+    if let Err(r) = admin.org(&st, &org, Role::Viewer) {
+        return r;
+    }
+    let limit = q.limit.unwrap_or(100).clamp(1, 500);
+    let needle =
+        q.q.as_deref()
+            .map(str::to_lowercase)
+            .filter(|n| !n.is_empty());
+    let field = |e: &Value, k: &str| e.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let wanted = |e: &Value| {
+        let is = |want: &Option<String>, k: &str| {
+            want.as_deref()
+                .is_none_or(|w| w.is_empty() || w.split(',').any(|w| w == field(e, k)))
+        };
+        let status_ok = match q.status.as_deref() {
+            None | Some("") => true,
+            Some("problems") => matches!(field(e, "status").as_str(), "error" | "blocked"),
+            Some(s) => s.split(',').any(|s| s == field(e, "status")),
+        };
+        status_ok
+            && is(&q.kind, "kind")
+            && is(&q.project, "project")
+            && is(&q.agent, "agent")
+            && is(&q.run, "run_id")
+            && needle.as_deref().is_none_or(|n| {
+                ["name", "run_id", "agent", "content", "detail", "user"]
+                    .iter()
+                    .any(|k| field(e, k).to_lowercase().contains(n))
+            })
+    };
+    let mut out = Vec::new();
+    let mut cursor = q.before.clone();
+    let mut scanned = 0;
+    let mut exhausted = false;
+    while out.len() < limit && scanned < LOGS_SCAN_MAX {
+        let page = match st.ledger.logs_page(&org, cursor.as_deref(), 500).await {
+            Ok(p) => p,
+            Err(e) => return unavailable(e),
+        };
+        if page.is_empty() {
+            exhausted = true;
+            break;
+        }
+        scanned += page.len();
+        let short = page.len() < 500;
+        for (id, e) in page {
+            cursor = Some(id);
+            if wanted(&e) {
+                out.push(e);
+                if out.len() == limit {
+                    break;
+                }
+            }
+        }
+        if short && out.len() < limit {
+            exhausted = true;
+            break;
+        }
+    }
+    Json(json!({
+        "entries": out,
+        "next": if exhausted { None } else { cursor },
+        "scanned": scanned,
+    }))
+    .into_response()
 }
 
 /// A run Redis no longer has (more than 7 days old), rebuilt from the usage history; `None`

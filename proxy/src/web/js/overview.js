@@ -23,6 +23,7 @@ function renderOverview() {
     kpi("Waiting for approval", String(S.approvals?.pending || 0), S.approvals?.pending ? `<a href="#" data-goto="approvals">open approvals</a>` : "no runs waiting"),
   ].join("");
   renderGetStarted(org);
+  renderActivity();
   renderReview(org);
   const rows = org.projects.map(p => `
     <tr><td><b>${esc(p.id)}</b></td><td>${meter(p.spend.project_monthly)}</td>
@@ -193,3 +194,67 @@ document.addEventListener("click", async e => {
   if (!confirm(`Enforce "${POLICY_NAMES[policy]}" (${usd(current.limit_usd * 1e6)}) for ${projectId}? Requests over it get HTTP 402.${note}`)) return;
   await mutate(() => api(`/admin/orgs/${orgId}/projects/${encodeURIComponent(projectId)}`, { method: "PUT", body: { budgets } }), `${POLICY_NAMES[policy]} enforced for ${projectId}`);
 });
+
+// --- Last hour: model calls, agent steps, problems, spend and latency per minute ---
+// The latency at quantile `q` from a histogram: the upper bound of the bucket it falls in.
+function histQuantile(counts, bounds, q) {
+  const total = counts.reduce((a, b) => a + b, 0);
+  if (!total) return null;
+  let seen = 0;
+  for (let i = 0; i < counts.length; i++) {
+    seen += counts[i];
+    if (seen >= q * total) return bounds[i] == null ? `> ${ms(bounds[i - 1])}` : `≤ ${ms(bounds[i])}`;
+  }
+  return null;
+}
+function renderActivity() {
+  const el = $("#ov-activity");
+  const a = S.activity;
+  const mins = a?.minutes || [];
+  const sum = k => mins.reduce((x, m) => x + m[k], 0);
+  if (!mins.length || !(sum("model_calls") + sum("steps") + sum("problems"))) { el.innerHTML = ""; return; }
+  const N = 30;
+  const buckets = Array.from({ length: N }, (_, i) => {
+    const pair = mins.slice(i * 2, i * 2 + 2);
+    const g = k => pair.reduce((x, m) => x + m[k], 0);
+    return { model: g("model_calls"), tool: g("steps"), bad: g("problems"), cost: g("cost_micros") };
+  });
+  const lat = (a.latency_buckets_ms || []).map((_, i) => mins.reduce((x, m) => x + (m.latency[i] || 0), 0));
+  const models = sum("model_calls"), steps = sum("steps"), problems = sum("problems"), spend = sum("cost_micros");
+  const all = models + steps + problems;
+  const W = 760, H = 170, L = 40, R = 6, T = 10, B = 22;
+  const max = niceMax(Math.max(...buckets.map(b => b.model + b.tool + b.bad), 1));
+  const slot = (W - L - R) / N, bw = Math.max(3, slot - 4);
+  const y = v => T + (H - T - B) * (1 - v / max);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Model calls, agent steps and problems per 2 minutes over the last hour"><g class="grid">`;
+  for (const f of [0, 0.5, 1]) svg += `<line x1="${L}" x2="${W - R}" y1="${y(f * max)}" y2="${y(f * max)}"/>`;
+  svg += `</g><g class="axis">`;
+  for (const f of [0, 0.5, 1]) svg += `<text x="${L - 6}" y="${y(f * max) + 4}" text-anchor="end">${Math.round(f * max).toLocaleString()}</text>`;
+  for (const [i, label] of [[0, "60 min ago"], [N / 2, "30 min"], [N - 1, "now"]]) svg += `<text x="${L + slot * i + slot / 2}" y="${H - 5}" text-anchor="${i === 0 ? "start" : i === N - 1 ? "end" : "middle"}">${label}</text>`;
+  svg += `</g>`;
+  buckets.forEach((b, i) => {
+    const x = L + slot * i + (slot - bw) / 2;
+    let base = 0;
+    for (const [k, cls] of [["model", ""], ["tool", "tool"], ["bad", "bad"]]) {
+      if (!b[k]) continue;
+      svg += `<rect class="col ${cls}" x="${x}" y="${y(base + b[k])}" width="${bw}" height="${Math.max(1, y(base) - y(base + b[k]))}" rx="1.5"><title>${b.model} model calls, ${b.tool} agent steps, ${b.bad} errors or blocked · ${usd(b.cost)}</title></rect>`;
+      base += b[k];
+    }
+  });
+  svg += `</svg>`;
+  const p50 = histQuantile(lat, a.latency_buckets_ms, 0.5), p95 = histQuantile(lat, a.latency_buckets_ms, 0.95);
+  el.innerHTML = `<div class="card" style="margin-bottom:16px">
+    <div class="card-h"><h2>Last hour</h2><span class="muted">model calls and agent steps, every 2 minutes</span>
+      <div class="toolbar"><a href="#" class="btn sm" data-goto="logs">Open logs</a></div></div>
+    <div class="card-b act">
+      <div><div class="chart">${svg}</div>
+        <div class="legend"><span><i style="background:var(--accent)"></i>Model calls</span><span><i style="background:#0f9b8e"></i>Tool calls and other steps</span><span><i style="background:var(--bad)"></i>Errors and blocked</span></div></div>
+      <div class="act-stats">
+        <div><span class="muted">Spend</span><b>${usd(spend)}</b></div>
+        <div><span class="muted">Model calls</span><b>${models.toLocaleString()}</b></div>
+        <div><span class="muted">Agent steps</span><b>${steps.toLocaleString()}</b></div>
+        <div><span class="muted">Errors and blocked</span><b ${problems ? 'style="color:var(--bad)"' : ""}>${problems.toLocaleString()} <span class="muted" style="font-weight:400">(${Math.round((problems / all) * 100)}%)</span></b></div>
+        <div><span class="muted">Latency p50 / p95</span><b>${p50 ? `${p50} / ${p95}` : "–"}</b></div>
+      </div>
+    </div></div>`;
+}

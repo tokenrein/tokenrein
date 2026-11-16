@@ -173,6 +173,35 @@ loops = { action = "pause", max_repeats = 6, repeat_window_secs = 600, max_usd_p
 the guard for that run) or `kill`. Calls Tokenrein refuses are not counted, so an agent retrying
 while its run waits for an approver does not look like a loop. Only hashes of requests are kept.
 
+## Agent logs
+
+Each run's trace and the Logs page show what agents did between model calls: prompts, tool calls
+with their outcome and duration, sub-agents, and the end of a turn or session. Coding agents report
+them through their connectors' hooks; your own agents log steps with the SDKs:
+
+```python
+from tokenrein import guard
+
+with guard.run("ticket-4812"):
+    with guard.step("retrieve", attrs={"index": "docs"}) as s:   # timed; status "error" if it raises
+        docs = search(query)
+        s.attrs["hits"] = len(docs)
+    guard.log("tool:send_email", kind="tool_call", content=draft, level="info")
+```
+
+```ts
+await guard.run('ticket-4812', async () => {
+  const docs = await guard.step('retrieve', async (s) => { const d = await search(q); s.attrs.hits = d.length; return d; });
+  guard.log('tool:send_email', { kind: 'tool_call', content: draft });
+});
+```
+
+Steps are queued and sent in the background with usage reports, cost nothing against budgets, and
+are kept 7 days. By default only the step's kind, name, size, outcome, timing and `attrs` are kept.
+Turn on **content capture** for a project (Keys & limits) to also keep `content`, prompts and tool
+inputs and outputs, redacted (API keys, tokens, passwords, private keys and email addresses are
+masked) and cut to 2,000 characters. Keep prompts and secrets out of `attrs`: they are always kept.
+
 ## Proxy-free endpoints
 
 These are on the proxy listener (`:8787`) and take a Tokenrein key. The SDKs and connectors use
@@ -182,6 +211,7 @@ them; you can call them from anything.
 |---|---|
 | `POST /v1/check` | "May this run make another call?" Body: `run_id`, `parent_run_id`, `agent`, `user`, `model`, `max_output_tokens` or `estimate_usd`, `fingerprint` (16-128 hex). Answers `{allowed, reason, scope, run_state}` |
 | `POST /v1/usage` | Report calls that happened: `{"events": [{run_id, parent_run_id, agent, user, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd?, duration_ms}]}`. Priced from the model list unless `cost_usd` is given. Answers the enforced limits now used up |
+| `POST /v1/steps` | Log agent steps (what `guard.log()` sends): `{"steps": [{run_id, parent_run_id, agent, user, name, kind?, level?, status?, duration_ms?, call_id?, content?, attrs?}]}`. `kind` is `log` (default), `tool_call`, `tool_result`, `prompt` or `subagent`; `content` is kept (redacted, 2,000 characters) only with the project's content capture on. Not charged to budgets |
 | `POST /v1/otel/v1/logs` | OpenTelemetry logs (HTTP/JSON) from Claude Code, Codex CLI and Gemini CLI |
 | `POST /v1/hooks/{claude-code,codex,gemini,cursor,copilot}` | The agents' hooks; answers in each agent's own format and fails open |
 

@@ -12,13 +12,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+import time
+from types import TracebackType
+from typing import Any, Dict, Optional, Type
 
 
 from . import _clients, _direct
-from ._run import Run, RunScope, current_run
+from ._run import Run, RunScope, current_run, validate_id, validate_user
 
-__all__ = ["openai", "anthropic", "run", "current_run", "Run", "flush"]
+__all__ = ["openai", "anthropic", "run", "current_run", "Run", "flush", "log", "step", "Step"]
 
 #: Send every queued usage report now (direct mode). Reports are also flushed at exit.
 flush = _direct.flush
@@ -143,3 +145,133 @@ def run(
             Inherited by child runs; a client's own ``user`` takes precedence.
     """
     return RunScope(run_id, budget_usd, agent, max_calls, user)
+
+
+_LEVELS = ("debug", "info", "warn", "error")
+_KINDS = ("log", "tool_call", "tool_result", "prompt", "subagent")
+
+
+def log(
+    name: str,
+    *,
+    content: Any = None,
+    level: str = "info",
+    status: Optional[str] = None,
+    duration_ms: Optional[float] = None,
+    attrs: Optional[Dict[str, Any]] = None,
+    kind: str = "log",
+    call_id: Optional[str] = None,
+    agent: Optional[str] = None,
+    user: Optional[str] = None,
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+) -> None:
+    """Log one step of the current run to Tokenrein's agent logs (the run's trace and Logs page).
+
+    Steps cost nothing against budgets. They are queued and sent in the background like usage
+    reports; nothing is raised if Tokenrein can't be reached.
+
+    Args:
+        name: What happened, e.g. ``"retrieve"`` or ``"tool:search"``.
+        content: Text for the step (a query, a tool's input or output). Kept only if the project
+            has content capture on, redacted and cut to 2,000 characters; otherwise only its size.
+        level: ``"debug"``, ``"info"`` (default), ``"warn"`` or ``"error"``.
+        status: ``"ok"`` or ``"error"``; ``level="error"`` implies ``"error"``.
+        duration_ms: How long the step took.
+        attrs: Up to 20 small values (numbers, booleans, short strings), always kept. Don't put
+            prompts or secrets here.
+        kind: ``"log"`` (default), ``"tool_call"``, ``"tool_result"``, ``"prompt"`` or ``"subagent"``.
+        call_id: Pairs a ``tool_call`` with its ``tool_result``.
+        agent, user: Default to the current run's (or ``"default"``).
+        api_key, base_url: Default to ``$TOKENREIN_API_KEY`` and ``$TOKENREIN_BASE_URL``.
+    """
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("name must be a non-empty string")
+    if level not in _LEVELS:
+        raise ValueError("level must be one of " + ", ".join(_LEVELS))
+    if kind not in _KINDS:
+        raise ValueError("kind must be one of " + ", ".join(_KINDS))
+    if status not in (None, "ok", "error"):
+        raise ValueError("status must be 'ok' or 'error'")
+    run = current_run()
+    body: Dict[str, Any] = {"name": name, "level": level, "kind": kind}
+    if run is not None:
+        body["run_id"] = run.run_id
+        if run.parent_run_id:
+            body["parent_run_id"] = run.parent_run_id
+    who_agent = agent if agent is not None else (run.agent if run is not None else None)
+    if who_agent is not None:
+        body["agent"] = validate_id(who_agent, "agent")
+    who_user = user if user is not None else (run.user if run is not None else None)
+    if who_user is not None:
+        body["user"] = validate_user(who_user)
+    if status is not None:
+        body["status"] = status
+    if duration_ms is not None:
+        body["duration_ms"] = max(0, int(duration_ms))
+    if content is not None:
+        body["content"] = content if isinstance(content, str) else repr(content)
+    if attrs:
+        body["attrs"] = dict(attrs)
+    if call_id is not None:
+        body["call_id"] = str(call_id)
+    reporter = _direct.reporter_for(_clients.resolve_base_url(base_url), _clients.resolve_api_key(api_key))
+    reporter.log(body)
+
+
+class Step:
+    """A timed step: logged when the block ends, with ``status="error"`` if it raised.
+
+    .. code-block:: python
+
+        with guard.step("retrieve", attrs={"index": "docs"}) as s:
+            docs = search(query)
+            s.attrs["hits"] = len(docs)
+    """
+
+    def __init__(self, name: str, **kwargs: Any) -> None:
+        self.name = name
+        self.attrs: Dict[str, Any] = dict(kwargs.pop("attrs", None) or {})
+        self.content: Any = kwargs.pop("content", None)
+        self._kwargs = kwargs
+        self._start: Optional[float] = None
+
+    def __enter__(self) -> "Step":
+        self._start = time.monotonic()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> None:
+        elapsed = (time.monotonic() - (self._start or time.monotonic())) * 1000
+        kwargs = dict(self._kwargs)
+        if exc_type is not None:
+            kwargs.setdefault("status", "error")
+            kwargs.setdefault("level", "error")
+            self.attrs.setdefault("error", exc_type.__name__)
+        else:
+            kwargs.setdefault("status", "ok")
+        try:
+            log(self.name, content=self.content, duration_ms=elapsed, attrs=self.attrs or None, **kwargs)
+        except ValueError:
+            if exc_type is None:
+                raise
+
+    async def __aenter__(self) -> "Step":
+        return self.__enter__()
+
+    async def __aexit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> None:
+        self.__exit__(exc_type, exc, tb)
+
+
+def step(name: str, **kwargs: Any) -> Step:
+    """Time a block and log it as one step (``with`` or ``async with``). Arguments as :func:`log`."""
+    return Step(name, **kwargs)

@@ -28,6 +28,31 @@ Tokenrein's answer. If Tokenrein can't be reached in 4 seconds it prints the age
 answer: a Tokenrein outage never stops anyone's agent. The server also fails open when its
 ledger is down.
 
+## Agent logs from hooks
+
+Every hook event a connector receives is also recorded as a step of the run (agent logs: the
+dashboard's Logs page and each run's trace), kept 7 days and never charged to a budget. The connect
+scripts also add an after-tool hook, which never blocks, so tool outcomes and durations are logged.
+Connections made before agent logs existed need the connect script run again to get it.
+
+| Step | Claude Code | Codex CLI | Gemini CLI | Cursor | Copilot CLI |
+|---|---|---|---|---|---|
+| Prompt | `UserPromptSubmit` | `UserPromptSubmit` | `BeforeAgent` | `beforeSubmitPrompt` | `userPromptSubmitted` |
+| Tool call | `PreToolUse` | `PreToolUse` | `BeforeTool` | `preToolUse` | `preToolUse` |
+| Tool result (added) | `PostToolUse` | `PostToolUse` | `AfterTool` | `postToolUse` | `postToolUse` |
+| Sub-agent | `SubagentStart` | — | — | `subagentStart` | — |
+| Turn / session end | `Stop`, `SessionEnd` | `SessionEnd` | `SessionEnd` | `sessionEnd` | `sessionEnd` |
+
+Fields read: `tool_name` / `toolName`; `tool_use_id` (or `toolUseId`, `tool_call_id`) to pair a
+call with its result; `tool_input` / `toolArgs` / `command` for the input's size and a hash of name
+and input (repeated calls show up without the input being kept); `tool_response` / `toolResult` for
+the outcome: `is_error`, `success: false`, a non-empty `error`, `resultType` other than `success`, or
+a non-zero `exit_code` count as an error; `prompt` for a prompt's size; `reason` on session end.
+
+Prompt and tool text is kept only for projects with **content capture** on (Keys & limits, or
+`capture_content` on the project in the admin API): redacted (API keys, tokens, JWTs, passwords,
+private keys and email addresses are replaced) and cut to 2,000 characters.
+
 ## OpenAI Codex CLI
 
 Docs: [Advanced configuration: observability and telemetry](https://developers.openai.com/codex/config-advanced),

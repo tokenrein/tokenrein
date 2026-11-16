@@ -128,11 +128,14 @@ export interface Verdict {
   run_id?: string;
 }
 
+/** Marks queued steps (as opposed to usage reports); never sent. */
+const STEP = Symbol('tokenrein.step');
+
 /** Talks to Tokenrein: budget checks and batched usage reports. */
 export class Reporter {
   /** Enforced limits that recent reports said are used up: label -> time noted. */
   readonly over = new Map<string, number>();
-  #queue: Record<string, unknown>[] = [];
+  #queue: Record<string | symbol, unknown>[] = [];
   #timer: ReturnType<typeof setTimeout> | undefined;
   #inflight: Promise<void> = Promise.resolve();
 
@@ -170,6 +173,11 @@ export class Reporter {
     }
   }
 
+  /** Queue an agent step for `POST /v1/steps` (sent with the usage reports). */
+  log(step: Record<string, unknown>): void {
+    this.report({ ...step, [STEP]: true });
+  }
+
   report(event: Record<string, unknown>): void {
     if (this.#queue.length >= 10_000) return;
     this.#queue.push(event);
@@ -195,21 +203,28 @@ export class Reporter {
   async #send(): Promise<void> {
     while (this.#queue.length) {
       const batch = this.#queue.splice(0, 100);
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const res = await this.#post('/v1/usage', { events: batch }, 10_000);
-          if (res.ok) {
-            const out = (await res.json()) as { over?: string[] };
-            const now = Date.now();
-            for (const label of out.over ?? []) this.over.set(label, now);
-            break;
-          }
-          if (res.status < 500) break;
-        } catch {
-          // retry below
+      const usage = batch.filter((e) => !e[STEP]);
+      const steps = batch.filter((e) => e[STEP]).map(({ [STEP]: _, ...step }) => step);
+      if (usage.length) await this.#deliver('/v1/usage', { events: usage });
+      if (steps.length) await this.#deliver('/v1/steps', { steps });
+    }
+  }
+
+  async #deliver(path: string, body: unknown): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await this.#post(path, body, 10_000);
+        if (res.ok) {
+          const out = (await res.json()) as { over?: string[] };
+          const now = Date.now();
+          for (const label of out.over ?? []) this.over.set(label, now);
+          return;
         }
-        await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+        if (res.status < 500) return;
+      } catch {
+        // retry below
       }
+      await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
     }
   }
 }

@@ -327,6 +327,10 @@ pub struct ProjectConfig {
     /// The guardrail pack last applied to this project, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pack: Option<String>,
+    /// Agent logs keep a redacted, shortened copy of prompts and tool inputs and results. Off:
+    /// only each step's kind, tool name, size, outcome and timing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub capture_content: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

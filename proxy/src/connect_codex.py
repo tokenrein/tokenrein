@@ -15,7 +15,7 @@ Both Codex files are backed up first. Standard library only.
 # @tokenrein-common@
 
 TOOL = "codex"
-HOOK_EVENTS = ["UserPromptSubmit", "PreToolUse", "SessionEnd"]
+HOOK_EVENTS = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "SessionEnd"]
 BEGIN = "# >>> Tokenrein (added by the Tokenrein connect script; undo with --remove)"
 END = "# <<< Tokenrein"
 OTEL_TABLE = re.compile(r"^\s*(\[\[?\s*otel\s*[\].]|otel\s*[.=])", re.M)
@@ -113,7 +113,7 @@ def main():
     for event in HOOK_EVENTS:
         handler = {"type": "command", "command": hook_command(TOOL), "timeout": 3 if event == "SessionEnd" else 10}
         group = {"hooks": [handler]}
-        if event == "PreToolUse":
+        if event in ("PreToolUse", "PostToolUse"):
             group = {"matcher": "*", "hooks": [handler]}
         hooks.setdefault(event, []).append(group)
     write_json(hooks_path, hooks_doc)

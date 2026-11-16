@@ -79,6 +79,10 @@ const usage = async () => {
   await flush();
   return tl.seen.filter((s) => s.path === '/v1/usage').flatMap((s) => s.body.events);
 };
+const steps = async () => {
+  await flush();
+  return tl.seen.filter((s) => s.path === '/v1/steps').flatMap((s) => s.body.steps);
+};
 const MSG = [{ role: 'user' as const, content: 'hi' }];
 
 beforeEach(async () => {
@@ -92,6 +96,7 @@ beforeEach(async () => {
   tl = await new Fake((path, body) => {
     if (path === '/v1/check') return [200, 'application/json', JSON.stringify(verdict)];
     if (path === '/v1/usage') return [200, 'application/json', JSON.stringify({ accepted: body.events.length, over })];
+    if (path === '/v1/steps') return [200, 'application/json', JSON.stringify({ accepted: body.steps.length, rejected: [] })];
     return [404, 'application/json', '{}'];
   }).start();
   process.env.TOKENREIN_BASE_URL = tl.url;
@@ -210,5 +215,40 @@ describe('helpers', () => {
     s.feed('data: {"type":"response.completed","response":{"model":"gpt-5","usage":{"input_tokens":9,"output_tokens":3,"output_tokens_details":{}}}}\n');
     expect(s.model).toBe('gpt-5');
     expect(s.usage?.output_tokens).toBe(3);
+  });
+});
+
+describe('agent steps', () => {
+  it('logs steps with the current run', async () => {
+    await guard.run({ runId: 'job-7', agent: 'researcher', user: 'ana@example.com' }, () =>
+      guard.run('job-7-sub', () => guard.log('retrieve', { content: 'query', attrs: { hits: 3 }, level: 'warn' })),
+    );
+    const [s] = await steps();
+    expect([s.run_id, s.parent_run_id, s.name, s.level]).toEqual(['job-7-sub', 'job-7', 'retrieve', 'warn']);
+    expect(s.user).toBe('ana@example.com');
+    expect(s.content).toBe('query');
+    expect(s.attrs).toEqual({ hits: 3 });
+    expect(await usage()).toEqual([]);
+  });
+
+  it('times step callbacks and records failures', async () => {
+    await guard.run('job-8', async () => {
+      const n = await guard.step('tool:search', async (st) => {
+        st.attrs.n = 1;
+        return 5;
+      }, { kind: 'tool_call' });
+      expect(n).toBe(5);
+      expect(() => guard.step('tool:fetch', () => { throw new RangeError('x'); })).toThrow(RangeError);
+    });
+    const [ok, failed] = await steps();
+    expect([ok.name, ok.kind, ok.status, ok.attrs]).toEqual(['tool:search', 'tool_call', 'ok', { n: 1 }]);
+    expect(Number.isInteger(ok.duration_ms)).toBe(true);
+    expect([failed.status, failed.level, failed.attrs]).toEqual(['error', 'error', { error: 'RangeError' }]);
+  });
+
+  it('rejects bad arguments', () => {
+    expect(() => guard.log('')).toThrow(TypeError);
+    expect(() => guard.log('x', { level: 'loud' as any })).toThrow(TypeError);
+    expect(() => guard.log('x', { kind: 'other' as any })).toThrow(TypeError);
   });
 });

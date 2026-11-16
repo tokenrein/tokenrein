@@ -127,6 +127,9 @@ function renderSettings() {
             <button class="btn sm" type="submit">${p.pack ? "Re-apply" : "Apply"} in Check mode</button>
             <span class="muted">${p.pack ? `Current: ${esc(S.packs.find(k => k.id === p.pack)?.title || p.pack)}` : "No pack applied"}</span>
           </form>
+          <h2 style="margin:20px 0 8px">Agent logs</h2>
+          <p class="help">Every prompt, tool call and model call of this project's agents is logged with its outcome, size and timing (Logs page and each run's trace). Off: no prompt or tool text is kept.</p>
+          <label class="inline"><input type="checkbox" data-capture="${esc(p.id)}" ${p.capture_content ? "checked" : ""}> Keep a redacted copy of prompts, tool inputs and outputs <span class="muted">(API keys, tokens, passwords and emails masked; first 2,000 characters; kept 7 days)</span></label>
           <h2 style="margin:20px 0 8px">Limits for this project</h2>
           ${budgetEditor("project", p.budgets, org.budgets, POLICIES.slice(1))}
           <div class="inline" style="justify-content:flex-end;margin-top:12px"><button class="btn primary sm" data-save-project="${esc(p.id)}">Save project limits</button></div>
@@ -201,6 +204,18 @@ function providerKeysCard(org) {
     <div class="card-b"><p class="help">Your real OpenAI / Anthropic keys. The proxy uses them to call the provider; agents only ever get Tokenrein keys. ${note}</p>
     <div class="prov">${rows}</div></div></div>`;
 }
+
+$("#settings").addEventListener("change", async e => {
+  const box = e.target.closest("[data-capture]");
+  if (!box) return;
+  const project = box.dataset.capture, on = box.checked;
+  if (on && !confirm(`Keep a redacted copy of prompts and tool inputs and outputs for ${project}? Secrets and emails are masked, but other text your agents handle is stored for 7 days and visible to everyone who can see this org.`)) {
+    box.checked = false;
+    return;
+  }
+  await mutate(() => api(`/admin/orgs/${encodeURIComponent(S.org)}/projects/${encodeURIComponent(project)}`, { method: "PUT", body: { capture_content: on } }),
+    `Content capture ${on ? "on" : "off"} for ${project}`);
+});
 
 // Don't re-render the forms under someone who is typing.
 $("#settings").addEventListener("focusin", () => { S.editing = true; });

@@ -32,6 +32,7 @@ Give every AI agent a budget, catch runaway loops before they reach the invoice,
 Works with **Claude Code, Codex CLI, Gemini CLI, Cursor, GitHub Copilot CLI** and your own agents on any LLM.
 
 - **Budgets per run, agent, project and org**, each one warning, blocking or asking.
+- **Agent logs**: every prompt, tool call (with outcome and duration), sub-agent and model call on one trace per run, searchable across runs. Prompt and tool text is kept only if you turn it on for a project, and then redacted.
 - **Approvals and alerts** in the dashboard, Slack, Microsoft Teams, PagerDuty and signed webhooks.
 - **One command per coding agent**, one line for your app, or a base URL. Prompts never have to pass through Tokenrein.
 - **Spend you can charge back**: by project, agent, person and model, over up to 13 months, with CSV export.

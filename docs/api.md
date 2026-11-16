@@ -37,9 +37,11 @@ to read, approver for run actions, admin to change things); `/admin/orgs` (creat
 | `POST` | `/admin/orgs/{org}/projects/{project}/pack` | Apply `{pack}`: replaces the project's budgets, all in Check mode |
 | `GET` | `/admin/orgs/{org}/review` | What Enforce would have blocked: per limit, requests / cost / runs, from recent events |
 | `GET` | `/admin/orgs/{org}/spend?days=&format=` | Cost and requests per day, and by model / user / project / agent. Up to 40 days from Redis; with the usage history, up to its retention (`source` says which). `format=csv` downloads spend per day, project, agent, user and model (daily totals without the history) |
-| `GET` | `/admin/orgs/{org}/runs/{run}/timeline` | A run, its sub-agent runs, and every request in them |
-| `POST` | `/admin/orgs/{org}/projects` | Create a project `{id, budgets?}` |
-| `PUT` / `DELETE` | `/admin/orgs/{org}/projects/{project}` | Set `{budgets}` (blank = inherit from org) / delete |
+| `GET` | `/admin/orgs/{org}/runs/{run}/timeline` | A run, its sub-agent runs, every request in them (`events`) and their agent steps (`steps`) |
+| `GET` | `/admin/orgs/{org}/activity` | The last hour per minute: model calls, agent steps, errors and blocked, cost, and a model latency histogram (`latency_buckets_ms`) |
+| `GET` | `/admin/orgs/{org}/logs?kind=&status=&project=&agent=&run=&q=&before=&limit=` | Agent logs: steps and model calls, newest first (7 days). Filters take comma-separated values; `status=problems` is errors and blocked; `q` searches name, run, agent, detail and kept content. Pass `next` from the response as `before` for older entries |
+| `POST` | `/admin/orgs/{org}/projects` | Create a project `{id, budgets?, capture_content?}` |
+| `PUT` / `DELETE` | `/admin/orgs/{org}/projects/{project}` | Set `{budgets?, capture_content?}` (blank budgets = inherit from org; `capture_content` keeps a redacted copy of prompt and tool text in agent logs) / delete |
 | `POST` | `/admin/orgs/{org}/projects/{project}/keys` | Create a virtual key `{name}`; the response has the key, once |
 | `DELETE` | `/admin/orgs/{org}/projects/{project}/keys/{key_id}` | Revoke a key |
 | `GET` | `/admin/orgs/{org}/runs?limit=` | Recent runs with parent, state, project, agent, counts, spend |

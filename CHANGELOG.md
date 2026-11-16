@@ -7,6 +7,24 @@ SDKs; the release workflow refuses a tag that does not match all three.
 
 ## [Unreleased]
 
+### Added
+- Agent logs: what agents do between model calls (prompts, tool calls with outcome and duration,
+  sub-agents, turn and session ends), from the connectors' hooks and from `guard.log()` /
+  `guard.step()` in both SDKs (`POST /v1/steps`). Kept 7 days with the run detail, never charged
+  to a budget, and not written to the usage history.
+- Content capture per project (`capture_content`, Keys & limits): agent logs keep a redacted copy
+  of prompt and tool text, cut to 2,000 characters. Off by default: only kind, tool name, size,
+  outcome and timing are kept.
+- Dashboard: a Logs page (search and filter steps and model calls across runs), a trace on each run
+  page (model and tool calls on one timeline, with durations, errors and repeated tool calls), and
+  a last-hour activity card on the overview (calls, steps, errors, spend, model latency).
+- `GET /admin/orgs/{org}/logs`; the run timeline also returns `steps`, and runs carry `steps` and
+  `errors` counts.
+
+### Changed
+- The connect scripts add an after-tool hook (`PostToolUse`, `AfterTool` or `postToolUse`) so tool
+  results are logged. Run a connect script again to add it to an existing connection.
+
 ## [0.1.4] - 2026-11-01
 
 ### Added

@@ -63,9 +63,12 @@ pub struct Row {
 
 impl Row {
     /// The stored form of a dashboard activity event; `None` for events without an org and run
-    /// (the same ones Redis skips).
+    /// (the same ones Redis skips) and for agent steps, which are kept only as run detail.
     pub fn from_event(e: &Value) -> Option<Row> {
         let s = |k: &str| e.get(k).and_then(Value::as_str).filter(|v| !v.is_empty());
+        if s("event") == Some("step") {
+            return None;
+        }
         let n = |v: Option<&Value>| v.and_then(Value::as_i64).unwrap_or(0);
         let org = s("org").filter(|o| safe_id(o))?.to_string();
         let run_id = s("run_id")?.to_string();

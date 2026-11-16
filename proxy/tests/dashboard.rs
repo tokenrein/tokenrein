@@ -1025,3 +1025,131 @@ async fn models_prices_and_the_connector_script() {
             .contains("/v1/hooks/claude-code")
     );
 }
+
+#[tokio::test]
+async fn agent_steps_show_in_the_trace_and_logs() {
+    let Some(h) = H::start().await else { return };
+    let hook = |event: &str, extra: Value| {
+        let mut v = json!({"session_id": "sess-9", "hook_event_name": event, "tool_name": "Bash",
+            "tool_use_id": "toolu_1", "tool_input": {"command": "export OPENAI_API_KEY=sk-abcdefghijklmnopqrstu"},
+            "prompt": "fix the build"});
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        v
+    };
+    for (event, extra) in [
+        ("UserPromptSubmit", json!({})),
+        ("PreToolUse", json!({})),
+        ("PostToolUse", json!({"tool_response": {"is_error": true}})),
+    ] {
+        let (s, body) = h.ingest("/v1/hooks/claude-code", hook(event, extra)).await;
+        assert_eq!((s, body), (StatusCode::OK, json!({})));
+    }
+    // Content capture is off: steps carry sizes and outcomes, no text.
+    let t = h
+        .eventually("/admin/orgs/acme/runs/cc-sess-9/timeline", |b| {
+            b["steps"].as_array().is_some_and(|s| s.len() == 3)
+        })
+        .await;
+    let steps = t["steps"].as_array().unwrap();
+    let kinds: Vec<&str> = steps.iter().map(|s| s["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["prompt", "tool_call", "tool_result"]);
+    assert_eq!(steps[1]["name"], "Bash");
+    assert_eq!(steps[1]["call_id"], "toolu_1");
+    assert_eq!(steps[2]["status"], "error");
+    assert!(steps.iter().all(|s| s["content"].is_null()));
+    assert!(steps[0]["size"].as_u64().unwrap() > 0);
+    assert_eq!(t["runs"][0]["steps"], 3);
+    assert_eq!(t["runs"][0]["errors"], 1);
+    assert_eq!(t["runs"][0]["requests"], 0);
+
+    // With capture on, text is kept and redacted.
+    let (s, body) = h
+        .admin(
+            Method::PUT,
+            "/admin/orgs/acme/projects/bot",
+            Some(json!({"capture_content": true})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    let ov = h.get("/admin/overview").await;
+    assert_eq!(ov["orgs"][0]["projects"][0]["capture_content"], true);
+    // The proxy picks up the change from the managed config.
+    let mut kept = Value::Null;
+    for _ in 0..100 {
+        h.ingest(
+            "/v1/hooks/claude-code",
+            hook("PreToolUse", json!({"session_id": "sess-10"})),
+        )
+        .await;
+        let t = h.get("/admin/orgs/acme/runs/cc-sess-10/timeline").await;
+        if let Some(c) = t["steps"]
+            .as_array()
+            .and_then(|s| s.iter().find(|s| !s["content"].is_null()))
+        {
+            kept = c["content"].clone();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(kept, r#"{"command":"export OPENAI_API_KEY=[redacted]"}"#);
+
+    // SDK steps: validated, never charged.
+    let (s, body) = h
+        .ingest(
+            "/v1/steps",
+            json!({"steps": [
+                {"run_id": "job-1", "agent": "planner", "name": "retrieve", "level": "warn", "duration_ms": 40, "attrs": {"hits": 2}},
+                {"run_id": "job-1", "name": "x", "level": "loud"},
+            ]}),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body["accepted"], 1);
+    assert_eq!(body["rejected"][0]["index"], 1);
+
+    // The logs: filters by kind, status and text, newest first, model calls included.
+    assert_eq!(h.chat(CONFIG_KEY, "job-1", None).await, StatusCode::OK);
+    let logs = h
+        .eventually("/admin/orgs/acme/logs?run=job-1", |b| {
+            b["entries"].as_array().unwrap().len() == 2
+        })
+        .await;
+    assert_eq!(logs["entries"][0]["kind"], "model_call");
+    assert_eq!(logs["entries"][1]["name"], "retrieve");
+    let problems = h.get("/admin/orgs/acme/logs?status=problems").await;
+    let p = problems["entries"].as_array().unwrap();
+    assert!(
+        !p.is_empty()
+            && p.iter()
+                .all(|e| e["status"] == "error" || e["status"] == "blocked")
+    );
+    let found = h.get("/admin/orgs/acme/logs?q=RETRIEVE&kind=log").await;
+    assert_eq!(found["entries"].as_array().unwrap().len(), 1);
+    let page = h.get("/admin/orgs/acme/logs?limit=1").await;
+    assert_eq!(page["entries"].as_array().unwrap().len(), 1);
+    assert!(page["next"].is_string());
+    // Steps are not spend: today's spend counts only the one model call.
+    let spend = h.get("/admin/orgs/acme/spend?days=1").await;
+    assert_eq!(spend["days"][0]["requests"], 1);
+
+    // The last hour, per minute: one model call, the steps above, and the failed tool result.
+    let act = h.get("/admin/orgs/acme/activity").await;
+    let minutes = act["minutes"].as_array().unwrap();
+    assert_eq!(minutes.len(), 60);
+    let total = |k: &str| minutes.iter().map(|m| m[k].as_i64().unwrap()).sum::<i64>();
+    assert_eq!(total("model_calls"), 1);
+    assert_eq!(total("problems"), 1);
+    // The prompt, the tool calls (sess-10 retries until capture applies) and the SDK step.
+    assert!(total("steps") >= 4);
+    assert!(total("cost_micros") > 0);
+    assert_eq!(
+        act["latency_buckets_ms"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap(),
+        &Value::Null
+    );
+}

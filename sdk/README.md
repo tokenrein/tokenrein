@@ -117,6 +117,17 @@ except BudgetExceeded as e:
     log.warning("run %s stopped: %s", e.run_id, e.message)
 ```
 
+## Agent logs
+
+`guard.log(name, ...)` records one step of the current run (a retrieval, a tool call, a decision)
+for the run's trace and the dashboard's Logs page; `guard.step(name)` times a block (`with` /
+`async with` in Python, a callback in TypeScript) and logs it with `status: "error"` if it raises.
+Options: `content` (kept only with the project's content capture on, redacted and shortened),
+`level` (`debug`, `info`, `warn`, `error`), `status` (`ok`, `error`), `duration_ms` / `durationMs`,
+`attrs` (up to 20 small values, always kept), `kind` (`log`, `tool_call`, `tool_result`, `prompt`,
+`subagent`) and `call_id` / `callId`. Steps go out in the background with the usage reports and
+are never charged to a budget; nothing is raised if Tokenrein can't be reached.
+
 ## Local fallback cap
 
 `guard.run(max_calls=50)` / `guard.run({ maxCalls: 50 }, fn)` caps the number of requests in a
