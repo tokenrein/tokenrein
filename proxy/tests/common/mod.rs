@@ -13,6 +13,18 @@ pub struct RedisServer {
 
 impl RedisServer {
     pub fn start() -> Option<Self> {
+        // A free port can be taken by a test running in parallel before redis-server binds it;
+        // that server then exits at once, so try another port.
+        for _ in 0..5 {
+            if let Some(started) = Self::start_once()? {
+                return Some(started);
+            }
+        }
+        panic!("redis-server did not start after 5 ports");
+    }
+
+    /// None: not installed. Some(None): this port was taken.
+    fn start_once() -> Option<Option<Self>> {
         let port = TcpListener::bind("127.0.0.1:0")
             .ok()?
             .local_addr()
@@ -44,16 +56,24 @@ impl RedisServer {
         };
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
+            // Exited: the port was taken (whatever answers there is another test's server).
+            if child.try_wait().ok().flatten().is_some() {
+                return Some(None);
+            }
             if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                return Some(Self {
+                std::thread::sleep(Duration::from_millis(50));
+                if child.try_wait().ok().flatten().is_some() {
+                    return Some(None);
+                }
+                return Some(Some(Self {
                     child,
                     url: format!("redis://127.0.0.1:{port}"),
-                });
+                }));
             }
             std::thread::sleep(Duration::from_millis(20));
         }
         let _ = child.kill();
-        panic!("redis-server did not start on port {port}");
+        Some(None)
     }
 }
 

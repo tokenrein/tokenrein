@@ -104,7 +104,7 @@ function renderRun() {
     <div class="inline" style="justify-content:space-between;align-items:flex-start;margin-bottom:12px">
       <div><h1 style="font-family:var(--mono);word-break:break-all">${esc(root.run_id)}</h1>
         <p class="sub" style="margin:0">${stateBadge(root.state)} ${liveness(root.last_seen)} · ${esc(root.project || "–")} / ${esc(root.agent || "–")}${root.parent_run_id ? ` · parent <a href="#" class="mono runlink" data-open-run="${esc(root.parent_run_id)}">${esc(root.parent_run_id)}</a>` : ""}</p></div>
-      <div class="row-actions">${actions}</div></div>
+      <div class="run-head-r"><div class="row-actions">${actions}</div>${root.budget?.limit_micros != null && root.budget.mode !== "skip" ? `<div class="run-budget">${meter(root.budget)}</div>` : ""}</div></div>
     <div class="grid kpis">
       ${kpi("Spend", usd(cost), `incl. ${t.runs.length - 1} sub-agent run${t.runs.length === 2 ? "" : "s"}`)}
       ${kpi("Run limit", root.budget.limit_micros != null && root.budget.mode !== "skip" ? usd(root.budget.limit_micros) : "–", root.budget.mode ? esc(root.budget.mode) + " mode" : "no run limit")}
@@ -113,7 +113,6 @@ function renderRun() {
       ${kpi("Tool calls", String(toolCalls), steps.length ? `${steps.length} agent steps logged` : "no agent steps logged")}
       ${kpi("Problems", String(problems.length), problems.length ? `<a href="#" data-trace-filter="problems">show them</a>` : "no errors or blocks")}
     </div>
-    <div class="card" style="margin-bottom:16px"><div class="card-h"><h2>Budget</h2></div><div class="card-b">${meter(root.budget)}</div></div>
     ${t.runs.length > 1 ? `<div class="card" style="margin-bottom:16px"><div class="card-h"><h2>Sub-agent runs</h2></div>
       <div class="table-wrap"><table class="wide"><thead><tr><th>Run</th><th>State</th><th>Agent</th><th class="num">Requests</th><th>Spend / run limit</th><th>Last seen</th></tr></thead><tbody>${subRows}</tbody></table></div></div>` : ""}
     ${repeats.length ? `<div class="alert"><b>Repeated tool calls.</b> ${repeats.slice(0, 3).map(([, c]) => `<span class="mono">${esc(c.name)}</span> with the same input ${c.n}×`).join(" · ")}. A loop like this is what the loop guard pauses.</div>` : ""}

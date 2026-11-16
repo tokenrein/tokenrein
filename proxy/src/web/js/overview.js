@@ -248,7 +248,7 @@ function renderActivity() {
       <div class="toolbar"><a href="#" class="btn sm" data-goto="logs">Open logs</a></div></div>
     <div class="card-b act">
       <div><div class="chart">${svg}</div>
-        <div class="legend"><span><i style="background:var(--accent)"></i>Model calls</span><span><i style="background:#0f9b8e"></i>Tool calls and other steps</span><span><i style="background:var(--bad)"></i>Errors and blocked</span></div></div>
+        <div class="legend"><span><i style="background:var(--data-1)"></i>Model calls</span><span><i style="background:var(--data-2)"></i>Tool calls and other steps</span><span><i style="background:var(--data-3)"></i>Errors and blocked</span></div></div>
       <div class="act-stats">
         <div><span class="muted">Spend</span><b>${usd(spend)}</b></div>
         <div><span class="muted">Model calls</span><b>${models.toLocaleString()}</b></div>

@@ -192,7 +192,7 @@ function renderLogs() {
       <td class="nowrap">${kindChip(e.kind)}</td>
       <td><span class="mono">${esc(e.name || "–")}</span>${e.detail && e.kind !== "model_call" ? ` <span class="muted">${esc(e.detail)}</span>` : ""}${e.content ? `<div class="muted clip">${esc(e.content)}</div>` : ""}</td>
       <td class="nowrap"><a href="#" class="mono runlink" data-open-run="${esc(e.run_id)}">${esc(e.run_id)}</a><div class="muted">${esc(e.project)} / ${esc(e.agent)}</div></td>
-      <td>${statusBadge(e.status, e.level)}${n > 1 ? ` <span class="badge b-muted" title="${n} refused retries since ${esc(when(oldest))}">×${n}</span>` : ""}</td>
+      <td>${statusBadge(e.status, e.level)}${n > 1 ? ` <span class="count" title="${n} refused retries since ${esc(when(oldest))}">×${n}</span>` : ""}</td>
       <td class="num muted">${ms(e.duration_ms || null)}</td>
       <td class="num">${cost}</td></tr>
       ${open ? `<tr class="logdetail"><td colspan="7">${stepDetail(e, captureFor(e.project))}</td></tr>` : ""}`;

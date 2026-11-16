@@ -22,6 +22,10 @@ SDKs; the release workflow refuses a tag that does not match all three.
   `errors` counts.
 
 ### Changed
+- Dashboard restyle: neutral surfaces with hairline structure, ink primary buttons, colour kept
+  for data and status (a dot and a word instead of filled pills), stats in one strip, sentence-case
+  labels, tabular numbers, shorter page copy, and a new logo mark. Light and dark themes, still no
+  external fonts or scripts.
 - The connect scripts add an after-tool hook (`PostToolUse`, `AfterTool` or `postToolUse`) so tool
   results are logged. Run a connect script again to add it to an existing connection.
 
