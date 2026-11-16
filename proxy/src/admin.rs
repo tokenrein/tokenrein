@@ -32,6 +32,7 @@ const ASSETS: &[(&str, &str, &str)] = &[
         "text/css; charset=utf-8",
         include_str!("web/app.css"),
     ),
+    ("js/theme.js", JS, include_str!("web/js/theme.js")),
     ("js/core.js", JS, include_str!("web/js/core.js")),
     ("js/overview.js", JS, include_str!("web/js/overview.js")),
     ("js/runs.js", JS, include_str!("web/js/runs.js")),

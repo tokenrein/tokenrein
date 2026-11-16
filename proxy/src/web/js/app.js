@@ -74,6 +74,21 @@ $("#login-form").addEventListener("submit", async e => {
     $("#login-err").textContent = err.message === "HTTP 401" || /token/.test(err.message) ? "That admin token was not accepted." : err.message;
   }
 });
+// --- theme (light by default; js/theme.js applies the choice before the page renders) ---
+function renderThemeToggle() {
+  const dark = document.documentElement.dataset.theme === "dark";
+  const b = $("#theme-toggle");
+  b.textContent = dark ? "Light mode" : "Dark mode";
+  b.setAttribute("aria-pressed", String(dark));
+}
+$("#theme-toggle").addEventListener("click", () => {
+  const dark = document.documentElement.dataset.theme !== "dark";
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  store("local", "tokenrein.theme", dark ? "dark" : null);
+  renderThemeToggle();
+});
+renderThemeToggle();
+
 $("#signout").addEventListener("click", async () => {
   if (S.csrf) { try { await api("/auth/logout", { method: "POST", quiet: true }); } catch (_) { /* signed out anyway */ } }
   showLogin();

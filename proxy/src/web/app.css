@@ -2,7 +2,7 @@
    for data and status. System fonts only (the dashboard is self-hosted and loads nothing else). */
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --bg: #fafaf9; --panel: #ffffff; --panel-2: #f4f4f3; --hover: #f0f0ee;
   --text: #18181b; --text-2: #3f3f46; --muted: #71717a; --faint: #a1a1aa;
   --line: #e7e7e4; --line-strong: #d6d6d1;
@@ -18,19 +18,19 @@
   /* Kept for markup that still names them. */
   --accent: var(--link); --accent-ink: var(--primary-ink); --accent-soft: var(--panel-2); --shadow: none;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0c0c0d; --panel: #121214; --panel-2: #19191c; --hover: #1d1d21;
-    --text: #ededee; --text-2: #c4c4c8; --muted: #8b8b93; --faint: #5c5c63;
-    --line: #232327; --line-strong: #2f2f34;
-    --primary: #ededee; --primary-ink: #0c0c0d; --link: #7aa2ff; --ring: rgba(122, 162, 255, .28);
-    --brand: #ff7a45;
-    --ok: #3fb96e; --warn: #e3a336; --bad: #f2555a;
-    --ok-bg: #11241a; --warn-bg: #2a2111; --bad-bg: #2c1415; --info-bg: #151e33;
-    --data-1: #6e93ff; --data-2: #2bb5a8; --data-3: #f2555a;
-    --meter: #232327;
-    --shadow-pop: 0 1px 2px rgba(0, 0, 0, .4), 0 12px 32px rgba(0, 0, 0, .5);
-  }
+/* Dark, when chosen in the sidebar (js/theme.js sets data-theme before the page renders). */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0c0c0d; --panel: #121214; --panel-2: #19191c; --hover: #1d1d21;
+  --text: #ededee; --text-2: #c4c4c8; --muted: #8b8b93; --faint: #5c5c63;
+  --line: #232327; --line-strong: #2f2f34;
+  --primary: #ededee; --primary-ink: #0c0c0d; --link: #7aa2ff; --ring: rgba(122, 162, 255, .28);
+  --brand: #ff7a45;
+  --ok: #3fb96e; --warn: #e3a336; --bad: #f2555a;
+  --ok-bg: #11241a; --warn-bg: #2a2111; --bad-bg: #2c1415; --info-bg: #151e33;
+  --data-1: #6e93ff; --data-2: #2bb5a8; --data-3: #f2555a;
+  --meter: #232327;
+  --shadow-pop: 0 1px 2px rgba(0, 0, 0, .4), 0 12px 32px rgba(0, 0, 0, .5);
 }
 
 * { box-sizing: border-box; }
@@ -75,6 +75,7 @@ nav.tabs button[aria-selected="true"] svg { color: var(--text); }
 .nav-count { margin-left: auto; background: var(--warn-bg); color: var(--warn); border-radius: 4px; font-size: 11px; font-weight: 650; padding: 0 6px; line-height: 18px; font-variant-numeric: tabular-nums; }
 .side-foot { display: grid; gap: 8px; padding: 10px 6px 0; border-top: 1px solid var(--line); }
 .side-foot .btn { justify-content: center; }
+.side-foot .inline .btn { flex: 1; }
 .whoami { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.4; }
 .whoami b { color: var(--text); font-weight: 550; }
 
