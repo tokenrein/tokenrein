@@ -120,8 +120,23 @@ fn result_failed(input: &Value) -> bool {
             || ["exit_code", "exitCode"]
                 .iter()
                 .any(|k| v.get(*k).and_then(Value::as_i64).is_some_and(|c| c != 0))
+            // Copilot's shell tool reports "success" and puts the command's exit code in the text.
+            || v.get("textResultForLlm")
+                .and_then(Value::as_str)
+                .and_then(shell_exit_code)
+                .is_some_and(|c| c != 0)
     };
     flagged(input) || response.is_some_and(flagged)
+}
+
+/// The exit code in Copilot's shell trailer, `<shellId: 1 completed with exit code 1>`.
+fn shell_exit_code(text: &str) -> Option<i64> {
+    const MARK: &str = "completed with exit code ";
+    let rest = &text[text.rfind(MARK)? + MARK.len()..];
+    let end = rest
+        .find(|c: char| !(c.is_ascii_digit() || c == '-'))
+        .unwrap_or(rest.len());
+    rest[..end].parse().ok()
 }
 
 /// The step a coding agent's hook event describes, if it is one Tokenrein logs. `capture` keeps
@@ -673,6 +688,12 @@ mod tests {
     #[test]
     fn tool_results_report_failures() {
         let ok = json!({"tool_name": "Read", "tool_response": {"file": "x"}});
+        let copilot_ok = json!({"toolName": "bash", "toolResult": {"resultType": "success",
+            "textResultForLlm": "tokenrein-ok\n<shellId: 0 completed with exit code 0>"}});
+        assert_eq!(
+            from_hook("postToolUse", &copilot_ok, false).unwrap().status,
+            Some("ok")
+        );
         assert_eq!(
             from_hook("PostToolUse", &ok, false).unwrap().status,
             Some("ok")
@@ -682,6 +703,9 @@ mod tests {
             json!({"toolName": "bash", "toolResult": {"resultType": "failure"}}),
             json!({"tool_name": "run", "tool_response": {"exit_code": 2}}),
             json!({"tool_name": "x", "error": "boom"}),
+            // Copilot CLI's real payload for a failed shell command.
+            json!({"toolName": "bash", "toolCallId": "call_1", "toolResult": {"resultType": "success",
+                "textResultForLlm": "ls: /missing: No such file or directory\n<shellId: 1 completed with exit code 1>"}}),
         ] {
             assert_eq!(
                 from_hook("postToolUse", &failed, false).unwrap().status,
