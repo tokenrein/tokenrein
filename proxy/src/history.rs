@@ -378,7 +378,10 @@ impl History {
         ))?;
         let mut by = Vec::new();
         for (dim, expr) in [
-            ("model", "coalesce(provider, '') || '/' || model"),
+            (
+                "model",
+                "CASE WHEN coalesce(provider, '') = '' THEN model ELSE provider || '/' || model END",
+            ),
             ("user", r#"coalesce("user", '-')"#),
             ("project", "project"),
             ("agent", "project || '/' || agent"),

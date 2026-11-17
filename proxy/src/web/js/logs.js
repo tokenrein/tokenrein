@@ -72,7 +72,8 @@ function pairTools(steps) {
       const call = open.get(key)?.shift();
       if (call) {
         call.status = s.status || "ok";
-        call.duration_ms = Math.max(0, new Date(s.ts) - new Date(call.ts));
+        // The duration the agent measured, else the time between the call and its result.
+        call.duration_ms = s.duration_ms ?? Math.max(0, new Date(s.ts) - new Date(call.ts));
         call.result = s;
       } else out.push(s);
     } else out.push(s);

@@ -873,7 +873,11 @@ impl Ledger {
             let spend = keys.spend_day(&ymd);
             let cost = e.get("actual_micros").and_then(|v| v.as_i64()).unwrap_or(0);
             let blocked = s("decision").starts_with("blocked");
-            let model = format!("{}/{}", s("provider"), s("model"));
+            // "model" alone when the provider is unknown (a refused check that did not name it).
+            let model = match s("provider") {
+                "" => s("model").to_string(),
+                provider => format!("{provider}/{}", s("model")),
+            };
             let user = e.get("user").and_then(|v| v.as_str()).unwrap_or("-");
             let agent_key = format!("{project}/{agent}");
             for (dim, value) in [

@@ -1,6 +1,7 @@
 // Records the README's demo video: demo/agents.py runs for real against Tokenrein, its output is
 // shown in a terminal window, and a person acts in the real dashboard. Run through demo/run.sh:
-//   NODE_PATH=<dir with playwright> demo/run.sh node record.cjs <output.mp4>
+//   NODE_PATH=<dir with playwright> demo/run.sh node record.cjs <output.mp4> [<screenshot dir>]
+// With a screenshot dir, also saves the dashboard pages the README shows, after recording.
 "use strict";
 const { chromium } = require("playwright");
 const { spawn, execFileSync } = require("node:child_process");
@@ -11,15 +12,16 @@ const path = require("node:path");
 const ADMIN = "http://127.0.0.1:19788";
 const STAGE = `${ADMIN}/__stage`;
 const output = path.resolve(process.argv[2] || "demo.mp4");
+const shotDir = process.argv[3] && path.resolve(process.argv[3]);
 const frames = fs.mkdtempSync(path.join(os.tmpdir(), "tokenrein-demo-"));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const STAGE_HTML = `<!doctype html><meta charset="utf-8"><style>
-*{box-sizing:border-box} html,body{margin:0;height:100%;overflow:hidden;background:#0b0e14;font-family:-apple-system,"Segoe UI",Inter,sans-serif}
-#cap{position:absolute;inset:0 0 auto 0;height:60px;display:flex;align-items:center;gap:14px;padding:0 24px;background:#10141d;border-bottom:1px solid #232a38;color:#f2f5fa;font-size:23px;font-weight:650;letter-spacing:-.2px;z-index:5}
-#chip{display:none;min-width:32px;height:32px;border-radius:9px;background:#f5a524;color:#111;font-size:18px;font-weight:800;align-items:center;justify-content:center}
-#dash{position:absolute;left:0;right:0;top:60px;bottom:0;width:100%;height:calc(100% - 60px);border:0;background:#0b0e14}
-#term{position:absolute;z-index:3;left:18px;right:18px;top:78px;bottom:18px;background:#0d1117;border:1px solid #2c3444;border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.55);display:flex;flex-direction:column;overflow:hidden;pointer-events:none;transition:all .45s cubic-bezier(.2,.8,.2,1)}
+*{box-sizing:border-box} html,body{margin:0;height:100%;overflow:hidden;background:#fafaf9;font-family:-apple-system,"Segoe UI",Inter,sans-serif}
+#cap{position:absolute;inset:0 0 auto 0;height:60px;display:flex;align-items:center;gap:14px;padding:0 24px;background:#ffffff;border-bottom:1px solid #e7e7e4;color:#18181b;font-size:23px;font-weight:650;letter-spacing:-.2px;z-index:5}
+#chip{display:none;min-width:32px;height:32px;border-radius:9px;background:#18181b;color:#fafaf9;font-size:18px;font-weight:800;align-items:center;justify-content:center}
+#dash{position:absolute;left:0;right:0;top:60px;bottom:0;width:100%;height:calc(100% - 60px);border:0;background:#fafaf9}
+#term{position:absolute;z-index:3;left:18px;right:18px;top:78px;bottom:18px;background:#0d1117;border:1px solid #2c3444;border-radius:12px;box-shadow:0 1px 2px rgba(24,24,27,.08),0 18px 44px rgba(24,24,27,.22);display:flex;flex-direction:column;overflow:hidden;pointer-events:none;transition:all .45s cubic-bezier(.2,.8,.2,1)}
 #term.pip{left:auto;top:auto;right:16px;bottom:16px;width:660px;height:232px}
 #term.gone{opacity:0;transform:translateY(24px);pointer-events:none}
 #bar{height:30px;flex:none;display:flex;align-items:center;gap:7px;padding:0 12px;background:#161b26;color:#8a94a7;font-size:13px}
@@ -27,19 +29,19 @@ const STAGE_HTML = `<!doctype html><meta charset="utf-8"><style>
 #out{flex:1;overflow:hidden;padding:12px 16px;display:flex;flex-direction:column;justify-content:flex-end;font:18px/1.5 ui-monospace,Menlo,monospace;color:#d7dce5;white-space:pre}
 #term.pip #out{font-size:13px;line-height:1.4;padding:8px 12px}
 .b{font-weight:700}.d{opacity:.58}.r{color:#ff6b6b}.g{color:#4ade80}.y{color:#f5a524}.c{color:#56c8f5}.m{color:#c792ea}
-#card{position:absolute;inset:0;z-index:8;background:#0b0e14;color:#f2f5fa;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;text-align:center;transition:opacity .4s}
+#card{position:absolute;inset:0;z-index:8;background:#fafaf9;color:#18181b;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;text-align:center;transition:opacity .4s}
 #card.hide{opacity:0;pointer-events:none}
-#card h1{font-size:50px;margin:0;letter-spacing:-1.2px;font-weight:750}#card h1 em{font-style:normal;color:#f5a524}
-#card p{font-size:23px;margin:0;color:#aab3c4}
-#card code{font:21px ui-monospace,Menlo,monospace;background:#161b26;border:1px solid #2c3444;border-radius:10px;padding:12px 20px;color:#4ade80}
-#card small{font-size:15px;color:#7d8798}
+#card h1{font-size:50px;margin:0;letter-spacing:-1.2px;font-weight:750}#card h1 em{font-style:normal;color:#d9480f}
+#card p{font-size:23px;margin:0;color:#3f3f46}
+#card code{font:21px ui-monospace,Menlo,monospace;background:#18181b;border:1px solid #18181b;border-radius:10px;padding:12px 20px;color:#fafaf9}
+#card small{font-size:15px;color:#71717a}
 #cursor{position:absolute;z-index:9;left:640px;top:400px;width:26px;height:26px;pointer-events:none;transition:left .7s cubic-bezier(.3,.9,.3,1),top .7s cubic-bezier(.3,.9,.3,1);filter:drop-shadow(1px 2px 3px rgba(0,0,0,.7));opacity:0}
 </style>
 <div id="cap"><span id="chip"></span><span id="captext"></span></div>
 <iframe id="dash" src="/"></iframe>
 <div id="term" class="gone"><div id="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i><span>agents</span></div><div id="out"></div></div>
 <div id="card" class="hide"></div>
-<svg id="cursor" viewBox="0 0 24 24"><path d="M5 3L19 12L12 13L9 20L5 3Z" fill="#fff" stroke="#000" stroke-width="1.4" stroke-linejoin="round"/></svg>
+<svg id="cursor" viewBox="0 0 24 24"><path d="M5 3L19 12L12 13L9 20L5 3Z" fill="#18181b" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg>
 <script>
 const CL={"1":"b","2":"d","31":"r","32":"g","33":"y","36":"c","35":"m"};
 function ansi(s){let open=0,h="";for(const p of s.split(/(\\x1b\\[\\d+m)/)){const m=p.match(/^\\x1b\\[(\\d+)m$/);
@@ -54,14 +56,14 @@ window.cursorOff=()=>{document.getElementById("cursor").style.opacity=0};
 </script>`;
 
 const INTRO = `<h1>Your agents spend money <em>while you sleep.</em></h1><p>Tokenrein keeps a hand on the reins.</p>`;
-const OUTRO = `<h1>Token<em>rein</em></h1><p>Budgets, loop guard and approvals for every AI agent. Self-hosted.</p>
+const OUTRO = `<h1>Token<em>rein</em></h1><p>Budgets, loop guard, approvals and agent logs for every AI agent. Self-hosted.</p>
 <code>./setup.sh &amp;&amp; docker compose up -d</code><p style="font-size:20px">tokenrein.com &nbsp;·&nbsp; free up to 25 developers</p>
 <small>Recorded live against a mock model: real Tokenrein, no real spend.</small>`;
 
 let page;
 (async () => {
   const browser = await chromium.launch();
-  const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 2, colorScheme: "dark" });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 2, colorScheme: "light" });
   // The stage shows the real dashboard in a frame, which its security headers refuse: lift only
   // that header, in this browser only.
   await context.route(`${ADMIN}/**`, async route => {
@@ -174,26 +176,36 @@ let page;
   await until("BLOCKED", 60000);
   await sleep(3400);
 
-  await caption("6", "Every run, agent and dollar in one console");
+  await caption("6", "Every prompt, tool call and model call on one trace");
   await term("gone");
-  await tab("overview");
-  await sleep(3000);
   await tab("runs");
-  await sleep(1800);
-  await clickIn(dash.locator('a[data-open-run="ticket-4812"]:visible, a:has-text("ticket-4812"):visible').first(), "open run");
+  await sleep(1400);
+  await clickIn(dash.locator('a[data-open-run="research-77"]:visible').first(), "open run");
+  await dash.locator(".trace, #run-view table, #run-view .card").first().waitFor({ timeout: 20000 });
   await sleep(3200);
-  await page.keyboard.press("Escape");
-  await sleep(500);
+  await clickIn(dash.locator('#run-view [data-trace-filter="problems"]').first(), "problems");
+  await sleep(3000);
+
+  await caption("7", "Search every agent's steps across runs");
+  await tab("logs");
+  await sleep(1800);
+  const kind = dash.locator("#logs-kind");
+  await clickIn(kind, "kind filter");
+  await kind.selectOption("tool_call");
+  await sleep(3400);
+
+  await caption("8", "Spend by project, agent, person and model");
+  await tab("overview");
+  await sleep(2800);
   await tab("spend");
   await sleep(2800);
-  await tab("audit");
-  await sleep(3000);
 
   await page.evaluate(() => window.cursorOff());
   await page.evaluate(h => window.card(h), OUTRO);
   await sleep(4800);
   await cdp.send("Page.stopScreencast");
   agents.kill();
+  if (shotDir) await screenshots(dash);
   await browser.close();
 
   const list = shots.map((s, i) => {
@@ -205,8 +217,34 @@ let page;
     "-vf", "fps=30,scale=1920:1080:flags=lanczos,format=yuv420p", "-c:v", "libx264", "-crf", "20", "-preset", "slow", "-movflags", "+faststart", output], { stdio: "inherit" });
   fs.rmSync(frames, { recursive: true, force: true });
   console.log(`saved ${output}`);
-})().catch(async err => {
+})().catch(fail);
+
+// The README's still pictures: the dashboard frame alone, after the camera stops.
+async function screenshots(dash) {
+  fs.mkdirSync(shotDir, { recursive: true });
+  await page.evaluate(() => { window.card(""); window.term("gone"); window.cursorOff(); window.caption("", ""); });
+  const frame = page.locator("#dash");
+  const shoot = async name => {
+    await sleep(1200);
+    await dash.locator("body").evaluate(() => window.scrollTo(0, 0));
+    await sleep(200);
+    await frame.screenshot({ path: path.join(shotDir, `${name}.png`) }); };
+  await dash.locator('button[data-tab="overview"]').click();
+  await shoot("overview");
+  await dash.locator('button[data-tab="runs"]').click();
+  await dash.locator('a[data-open-run="research-77"]:visible').first().click();
+  await dash.locator('#run-view [data-trace-filter="all"]').click();
+  await shoot("run-trace");
+  await dash.locator('button[data-tab="logs"]').click();
+  await dash.locator("#logs-status").selectOption("");
+  await dash.locator("#logs-kind").selectOption("tool_call");
+  await shoot("logs");
+  await dash.locator('button[data-tab="spend"]').click();
+  await shoot("spend");
+}
+
+async function fail(err) {
   console.error(err);
   await page?.screenshot({ path: `${output}.failed.png` }).catch(() => {});
   process.exit(1);
-});
+}

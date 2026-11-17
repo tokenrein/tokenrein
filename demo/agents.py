@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import urllib.error
+import uuid
 import urllib.request
 
 PROXY = os.environ.get("DEMO_PROXY", "http://127.0.0.1:19787")
@@ -57,6 +58,33 @@ def call(project, agent, run, prompt):
         return err.code, None, kind, 0.0
 
 
+def log_steps(project, agent, run, *steps):
+    """Report what the agent did (prompt, tool calls) for the run's trace and the Logs page."""
+    for s in steps:
+        s.setdefault("run_id", run)
+        s.setdefault("agent", agent)
+        s.setdefault("user", USERS[agent])
+    req = urllib.request.Request(
+        f"{PROXY}/v1/steps",
+        data=json.dumps({"steps": list(steps)}).encode(),
+        headers={"content-type": "application/json", "authorization": f"Bearer {KEYS[project]}"},
+    )
+    try:
+        urllib.request.urlopen(req, timeout=10).close()
+    except (urllib.error.URLError, OSError):
+        pass  # Logging never stops the agent.
+
+
+def tool(project, agent, run, name, args, status="ok", ms=120):
+    """One tool call and its result, paired by call id."""
+    call_id = "call_" + uuid.uuid4().hex[:12]
+    log_steps(
+        project, agent, run,
+        {"kind": "tool_call", "name": name, "call_id": call_id, "content": json.dumps(args)},
+        {"kind": "tool_result", "name": name, "call_id": call_id, "status": status, "duration_ms": ms},
+    )
+
+
 def warns_only():
     """A budget in Check mode: the warning comes back on the response and the agent carries on."""
     name, spent, warned = "nightly-summary", 0.0, False
@@ -74,7 +102,8 @@ def warns_only():
 
 def wait_for_decision(project, agent, run):
     """Ask Tokenrein until a person has decided; True if the run may continue."""
-    body = json.dumps({"run_id": run, "agent": agent, "model": "gpt-4o", "max_output_tokens": 2000}).encode()
+    body = json.dumps({"run_id": run, "agent": agent, "user": USERS[agent], "provider": "openai",
+                       "model": "gpt-4o", "max_output_tokens": 2000}).encode()
     while True:
         req = urllib.request.Request(
             f"{PROXY}/v1/check",
@@ -96,7 +125,10 @@ def wait_for_decision(project, agent, run):
 def needs_approval():
     """A run budget in Ask mode: the run waits for a person, then continues where it stopped."""
     name, run, spent, step = "support-bot", "ticket-4812", 0.0, 0
+    log_steps("support", name, run, {"kind": "prompt", "name": "prompt", "content": "Customer asks where order 4812 is"})
     while step < 22:
+        if step % 5 == 0:
+            tool("support", name, run, "lookup_order", {"order": 4812}, ms=90 + step * 7)
         status, _, kind, cost = call("support", name, run, f"draft reply, step {step}")
         if status == 200:
             step += 1
@@ -118,9 +150,11 @@ def needs_approval():
 def stuck_in_a_loop():
     """The same request again and again: the loop guard pauses the run; a person stops it."""
     name, run, spent, step = "research-agent", "research-77", 0.0, 0
+    log_steps("research", name, run, {"kind": "prompt", "name": "prompt", "content": "Find pricing for the top 3 vector databases"})
     time.sleep(1.2)
     say(name, MAGENTA, f"{DIM}retrying the same tool call…{RESET}")
     while True:
+        tool("research", name, run, "web_search", {"q": "vector database pricing"}, status="error", ms=2400)
         status, _, kind, cost = call("research", name, run, "search the web for the same thing")
         if status == 200:
             step += 1

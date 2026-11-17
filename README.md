@@ -14,9 +14,9 @@ Give every AI agent a budget, catch runaway loops before they reach the invoice,
 
 **[Quick start](#quick-start-docker-compose-about-5-minutes)** · **[Connect your agents](#connect-your-agents)** · **[Docs](#documentation)** · **[tokenrein.com](https://tokenrein.com)**
 
-<img src="docs/assets/demo.gif" alt="Demo: four AI agents through Tokenrein. One gets a token warning, one pauses at its budget and is approved in the console, one is caught in a loop and stopped, one is blocked at a hard limit." width="100%">
+<img src="docs/assets/demo.gif" alt="Demo: four AI agents through Tokenrein. One gets a token warning, one pauses at its budget and is approved in the console, one is caught in a loop and stopped, one is blocked at a hard limit. Then the looping run's trace of tool calls, the Logs page filtered to errors, and spend." width="100%">
 
-<sub>51 seconds, recorded live: real Tokenrein, a mock model, no real spend. <a href="https://github.com/tokenrein/tokenrein/raw/main/docs/assets/demo.mp4">Download the sharp MP4</a>, or <a href="#see-it-without-an-api-key">run it yourself</a>.</sub>
+<sub>61 seconds, recorded live: real Tokenrein, a mock model, no real spend. <a href="https://github.com/tokenrein/tokenrein/raw/main/docs/assets/demo.mp4">Download the sharp MP4</a>, or <a href="#see-it-without-an-api-key">run it yourself</a>.</sub>
 
 </div>
 
@@ -38,6 +38,19 @@ Works with **Claude Code, Codex CLI, Gemini CLI, Cursor, GitHub Copilot CLI** an
 - **Spend you can charge back**: by project, agent, person and model, over up to 13 months, with CSV export.
 - **Built for teams**: SSO (OpenID Connect), roles per org, API tokens, every change versioned and audited, Docker Compose and Helm.
 - **Free to self-host** up to 25 developers and $10,000 of AI spend a month, with every guardrail.
+
+## The dashboard
+
+<table>
+<tr>
+<td width="50%"><img src="docs/assets/run-trace.png" alt="A run's trace: the prompt, each tool call with its outcome and duration, and every model call with its cost, with a warning that the same web_search call repeated"><br><sub><b>Run trace.</b> Every prompt, tool call and model call of one run, in order, with cost, outcome and duration. Repeated tool calls are called out.</sub></td>
+<td width="50%"><img src="docs/assets/logs.png" alt="The Logs page: tool calls, prompts and model calls from every agent, with filters for kind, status and agent"><br><sub><b>Logs.</b> Search what every agent did across runs: "failed tool calls from the research agent today".</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/assets/overview.png" alt="The Overview: spend today and this month, runs needing approval, model calls and latency in the last hour"><br><sub><b>Overview.</b> Spend, runs waiting for a person, and the last hour of model calls and latency.</sub></td>
+<td width="50%"><img src="docs/assets/spend.png" alt="Spend by project, agent, person and model over time"><br><sub><b>Spend.</b> By project, agent, person and model, over up to 13 months, with CSV export.</sub></td>
+</tr>
+</table>
 
 ## See it without an API key
 

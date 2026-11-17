@@ -211,7 +211,7 @@ them; you can call them from anything.
 |---|---|
 | `POST /v1/check` | "May this run make another call?" Body: `run_id`, `parent_run_id`, `agent`, `user`, `model`, `max_output_tokens` or `estimate_usd`, `fingerprint` (16-128 hex). Answers `{allowed, reason, scope, run_state}` |
 | `POST /v1/usage` | Report calls that happened: `{"events": [{run_id, parent_run_id, agent, user, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd?, duration_ms}]}`. Priced from the model list unless `cost_usd` is given. Answers the enforced limits now used up |
-| `POST /v1/steps` | Log agent steps (what `guard.log()` sends): `{"steps": [{run_id, parent_run_id, agent, user, name, kind?, level?, status?, duration_ms?, call_id?, content?, attrs?}]}`. `kind` is `log` (default), `tool_call`, `tool_result`, `prompt` or `subagent`; `content` is kept (redacted, 2,000 characters) only with the project's content capture on. Not charged to budgets |
+| `POST /v1/steps` | Log agent steps (what `guard.log()` sends): `{"steps": [{run_id, parent_run_id, agent, user, name, kind?, level?, status?, duration_ms?, call_id?, content?, attrs?}]}`. `kind` is `log` (default), `tool_call`, `tool_result`, `prompt` or `subagent`; `content` is kept (redacted, 2,000 characters) only with the project's content capture on; `tool_call` steps with the same `name` and `content` are flagged as repeated in the run's trace (a hash is compared, so this works with capture off). Not charged to budgets |
 | `POST /v1/otel/v1/logs` | OpenTelemetry logs (HTTP/JSON) from Claude Code, Codex CLI and Gemini CLI |
 | `POST /v1/hooks/{claude-code,codex,gemini,cursor,copilot}` | The agents' hooks; answers in each agent's own format and fails open |
 

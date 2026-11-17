@@ -51,9 +51,9 @@ curl -fsS -H 'content-type: application/json' "$admin/auth/setup" \
 api "$admin/admin/orgs" -d '{"id": "acme", "budgets": {
   "run": {"limit_usd": 1, "mode": "ask"}, "max_run_usd": 10,
   "loops": {"action": "pause", "max_repeats": 5, "repeat_window_secs": 600}}}' >/dev/null
-project() { api "$admin/admin/orgs/acme/projects" -d "{\"id\": \"$1\", \"budgets\": $2}" >/dev/null; }
-project support '{}'
-project research '{}'
+project() { api "$admin/admin/orgs/acme/projects" -d "{\"id\": \"$1\", \"budgets\": $2, \"capture_content\": ${3:-false}}" >/dev/null; }
+project support '{}' true
+project research '{}' true
 project data-pipeline '{"project_monthly": {"limit_usd": 0.4, "mode": "check"}, "run": {"limit_usd": 10, "mode": "skip"}}'
 project batch-jobs '{"project_monthly": {"limit_usd": 0.5, "mode": "enforce"}, "run": {"limit_usd": 10, "mode": "skip"}}'
 

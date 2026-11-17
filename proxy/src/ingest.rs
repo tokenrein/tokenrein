@@ -580,7 +580,13 @@ fn tool_fingerprint(input: &Value) -> Option<String> {
     (!name.is_empty() || !args.is_empty()).then(|| crate::loops::fingerprint(&[name, &args]))
 }
 
-fn blocked_event(c: &Caller, who: &Who, v: &Verdict, model: Option<&str>) -> Value {
+fn blocked_event(
+    c: &Caller,
+    who: &Who,
+    v: &Verdict,
+    provider: Option<&str>,
+    model: Option<&str>,
+) -> Value {
     json!({
         "event": "request",
         "ts": Utc::now().to_rfc3339(),
@@ -591,7 +597,7 @@ fn blocked_event(c: &Caller, who: &Who, v: &Verdict, model: Option<&str>) -> Val
         "user": who.user,
         "run_id": who.run,
         "parent_run_id": who.parent,
-        "provider": Value::Null,
+        "provider": provider.filter(|p| !p.is_empty()),
         "model": model.unwrap_or("-"),
         "stream": false,
         "decision": if v.run_state.is_some() { "blocked_run_stopped" } else { "blocked_budget" },
@@ -680,7 +686,13 @@ pub async fn check(
         crate::metrics::publish(
             &st.activity,
             crate::metrics::Path::Ingest,
-            blocked_event(&c, &who, &v, body.model.as_deref()),
+            blocked_event(
+                &c,
+                &who,
+                &v,
+                body.provider.as_deref(),
+                body.model.as_deref(),
+            ),
         );
     }
     Json(json!({
@@ -1484,7 +1496,7 @@ async fn agent_hook(st: &AppState, headers: &HeaderMap, input: &Value, tool: Too
     crate::metrics::publish(
         &st.activity,
         crate::metrics::Path::Ingest,
-        blocked_event(&c, &who, &v, None),
+        blocked_event(&c, &who, &v, None, None),
     );
     let reason = v
         .reason

@@ -103,7 +103,7 @@ function renderRun() {
   el.innerHTML = `
     <div class="inline" style="justify-content:space-between;align-items:flex-start;margin-bottom:12px">
       <div><h1 style="font-family:var(--mono);word-break:break-all">${esc(root.run_id)}</h1>
-        <p class="sub" style="margin:0">${stateBadge(root.state)} ${liveness(root.last_seen)} · ${esc(root.project || "–")} / ${esc(root.agent || "–")}${root.parent_run_id ? ` · parent <a href="#" class="mono runlink" data-open-run="${esc(root.parent_run_id)}">${esc(root.parent_run_id)}</a>` : ""}</p></div>
+        <p class="sub" style="margin:0">${stateBadge(root.state)}${root.state === "killed" ? "" : `<span style="margin-left:8px">${liveness(root.last_seen)}</span>`} · ${esc(root.project || "–")} / ${esc(root.agent || "–")}${root.parent_run_id ? ` · parent <a href="#" class="mono runlink" data-open-run="${esc(root.parent_run_id)}">${esc(root.parent_run_id)}</a>` : ""}</p></div>
       <div class="run-head-r"><div class="row-actions">${actions}</div>${root.budget?.limit_micros != null && root.budget.mode !== "skip" ? `<div class="run-budget">${meter(root.budget)}</div>` : ""}</div></div>
     <div class="grid kpis">
       ${kpi("Spend", usd(cost), `incl. ${t.runs.length - 1} sub-agent run${t.runs.length === 2 ? "" : "s"}`)}

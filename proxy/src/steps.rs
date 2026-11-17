@@ -288,6 +288,11 @@ pub fn from_sdk(body: &Value, capture: bool) -> Result<Step, String> {
     if let Some(content) = body.get("content").filter(|c| !c.is_null()) {
         let text = text_of(content);
         step.size = Some(text.len() as u64);
+        // Same tool, same input: what the trace counts as a repeated call. Only a hash is kept,
+        // so it works with content capture off.
+        if kind == Kind::ToolCall {
+            step.fingerprint = Some(crate::loops::fingerprint(&[name, &content.to_string()]));
+        }
         if capture && !text.is_empty() {
             step.content = Some(redact(&text));
         }
@@ -782,6 +787,26 @@ mod tests {
         assert_eq!(s.status, Some("error"));
         assert!(from_sdk(&json!({"level": "info"}), false).is_err());
         assert!(from_sdk(&json!({"name": "x", "kind": "nope"}), false).is_err());
+    }
+
+    #[test]
+    fn sdk_tool_calls_with_the_same_input_share_a_fingerprint() {
+        let call = |q: &str| {
+            from_sdk(
+                &json!({"name": "web_search", "kind": "tool_call", "content": {"q": q}}),
+                false,
+            )
+            .unwrap()
+            .fingerprint
+        };
+        assert!(call("pricing").is_some());
+        assert_eq!(call("pricing"), call("pricing"));
+        assert_ne!(call("pricing"), call("docs"));
+        let no_input =
+            from_sdk(&json!({"name": "web_search", "kind": "tool_call"}), false).unwrap();
+        assert!(no_input.fingerprint.is_none());
+        let log = from_sdk(&json!({"name": "web_search", "content": "pricing"}), false).unwrap();
+        assert!(log.fingerprint.is_none());
     }
 
     #[test]

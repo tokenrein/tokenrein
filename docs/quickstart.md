@@ -54,9 +54,11 @@ command on each developer's machine, for example:
 curl -fsSL http://<dashboard>/connect/claude-code.py | python3 - --key tr_… --url http://<host>:8787
 ```
 
-New sessions show up under **Runs** (Claude Code as `cc-<session>`). Codex CLI, Gemini CLI and
-Cursor work the same way; what each connector changes is in [connectors.md](connectors.md).
-Undo with `--remove`.
+New sessions show up under **Runs** (Claude Code as `cc-<session>`). Open one for its trace: the
+prompt, each tool call with its outcome and duration, sub-agents and every model call with its
+cost, in order. Codex CLI, Gemini CLI, Cursor and GitHub Copilot CLI work the same way; what each
+connector changes is in [connectors.md](connectors.md). Undo with `--remove`. If you connected an
+agent before 0.2.0, run its command again to add the hooks that report tool calls.
 
 ## 5. Your own app
 
@@ -85,6 +87,9 @@ Calls go straight to the provider; Tokenrein gets token counts, never prompts. S
 - Set the run budget in **Ask**: an over-budget run pauses and appears under **Approvals**;
   **Approve** adds budget and the run continues.
 - Turn on the loop guard with *pause after 3*: the third identical tool call pauses the run.
+- Open **Logs** and pick *Errors and blocked*: every failed or refused tool call and model call,
+  across all runs. To keep the prompt and tool text too (redacted), turn on capture
+  for the project under **Keys & limits** → **Agent logs**.
 
 Then roll out: a week in Check, an alert channel, Enforce for the limits you trust. Licensing
 and paid features: [licensing.md](licensing.md).

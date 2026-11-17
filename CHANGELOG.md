@@ -22,6 +22,9 @@ SDKs; the release workflow refuses a tag that does not match all three.
   a last-hour activity card on the overview (calls, steps, errors, spend, model latency).
 - `GET /admin/orgs/{org}/logs`; the run timeline also returns `steps`, and runs carry `steps` and
   `errors` counts.
+- Tool calls logged through `POST /v1/steps` with the same `name` and `content` are flagged as
+  repeated in the run's trace (a hash is compared, so this works with content capture off).
+- The README demo shows the run trace and the Logs page, and has screenshots of the dashboard.
 
 ### Changed
 - Dashboard restyle: neutral surfaces with hairline structure, ink primary buttons, colour kept
@@ -42,6 +45,12 @@ SDKs; the release workflow refuses a tag that does not match all three.
 - Codex CLI's tool-result hook carries only the command's output, so failed commands showed as
   ok. The hook now reads the call's exit code and duration from the local session transcript
   (only those numbers are sent). Checked live with Codex CLI 0.169.0.
+- A tool call's duration in the trace now uses the duration the agent reported with the result,
+  not only the time between the two log entries (which is 0 when both arrive together).
+- A refused `POST /v1/check` dropped the `provider` it was sent, so the spend breakdown listed those
+  requests under a separate `/model` row. It keeps the provider now, and a model with no provider
+  shows as just its name.
+- A stopped run's page no longer shows it as Live.
 
 ### Security
 - `cargo audit` ignores RUSTSEC-2026-0459 (SQLite): `libsqlite3-sys` is listed in `Cargo.lock` by
