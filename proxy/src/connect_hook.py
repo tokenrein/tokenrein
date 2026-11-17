@@ -29,14 +29,65 @@ def allow(tool, event):
     return {}
 
 
+TRANSCRIPT_TAIL_BYTES = 256 * 1024
+
+
+def codex_result(doc):
+    """How a Codex tool call ended, read from the session transcript on this machine.
+
+    Codex's PostToolUse event carries only the command's output, so a failed command looks like a
+    success. The transcript's `item_completed` entry for the call has its exit code and duration.
+    Only those numbers are sent to Tokenrein, never the transcript. None when not found.
+    """
+    path, call_id = doc.get("transcript_path"), doc.get("tool_use_id")
+    if not isinstance(path, str) or not isinstance(call_id, str) or not call_id:
+        return None
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - TRANSCRIPT_TAIL_BYTES))
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    needle = call_id.encode()
+    for line in reversed(lines):
+        if needle not in line or b"item_completed" not in line:
+            continue
+        try:
+            payload = json.loads(line).get("payload") or {}
+        except (ValueError, AttributeError):
+            continue
+        item = payload.get("item") if isinstance(payload, dict) else None
+        if payload.get("type") != "item_completed" or not isinstance(item, dict) or item.get("id") != call_id:
+            continue
+        result = {}
+        if isinstance(item.get("exit_code"), int):
+            result["exit_code"] = item["exit_code"]
+        if isinstance(item.get("status"), str):
+            result["status"] = item["status"]
+        d = item.get("duration")
+        if isinstance(d, dict) and isinstance(d.get("secs"), int):
+            result["duration_ms"] = d["secs"] * 1000 + int(d.get("nanos") or 0) // 1000000
+        return result or None
+    return None
+
+
 def main():
     tool = sys.argv[1] if len(sys.argv) > 1 else ""
     raw = sys.stdin.buffer.read()
     try:
         doc = json.loads(raw or b"{}")
         event = doc.get("hook_event_name", "")
+        changed = False
         if not event and len(sys.argv) > 2:
             event = doc["hook_event_name"] = sys.argv[2]
+            changed = True
+        if tool == "codex" and event == "PostToolUse":
+            result = codex_result(doc)
+            if result:
+                doc["tokenrein_result"] = result
+                changed = True
+        if changed:
             raw = json.dumps(doc).encode()
     except (ValueError, AttributeError, TypeError):
         event = ""

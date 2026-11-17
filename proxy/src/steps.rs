@@ -126,8 +126,16 @@ fn result_failed(input: &Value) -> bool {
                 .and_then(shell_exit_code)
                 .is_some_and(|c| c != 0)
     };
-    flagged(input) || response.is_some_and(flagged)
+    // Codex reports only the output; Tokenrein's hook adds the exit code from its transcript.
+    let codex = input
+        .get(CODEX_RESULT)
+        .is_some_and(|r| flagged(r) || r.get("status").and_then(Value::as_str) == Some("failed"));
+    flagged(input) || response.is_some_and(flagged) || codex
 }
+
+/// The field Tokenrein's hook adds to a Codex PostToolUse event: `{exit_code, status,
+/// duration_ms}` from the session transcript (see connect_hook.py).
+const CODEX_RESULT: &str = "tokenrein_result";
 
 /// The exit code in Copilot's shell trailer, `<shellId: 1 completed with exit code 1>`.
 fn shell_exit_code(text: &str) -> Option<i64> {
@@ -205,6 +213,10 @@ pub fn from_hook(event: &str, input: &Value, capture: bool) -> Option<Step> {
                 // Claude Code, Cursor and Copilot report a failed tool on its own event.
                 let failed = event.ends_with("ToolUseFailure") || result_failed(input);
                 step.status = Some(if failed { "error" } else { "ok" });
+                step.duration_ms = input
+                    .get(CODEX_RESULT)
+                    .and_then(|r| r.get("duration_ms"))
+                    .and_then(Value::as_u64);
                 let output = first_value(
                     input,
                     &[
@@ -712,6 +724,36 @@ mod tests {
                 Some("error")
             );
         }
+        // Codex CLI's real PostToolUse payload: plain output text, plus the result Tokenrein's
+        // hook reads from the session transcript.
+        let codex = |result: Value| {
+            json!({"hook_event_name": "PostToolUse", "tool_name": "Bash",
+                "tool_use_id": "exec-e5857aa1", "tool_input": {"command": "cat missing.txt"},
+                "tool_response": "cat: missing.txt: No such file or directory\n",
+                "tokenrein_result": result})
+        };
+        let failed = from_hook(
+            "PostToolUse",
+            &codex(json!({"exit_code": 1, "status": "failed", "duration_ms": 48})),
+            false,
+        )
+        .unwrap();
+        assert_eq!(failed.status, Some("error"));
+        assert_eq!(failed.duration_ms, Some(48));
+        assert_eq!(failed.call_id.as_deref(), Some("exec-e5857aa1"));
+        let ok = from_hook(
+            "PostToolUse",
+            &codex(json!({"exit_code": 0, "status": "completed", "duration_ms": 3})),
+            false,
+        )
+        .unwrap();
+        assert_eq!((ok.status, ok.duration_ms), (Some("ok"), Some(3)));
+        let no_transcript = from_hook("PostToolUse", &codex(Value::Null), false).unwrap();
+        assert_eq!(
+            (no_transcript.status, no_transcript.duration_ms),
+            (Some("ok"), None)
+        );
+
         let failure = json!({"tool_name": "Bash", "tool_use_id": "toolu_9", "error": "exit 1"});
         for event in ["PostToolUseFailure", "postToolUseFailure"] {
             let r = from_hook(event, &failure, false).unwrap();

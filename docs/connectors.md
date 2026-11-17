@@ -41,7 +41,7 @@ Connections made before agent logs existed need the connect script run again to 
 | Prompt | `UserPromptSubmit` | `UserPromptSubmit` | `BeforeAgent` | `beforeSubmitPrompt` | `userPromptSubmitted` |
 | Tool call | `PreToolUse` | `PreToolUse` | `BeforeTool` | `preToolUse` | `preToolUse` |
 | Tool result (added) | `PostToolUse` | `PostToolUse` | `AfterTool` | `postToolUse` | `postToolUse` |
-| Failed tool (added) | `PostToolUseFailure` | (in `PostToolUse`) | (in `AfterTool`) | `postToolUseFailure` | `postToolUseFailure` |
+| Failed tool (added) | `PostToolUseFailure` | (in `PostToolUse`, exit code from the transcript) | (in `AfterTool`) | `postToolUseFailure` | `postToolUseFailure` |
 | Sub-agent | `SubagentStart` | — | — | `subagentStart` | — |
 | Turn / session end | `Stop`, `SessionEnd` | `SessionEnd` | `SessionEnd` | `sessionEnd` | `sessionEnd` |
 
@@ -98,7 +98,16 @@ until they are reviewed and trusted with `/hooks`.
 |---|---|---|
 | `UserPromptSubmit` | `session_id` | `{"decision": "block", "reason": …}` |
 | `PreToolUse` (matcher `*`) | `session_id` | `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": …}}` |
+| `PostToolUse` (matcher `*`) | `session_id`, `tool_use_id`, `transcript_path` | — (logs the tool result) |
 | `SessionEnd` | `session_id` | — (marks the run ended; 3 s max timeout) |
+
+`PostToolUse` sends only the tool's output text, so a command that exits non-zero looks the same
+as one that succeeds (`codex.tool_result`'s `success` is `true` too; it means the tool ran). The
+hook reads the last 256 KB of the session transcript (`transcript_path`, on the same machine),
+finds the `event_msg` whose `payload.type` is `item_completed` and `payload.item.id` is the
+`tool_use_id`, and adds `tokenrein_result: {exit_code, status, duration_ms}` to what it sends.
+Nothing else from the transcript leaves the machine. A non-zero exit code or `status: "failed"`
+is logged as an error. Checked live with Codex CLI 0.169.0.
 
 Codex's `session_id` is the thread id, the same value as `conversation.id`; sub-agent hooks carry
 the parent session's id. `SubagentStart` can't stop a sub-agent (`continue: false` is ignored), so

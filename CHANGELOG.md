@@ -39,6 +39,9 @@ SDKs; the release workflow refuses a tag that does not match all three.
 - Copilot CLI marks its shell tool as successful even when the command fails; agent logs now read
   the exit code it reports (`completed with exit code N`), so failed commands show as errors.
   Checked live with Copilot CLI 1.0.105.
+- Codex CLI's tool-result hook carries only the command's output, so failed commands showed as
+  ok. The hook now reads the call's exit code and duration from the local session transcript
+  (only those numbers are sent). Checked live with Codex CLI 0.169.0.
 
 ### Security
 - `cargo audit` ignores RUSTSEC-2026-0459 (SQLite): `libsqlite3-sys` is listed in `Cargo.lock` by
