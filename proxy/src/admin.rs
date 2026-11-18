@@ -1136,6 +1136,35 @@ async fn review(
 struct SpendQuery {
     days: Option<u32>,
     format: Option<String>,
+    /// Window start and end (RFC 3339 or Unix seconds); any of these, a bucket or a filter
+    /// switches to a range report.
+    from: Option<String>,
+    to: Option<String>,
+    /// `minute`, `hour` or `day`; chosen from the window's length when absent.
+    bucket: Option<String>,
+    project: Option<String>,
+    agent: Option<String>,
+    user: Option<String>,
+    model: Option<String>,
+    /// `blocked` or `allowed`.
+    status: Option<String>,
+}
+
+impl SpendQuery {
+    fn is_range(&self) -> bool {
+        [
+            &self.from,
+            &self.to,
+            &self.bucket,
+            &self.project,
+            &self.agent,
+            &self.user,
+            &self.model,
+            &self.status,
+        ]
+        .iter()
+        .any(|v| v.as_deref().is_some_and(|v| !v.trim().is_empty()))
+    }
 }
 
 fn history_failed(e: anyhow::Error) -> Response {
@@ -1228,6 +1257,9 @@ async fn spend(
     if let Err(r) = admin.org(&st, &org, Role::Viewer) {
         return r;
     }
+    if q.is_range() {
+        return spend_range(st, org, q).await;
+    }
     let csv = q.format.as_deref() == Some("csv");
     let history = st.history.clone();
     let max = history
@@ -1254,14 +1286,50 @@ async fn spend(
                 .to_string()
         })
         .collect();
-    let hashes = match st.ledger.spend_days(&org, &days).await {
-        Ok(h) => h,
+    let (totals, breakdown) = match redis_spend(&st, &org, &days).await {
+        Ok(r) => r,
         Err(e) => return unavailable(e),
     };
+    let series: Vec<Value> = days
+        .iter()
+        .zip(&totals)
+        .map(|(day, t)| json!({ "day": day, "cost_micros": t[0], "requests": t[1], "blocked": t[2] }))
+        .collect();
+    if csv {
+        // Without the usage history, only daily totals are kept.
+        let mut out = String::from("day,requests,blocked,cost_usd\n");
+        for d in &series {
+            out.push_str(&format!(
+                "{},{},{},{:.6}\n",
+                d["day"].as_str().unwrap_or(""),
+                d["requests"],
+                d["blocked"],
+                d["cost_micros"].as_i64().unwrap_or(0) as f64 / 1e6
+            ));
+        }
+        return csv_response(out, &format!("tokenrein-spend-{org}-{today}.csv"));
+    }
+    Json(json!({
+        "days": series,
+        "by": breakdown,
+        "source": "redis",
+        "history_days": history.map(|h| h.retention_days),
+    }))
+    .into_response()
+}
+
+/// Daily totals ([cost, requests, blocked] per day, in `days` order) and the top 50 keys per
+/// dimension, from the daily hashes Redis keeps (`days` as `YYYYMMDD`).
+async fn redis_spend(
+    st: &AppState,
+    org: &str,
+    days: &[String],
+) -> anyhow::Result<(Vec<[i64; 3]>, serde_json::Map<String, Value>)> {
+    let hashes = st.ledger.spend_days(org, days).await?;
     // dim -> value -> [cost, requests, blocked]
     let mut by: HashMap<String, HashMap<String, [i64; 3]>> = HashMap::new();
     let mut series = Vec::with_capacity(days.len());
-    for (day, h) in days.iter().zip(&hashes) {
+    for h in &hashes {
         let mut total = [0i64; 3];
         for (field, v) in h {
             let Some((dim, rest)) = field.split_once(':') else {
@@ -1285,12 +1353,13 @@ async fn spend(
                 total[i] += v;
             }
         }
-        series.push(json!({ "day": day, "cost_micros": total[0], "requests": total[1], "blocked": total[2] }));
+        series.push(total);
     }
-    let breakdown: serde_json::Map<String, Value> = ["model", "user", "project", "agent"]
+    let breakdown = ["model", "user", "project", "agent"]
         .into_iter()
         .map(|dim| {
-            let mut rows: Vec<(String, [i64; 3])> = by.remove(dim).unwrap_or_default().into_iter().collect();
+            let mut rows: Vec<(String, [i64; 3])> =
+                by.remove(dim).unwrap_or_default().into_iter().collect();
             rows.sort_by(|a, b| b.1[0].cmp(&a.1[0]).then(b.1[1].cmp(&a.1[1])));
             let rows: Vec<Value> = rows
                 .into_iter()
@@ -1300,25 +1369,245 @@ async fn spend(
             (dim.to_string(), json!(rows))
         })
         .collect();
-    if csv {
-        // Without the usage history, only daily totals are kept.
-        let mut out = String::from("day,requests,blocked,cost_usd\n");
-        for d in &series {
-            out.push_str(&format!(
-                "{},{},{},{:.6}\n",
-                d["day"].as_str().unwrap_or(""),
-                d["requests"],
-                d["blocked"],
-                d["cost_micros"].as_i64().unwrap_or(0) as f64 / 1e6
-            ));
-        }
-        return csv_response(out, &format!("tokenrein-spend-{org}-{today}.csv"));
+    Ok((series, breakdown))
+}
+
+/// Most buckets one range report returns: a day of minutes, two months of hours.
+const SPEND_MAX_BUCKETS: i64 = 1_500;
+
+/// A time given as RFC 3339 or Unix seconds.
+fn parse_time(s: &str) -> Option<chrono::DateTime<Utc>> {
+    let s = s.trim();
+    if let Ok(n) = s.parse::<i64>() {
+        return chrono::DateTime::from_timestamp(n, 0);
     }
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|t| t.with_timezone(&Utc))
+}
+
+fn iso_micros(us: i64) -> String {
+    chrono::DateTime::from_timestamp_micros(us)
+        .map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+        .unwrap_or_default()
+}
+
+/// Spend over any window, in minute, hour or day buckets, narrowed by project, agent, user,
+/// model or status. Minutes, hours and filters need the usage history; without it, day buckets
+/// come from Redis.
+async fn spend_range(st: Arc<AppState>, org: String, q: SpendQuery) -> Response {
+    use crate::history::{Bucket, Filter, Range};
+    let now = Utc::now();
+    let bad = |m: &str| err(StatusCode::BAD_REQUEST, m);
+    let to = match q.to.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        None => now,
+        Some(s) => match parse_time(s) {
+            Some(t) => t.min(now),
+            None => return bad("to must be an RFC 3339 time or Unix seconds"),
+        },
+    };
+    let from = match q.from.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        None => to - chrono::Duration::days(30),
+        Some(s) => match parse_time(s) {
+            Some(t) => t,
+            None => return bad("from must be an RFC 3339 time or Unix seconds"),
+        },
+    };
+    if from >= to {
+        return bad("from must be before to");
+    }
+    let bucket = match q.bucket.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(b) => match Bucket::parse(b) {
+            Some(b) => b,
+            None => return bad("bucket must be minute, hour or day"),
+        },
+        None => match (to - from).num_minutes() {
+            m if m <= 3 * 60 => Bucket::Minute,
+            m if m <= 4 * 24 * 60 => Bucket::Hour,
+            _ => Bucket::Day,
+        },
+    };
+    let history = st.history.clone();
+    // Nothing older than what is kept: the history's retention, or Redis's daily totals.
+    let kept_days = history
+        .as_ref()
+        .map_or(SPEND_REDIS_DAYS, |h| h.retention_days)
+        .max(1);
+    let oldest = (now.date_naive() - chrono::Duration::days(i64::from(kept_days) - 1))
+        .and_hms_opt(0, 0, 0)
+        .map_or(0, |t| t.and_utc().timestamp_micros());
+    let from_us = bucket.floor(from.timestamp_micros().max(oldest));
+    let to_us = to.timestamp_micros();
+    if from_us >= to_us {
+        return bad("the window is older than the spend that is kept");
+    }
+    let step = bucket.micros();
+    let count = (to_us - 1 - from_us) / step + 1;
+    if count > SPEND_MAX_BUCKETS {
+        return bad(&format!(
+            "that is {count} {}s; pick a coarser bucket or a shorter window (at most {SPEND_MAX_BUCKETS})",
+            bucket.name()
+        ));
+    }
+    let free_from = now - chrono::Duration::days(i64::from(license::FREE_HISTORY_DAYS));
+    if from_us < free_from.timestamp_micros()
+        && let Err(r) = license::require(&st, Feature::LongHistory)
+    {
+        return r;
+    }
+    let opt = |v: &Option<String>| {
+        v.as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    let filter = Filter {
+        project: opt(&q.project),
+        agent: opt(&q.agent),
+        user: opt(&q.user),
+        model: opt(&q.model),
+        blocked: match opt(&q.status).as_deref() {
+            None => None,
+            Some("blocked") => Some(true),
+            Some("allowed") => Some(false),
+            Some(_) => return bad("status must be blocked or allowed"),
+        },
+    };
+    let csv = q.format.as_deref() == Some("csv");
+    let filename = format!(
+        "tokenrein-spend-{org}-{}-{}.csv",
+        chrono::DateTime::from_timestamp_micros(from_us)
+            .map_or(String::new(), |t| t.format("%Y%m%dT%H%M").to_string()),
+        to.format("%Y%m%dT%H%M")
+    );
+    let filters = json!({
+        "project": filter.project, "agent": filter.agent, "user": filter.user,
+        "model": filter.model, "status": opt(&q.status),
+    });
+    let starts = (0..count).map(|i| from_us + i * step);
+
+    // Unfiltered days within Redis's 40 days come from Redis, as without the history: it has every
+    // request, including ones from before the history was turned on.
+    let redis_oldest = (now.date_naive() - chrono::Duration::days(i64::from(SPEND_REDIS_DAYS) - 1))
+        .and_hms_opt(0, 0, 0)
+        .map_or(0, |t| t.and_utc().timestamp_micros());
+    let daily = bucket == Bucket::Day && filter.is_empty();
+    let h = match history {
+        Some(h) if !(daily && from_us >= redis_oldest) => h,
+        history => {
+            if !daily {
+                return err(
+                    StatusCode::CONFLICT,
+                    "minute and hour detail and filters need the usage history: set TOKENREIN_HISTORY_DIR \
+                 (history.dir), or history.enabled in the Helm chart",
+                );
+            }
+            let days: Vec<String> = starts
+                .clone()
+                .filter_map(chrono::DateTime::from_timestamp_micros)
+                .map(|t| t.format("%Y%m%d").to_string())
+                .collect();
+            let (totals, by) = match redis_spend(&st, &org, &days).await {
+                Ok(r) => r,
+                Err(e) => return unavailable(e),
+            };
+            if csv {
+                let mut out = String::from("day,requests,blocked,cost_usd\n");
+                for (t, v) in starts.zip(&totals) {
+                    out.push_str(&format!(
+                        "{},{},{},{:.6}\n",
+                        &iso_micros(t)[..10],
+                        v[1],
+                        v[2],
+                        v[0] as f64 / 1e6
+                    ));
+                }
+                return csv_response(out, &filename);
+            }
+            let options: serde_json::Map<String, Value> = by
+                .iter()
+                .map(|(dim, rows)| {
+                    let keys: Vec<Value> = rows
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|r| r.get("key").cloned())
+                        .collect();
+                    (dim.clone(), json!(keys))
+                })
+                .collect();
+            let buckets: Vec<Value> = starts
+            .zip(&totals)
+            .map(|(t, v)| json!({ "t": iso_micros(t), "cost_micros": v[0], "requests": v[1], "blocked": v[2] }))
+            .collect();
+            return Json(json!({
+            "bucket": "day", "bucket_secs": step / 1_000_000, "from": iso_micros(from_us), "to": iso_micros(to_us),
+            "buckets": buckets, "by": by, "options": options, "filters": filters,
+            "source": "redis", "history": history.is_some(),
+            "history_days": history.map(|h| h.retention_days),
+        }))
+        .into_response();
+        }
+    };
+
+    let retention = h.retention_days;
+    let range = Range {
+        from_us,
+        to_us,
+        bucket,
+        filter,
+    };
+    let pending = h.pending(&org, from_us, to_us);
+    let o = org.clone();
+    if csv {
+        return match tokio::task::spawn_blocking(move || h.export_range_csv(&o, &range, &pending))
+            .await
+        {
+            Ok(Ok(body)) => csv_response(body, &filename),
+            Ok(Err(e)) => history_failed(e),
+            Err(e) => history_failed(e.into()),
+        };
+    }
+    let report =
+        match tokio::task::spawn_blocking(move || h.spend_range(&o, &range, &pending)).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => return history_failed(e),
+            Err(e) => return history_failed(e.into()),
+        };
+    let found: HashMap<i64, &crate::history::Totals> =
+        report.buckets.iter().map(|(t, v)| (*t, v)).collect();
+    let buckets: Vec<Value> = starts
+        .map(|t| {
+            let v = found.get(&t);
+            json!({
+                "t": iso_micros(t),
+                "cost_micros": v.map_or(0, |v| v.cost_micros),
+                "requests": v.map_or(0, |v| v.requests),
+                "blocked": v.map_or(0, |v| v.blocked),
+            })
+        })
+        .collect();
+    let by: serde_json::Map<String, Value> = report
+        .by
+        .into_iter()
+        .map(|(dim, rows)| {
+            let rows: Vec<Value> = rows
+                .into_iter()
+                .map(|t| json!({ "key": t.key, "cost_micros": t.cost_micros, "requests": t.requests, "blocked": t.blocked }))
+                .collect();
+            (dim.to_string(), json!(rows))
+        })
+        .collect();
+    let options: serde_json::Map<String, Value> = report
+        .options
+        .into_iter()
+        .map(|(dim, keys)| (dim.to_string(), json!(keys)))
+        .collect();
     Json(json!({
-        "days": series,
-        "by": breakdown,
-        "source": "redis",
-        "history_days": history.map(|h| h.retention_days),
+        "bucket": bucket.name(), "bucket_secs": step / 1_000_000,
+        "from": iso_micros(from_us), "to": iso_micros(to_us),
+        "buckets": buckets, "by": by, "options": options, "filters": filters,
+        "source": "history", "history": true, "history_days": retention,
     }))
     .into_response()
 }

@@ -124,14 +124,38 @@
 
     <section data-view="spend" class="hide">
       <h1>Spend</h1>
-      <p class="sub">Cost by day, model, user, project and agent.</p>
+      <p class="sub">Cost over time, by model, user, project and agent.</p>
       <div class="card">
-        <div class="card-h"><h2 id="spend-title">Cost per day</h2>
+        <div class="card-h"><h2 id="spend-title">Cost</h2>
           <div class="toolbar">
-            <select id="spend-days" aria-label="Date range"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90" data-history hidden disabled>Last 90 days</option><option value="180" data-history hidden disabled>Last 6 months</option><option value="365" data-history hidden disabled>Last 12 months</option></select>
+            <select id="spend-window" aria-label="Time window">
+              <option value="15m" data-short>Last 15 minutes</option>
+              <option value="1h" data-short>Last hour</option>
+              <option value="6h" data-short>Last 6 hours</option>
+              <option value="24h" data-short>Last 24 hours</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d" selected>Last 30 days</option>
+              <option value="90d" data-history>Last 90 days</option>
+              <option value="180d" data-history>Last 6 months</option>
+              <option value="365d" data-history>Last 12 months</option>
+              <option value="custom">Custom range…</option>
+            </select>
+            <div class="seg inline" role="group" aria-label="Group by" id="spend-bucket">
+              <button type="button" data-bucket="auto" aria-pressed="true">Auto</button>
+              <button type="button" data-bucket="minute" aria-pressed="false">Minute</button>
+              <button type="button" data-bucket="hour" aria-pressed="false">Hour</button>
+              <button type="button" data-bucket="day" aria-pressed="false">Day</button>
+            </div>
             <label class="inline status"><input type="checkbox" id="spend-table-toggle"> Table</label>
-            <button class="btn sm" data-spend-csv>Download CSV</button>
+            <button class="btn sm" type="button" data-spend-csv>Download CSV</button>
           </div></div>
+        <form class="spend-bar hide" id="spend-custom">
+          <label class="inline status">From <input type="datetime-local" id="spend-from" required></label>
+          <label class="inline status">to <input type="datetime-local" id="spend-to"></label>
+          <button class="btn sm primary" type="submit">Apply</button>
+          <span class="muted">Your local time. Leave “to” empty for now.</span>
+        </form>
+        <div class="spend-bar" id="spend-filters"></div>
         <div class="card-b">
           <div class="grid kpis" id="spend-kpis" style="margin-bottom:8px"></div>
           <div class="chart" id="spend-chart"></div>

@@ -75,9 +75,14 @@ volume; Helm: `history.enabled: true`). Every request event is then also written
 compressed Parquet files, one folder per org and day, every 30 seconds (`[history]
 flush_secs`), and read back with DuckDB for:
 
-- the Spend page's 90-day, 6-month and 12-month ranges (`/admin/orgs/{org}/spend?days=`),
-- **Download CSV**: spend per day, project, agent, user and model,
+- the Spend page's minute and hour detail, custom windows, and filters by project, agent, user,
+  model and status,
+- its 90-day, 6-month and 12-month ranges (`/admin/orgs/{org}/spend?days=`),
+- **Download CSV**: spend per minute, hour or day, project, agent, user and model,
 - run timelines older than 7 days.
+
+The history starts when you turn it on: earlier requests stay in Redis's daily totals, which the
+Spend page still uses for unfiltered daily views of the last 40 days.
 
 Each replica writes its own files, so every replica must see the **same** folder: a Docker
 volume on one host, or ReadWriteMany storage in Kubernetes (EFS, Filestore, Azure Files, NFS,

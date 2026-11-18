@@ -35,7 +35,7 @@ Works with **Claude Code, Codex CLI, Gemini CLI, Cursor, GitHub Copilot CLI** an
 - **Agent logs**: every prompt, tool call (with outcome and duration), sub-agent and model call on one trace per run, searchable across runs. Prompt and tool text is kept only if you turn it on for a project, and then redacted.
 - **Approvals and alerts** in the dashboard, Slack, Microsoft Teams, PagerDuty and signed webhooks.
 - **One command per coding agent**, one line for your app, or a base URL. Prompts never have to pass through Tokenrein.
-- **Spend you can charge back**: by project, agent, person and model, over up to 13 months, with CSV export.
+- **Spend you can charge back**: by project, agent, person and model, by the minute, hour or day over up to 13 months, with filters and CSV export.
 - **Built for teams**: SSO (OpenID Connect), roles per org, API tokens, every change versioned and audited, Docker Compose and Helm.
 - **Free to self-host** up to 25 developers and $10,000 of AI spend a month, with every guardrail.
 
@@ -48,7 +48,7 @@ Works with **Claude Code, Codex CLI, Gemini CLI, Cursor, GitHub Copilot CLI** an
 </tr>
 <tr>
 <td width="50%"><img src="docs/assets/overview.png" alt="The Overview: spend today and this month, runs needing approval, model calls and latency in the last hour"><br><sub><b>Overview.</b> Spend, runs waiting for a person, and the last hour of model calls and latency.</sub></td>
-<td width="50%"><img src="docs/assets/spend.png" alt="Spend by project, agent, person and model over time"><br><sub><b>Spend.</b> By project, agent, person and model, over up to 13 months, with CSV export.</sub></td>
+<td width="50%"><img src="docs/assets/spend.png" alt="Spend by project, agent, person and model over time"><br><sub><b>Spend.</b> By the minute, hour or day, over any window up to 13 months; filter by project, agent, person, model or status, and export to CSV.</sub></td>
 </tr>
 </table>
 

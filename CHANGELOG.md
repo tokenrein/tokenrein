@@ -7,6 +7,19 @@ SDKs; the release workflow refuses a tag that does not match all three.
 
 ## [Unreleased]
 
+### Added
+- Spend page: pick the window (last 15 minutes to 12 months, or a custom range), group it by
+  minute, hour or day, and filter by project, agent, user, model and status. Breakdowns follow
+  the filters, and clicking a row filters by it; the CSV download uses the same window, grouping
+  and filters. Minutes, hours and filters need the usage history; without it the page stays on
+  daily totals and says how to turn it on.
+- `GET /admin/orgs/{org}/spend` takes `from`, `to`, `bucket` and filter parameters (see
+  docs/api.md). Range reports include requests from the last few seconds that are not yet written
+  to the history files.
+
+### Fixed
+- Spend breakdown tables no longer cut off the request count on narrow cards.
+
 ## [0.2.0] - 2026-11-17
 
 ### Added

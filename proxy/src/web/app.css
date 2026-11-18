@@ -230,6 +230,18 @@ dialog .card-b { display: grid; gap: 12px; }
 .snip-tabs button:hover, .seg button:hover { color: var(--text); }
 .snip-tabs button[aria-selected="true"], .seg button[aria-pressed="true"] { background: var(--panel-2); border-color: var(--line); color: var(--text); }
 .seg { gap: 2px; }
+.seg button:disabled { opacity: .45; cursor: not-allowed; }
+.seg button:disabled:hover { color: var(--muted); }
+/* Spend: custom range and filters, between the card header and its body. */
+.spend-bar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+.spend-bar:empty { display: none; }
+.spend-bar select { max-width: 220px; }
+.spend-bar input[type="datetime-local"] { height: 30px; }
+tr.pick { cursor: pointer; }
+tr.pick:hover td, tr.pick:focus-visible td { background: var(--hover); }
+tr.pick:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+tr[aria-current="true"] td { background: var(--panel-2); }
+tr[aria-current="true"] td:first-child { box-shadow: inset 2px 0 0 var(--primary); }
 pre.snip { margin: 0; font-family: var(--mono); font-size: 12px; line-height: 1.55; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px 12px; overflow-x: auto; white-space: pre; }
 .cmd { position: relative; }
 .cmd pre.snip { padding-right: 76px; white-space: pre-wrap; word-break: break-all; }
@@ -254,6 +266,13 @@ details.changes li { margin: 2px 0; word-break: break-word; }
 .share .bar { flex: 1; height: 4px; background: var(--meter); border-radius: 999px; overflow: hidden; min-width: 50px; }
 .share .bar span { display: block; height: 100%; background: var(--data-1); border-radius: 999px; }
 .split { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; margin-top: 16px; }
+/* Spend breakdowns: fixed columns so the request counts never fall off a narrow card. */
+#spend-split table { table-layout: fixed; width: 100%; }
+#spend-split th:first-child { width: 42%; }
+#spend-split th:last-child { width: 96px; }
+#spend-split td:first-child { overflow-wrap: anywhere; }
+#spend-split .share { min-width: 0; }
+#spend-split .share .bar { min-width: 24px; }
 .split .card + .card { margin-top: 0; }
 
 /* --- Links to runs, back --- */

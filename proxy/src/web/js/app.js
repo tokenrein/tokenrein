@@ -129,7 +129,6 @@ document.addEventListener("click", e => {
 });
 $("#org").addEventListener("change", () => { S.org = $("#org").value; store("local", ORG_KEY, S.org); refresh(); });
 ["#run-filter", "#run-flat", "#ev-filter", "#spend-table-toggle"].forEach(sel => $(sel).addEventListener("input", render));
-$("#spend-days").addEventListener("change", refresh);
 
 // --- data ---
 async function refresh() {
@@ -150,7 +149,7 @@ async function refresh() {
       ]);
       S.runs = runs.runs; S.agents = agents.agents; S.events = events.events; S.review = review;
       if (!S.packs.length) S.packs = (await api("/admin/packs")).packs;
-      if (S.tab === "spend") S.spend = await api(`/admin/orgs/${o}/spend?days=${$("#spend-days").value}`);
+      if (S.tab === "spend") await loadSpend(o);
       if (S.tab === "models") S.models = await api(`/admin/models?org=${o}`);
       if (S.tab === "run" && S.runId) S.run = await api(`/admin/orgs/${o}/runs/${encodeURIComponent(S.runId)}/timeline`);
       if (S.tab === "logs") await loadLogs();

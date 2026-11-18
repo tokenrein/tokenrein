@@ -103,6 +103,34 @@ impl Row {
     }
 }
 
+/// Add rows to table `u` (created with [`SCHEMA`]).
+fn append_rows(conn: &Connection, rows: &[Row]) -> duckdb::Result<()> {
+    let mut app = conn.appender("u")?;
+    for r in rows {
+        app.append_row(params![
+            r.ts_us,
+            r.project,
+            r.agent,
+            r.user,
+            r.run_id,
+            r.parent_run_id,
+            r.provider,
+            r.model,
+            r.decision,
+            r.blocked_scope,
+            r.source,
+            r.request_id,
+            r.cost_micros,
+            r.input_tokens,
+            r.cached_input_tokens,
+            r.cache_write_tokens,
+            r.output_tokens,
+            r.upstream_ms,
+        ])?;
+    }
+    app.flush()
+}
+
 /// Org ids become folder names: no dots in front (`.`, `..`).
 fn safe_id(s: &str) -> bool {
     crate::config::valid_id(s) && !s.starts_with('.')
@@ -118,6 +146,134 @@ fn duck() -> duckdb::Result<Connection> {
 /// A path as a DuckDB string literal.
 fn sql_str(p: &Path) -> String {
     format!("'{}'", p.to_string_lossy().replace('\'', "''"))
+}
+
+/// The breakdown dimensions and the SQL for each one's key, as the dashboard shows it: a model
+/// without a provider is just its name, a request without a user is `-`, an agent is
+/// `project/agent`.
+const DIMS: [(&str, &str); 4] = [
+    (
+        "model",
+        "CASE WHEN coalesce(provider, '') = '' THEN model ELSE provider || '/' || model END",
+    ),
+    ("user", r#"coalesce("user", '-')"#),
+    ("project", "project"),
+    ("agent", "project || '/' || agent"),
+];
+
+/// The SQL key of a dimension in [`DIMS`].
+fn dim_sql(dim: &str) -> &'static str {
+    DIMS.iter()
+        .find(|(d, _)| *d == dim)
+        .map_or("NULL", |(_, e)| e)
+}
+
+const SUMS: &str =
+    "CAST(sum(cost_micros) AS BIGINT), count(*), count_if(starts_with(decision, 'blocked'))";
+
+/// How finely a range report is split.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bucket {
+    Minute,
+    Hour,
+    Day,
+}
+
+impl Bucket {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "minute" => Some(Self::Minute),
+            "hour" => Some(Self::Hour),
+            "day" => Some(Self::Day),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Minute => "minute",
+            Self::Hour => "hour",
+            Self::Day => "day",
+        }
+    }
+
+    pub fn micros(self) -> i64 {
+        match self {
+            Self::Minute => 60_000_000,
+            Self::Hour => 3_600_000_000,
+            Self::Day => 86_400_000_000,
+        }
+    }
+
+    /// The start of the bucket holding `us` (days start at midnight UTC).
+    pub fn floor(self, us: i64) -> i64 {
+        us.div_euclid(self.micros()) * self.micros()
+    }
+}
+
+/// Which requests a range report counts; `None` matches all. Values are the breakdown keys
+/// (see [`DIMS`]); an agent without a `/` matches that agent name in any project.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Filter {
+    pub project: Option<String>,
+    pub agent: Option<String>,
+    pub user: Option<String>,
+    pub model: Option<String>,
+    /// `Some(true)`: blocked requests only; `Some(false)`: allowed ones only.
+    pub blocked: Option<bool>,
+}
+
+impl Filter {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// SQL conditions (joined with AND) and their parameters, in order.
+    fn sql(&self) -> (String, Vec<String>) {
+        let mut sql = String::new();
+        let mut params = Vec::new();
+        let mut eq = |expr: &str, v: &Option<String>| {
+            if let Some(v) = v {
+                sql.push_str(&format!(" AND ({expr}) = ?"));
+                params.push(v.clone());
+            }
+        };
+        eq("project", &self.project);
+        let agent = match &self.agent {
+            Some(a) if a.contains('/') => dim_sql("agent"),
+            _ => "agent",
+        };
+        eq(agent, &self.agent);
+        eq(dim_sql("user"), &self.user);
+        eq(dim_sql("model"), &self.model);
+        match self.blocked {
+            Some(true) => sql.push_str(" AND starts_with(decision, 'blocked')"),
+            Some(false) => sql.push_str(" AND NOT starts_with(decision, 'blocked')"),
+            None => {}
+        }
+        (sql, params)
+    }
+}
+
+/// A spend report over any window: `[from_us, to_us)` in `bucket`s, narrowed by `filter`.
+#[derive(Debug, Clone)]
+pub struct Range {
+    pub from_us: i64,
+    pub to_us: i64,
+    pub bucket: Bucket,
+    pub filter: Filter,
+}
+
+/// What [`History::spend_range`] returns.
+#[derive(Debug, Default)]
+pub struct RangeSpend {
+    /// Buckets that have requests, oldest first: (bucket start in microseconds, totals).
+    pub buckets: Vec<(i64, Totals)>,
+    /// Per dimension, the top 50 by cost among the filtered requests.
+    pub by: Vec<(&'static str, Vec<Totals>)>,
+    /// Per dimension, every value seen in the window ignoring the filter (top 200 by cost), for
+    /// the filter menus.
+    pub options: Vec<(&'static str, Vec<String>)>,
 }
 
 /// Cost, requests and blocked requests for one day or one key.
@@ -258,32 +414,7 @@ impl History {
 
     fn write_file(&self, conn: &Connection, org: &str, day: NaiveDate, rows: &[Row]) -> Result<()> {
         conn.execute_batch("DELETE FROM u")?;
-        {
-            let mut app = conn.appender("u")?;
-            for r in rows {
-                app.append_row(params![
-                    r.ts_us,
-                    r.project,
-                    r.agent,
-                    r.user,
-                    r.run_id,
-                    r.parent_run_id,
-                    r.provider,
-                    r.model,
-                    r.decision,
-                    r.blocked_scope,
-                    r.source,
-                    r.request_id,
-                    r.cost_micros,
-                    r.input_tokens,
-                    r.cached_input_tokens,
-                    r.cache_write_tokens,
-                    r.output_tokens,
-                    r.upstream_ms,
-                ])?;
-            }
-            app.flush()?;
-        }
+        append_rows(conn, rows)?;
         let dir = self.day_dir(org, day);
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let name = format!("{}-{}.parquet", self.node, Utc::now().timestamp_micros());
@@ -372,20 +503,11 @@ impl History {
             })?;
             Ok(rows.collect::<duckdb::Result<_>>()?)
         };
-        const SUMS: &str = "CAST(sum(cost_micros) AS BIGINT), count(*), count_if(starts_with(decision, 'blocked'))";
         let days = totals(&format!(
             "SELECT CAST(d AS VARCHAR), {SUMS} FROM e GROUP BY 1 ORDER BY 1"
         ))?;
         let mut by = Vec::new();
-        for (dim, expr) in [
-            (
-                "model",
-                "CASE WHEN coalesce(provider, '') = '' THEN model ELSE provider || '/' || model END",
-            ),
-            ("user", r#"coalesce("user", '-')"#),
-            ("project", "project"),
-            ("agent", "project || '/' || agent"),
-        ] {
+        for (dim, expr) in DIMS {
             by.push((
                 dim,
                 totals(&format!(
@@ -394,6 +516,154 @@ impl History {
             ));
         }
         Ok(Spend { days, by })
+    }
+
+    /// Rows of `org` waiting for the next flush, in `[from_us, to_us)`, so range reports include
+    /// the last few seconds. (Rows being written at that moment are briefly in neither place.)
+    pub fn pending(&self, org: &str, from_us: i64, to_us: i64) -> Vec<Row> {
+        let buf = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+        buf.iter()
+            .filter(|r| r.org == org && r.ts_us >= from_us && r.ts_us < to_us)
+            .cloned()
+            .collect()
+    }
+
+    /// A DuckDB connection with table `e`: the org's events of the days in `[from_us, to_us)`
+    /// plus `pending` rows, or `None` when there are none.
+    fn open_range(
+        &self,
+        org: &str,
+        from_us: i64,
+        to_us: i64,
+        pending: &[Row],
+    ) -> Result<Option<Connection>> {
+        anyhow::ensure!(safe_id(org), "invalid org id");
+        let day = |us: i64| DateTime::from_timestamp_micros(us).map(|t| t.date_naive());
+        let (Some(from), Some(to)) = (day(from_us), day(to_us.saturating_sub(1).max(from_us)))
+        else {
+            anyhow::bail!("time out of range");
+        };
+        let files: Vec<String> = self
+            .days(org)
+            .into_iter()
+            .filter(|d| *d >= from && *d <= to)
+            .flat_map(|d| Self::day_files(&self.day_dir(org, d)))
+            .map(|p| sql_str(&p))
+            .collect();
+        if files.is_empty() && pending.is_empty() {
+            return Ok(None);
+        }
+        let conn = duck()?;
+        conn.execute_batch(SCHEMA)?;
+        append_rows(&conn, pending)?;
+        const COLS: &str =
+            r#"ts_us, project, agent, "user", provider, model, decision, cost_micros"#;
+        let files = if files.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "SELECT {COLS} FROM read_parquet([{}], union_by_name = true) UNION ALL ",
+                files.join(", ")
+            )
+        };
+        conn.execute_batch(&format!(
+            "CREATE TEMP TABLE e AS {files}SELECT {COLS} FROM u"
+        ))?;
+        Ok(Some(conn))
+    }
+
+    /// Blocking: totals per bucket and top keys per dimension for a [`Range`], plus `pending`
+    /// rows (see [`History::pending`]).
+    pub fn spend_range(&self, org: &str, r: &Range, pending: &[Row]) -> Result<RangeSpend> {
+        let Some(conn) = self.open_range(org, r.from_us, r.to_us, pending)? else {
+            return Ok(RangeSpend::default());
+        };
+        let window = format!("ts_us >= {} AND ts_us < {}", r.from_us, r.to_us);
+        let (filter, params) = r.filter.sql();
+        let filtered = format!("{window}{filter}");
+        let totals = |sql: &str| -> Result<Vec<Totals>> {
+            let mut stmt = conn.prepare(sql)?;
+            let rows = stmt.query_map(duckdb::params_from_iter(params.iter()), |row| {
+                Ok(Totals {
+                    key: row.get(0)?,
+                    cost_micros: row.get(1)?,
+                    requests: row.get(2)?,
+                    blocked: row.get(3)?,
+                })
+            })?;
+            Ok(rows.collect::<duckdb::Result<_>>()?)
+        };
+        let step = r.bucket.micros();
+        let buckets = totals(&format!(
+            "SELECT CAST((ts_us // {step}) * {step} AS VARCHAR), {SUMS} FROM e WHERE {filtered}
+             GROUP BY 1"
+        ))?
+        .into_iter()
+        .filter_map(|t| Some((t.key.parse().ok()?, t)))
+        .collect::<Vec<(i64, Totals)>>();
+        let mut buckets = buckets;
+        buckets.sort_by_key(|b| b.0); // keys were text, so order here
+        let mut by = Vec::new();
+        let mut options = Vec::new();
+        for (dim, expr) in DIMS {
+            by.push((
+                dim,
+                totals(&format!(
+                    "SELECT {expr}, {SUMS} FROM e WHERE {filtered}
+                     GROUP BY 1 ORDER BY 2 DESC, 3 DESC LIMIT 50"
+                ))?,
+            ));
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {expr} FROM e WHERE {window}
+                 GROUP BY 1 ORDER BY sum(cost_micros) DESC, count(*) DESC LIMIT 200"
+            ))?;
+            let keys = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<duckdb::Result<Vec<_>>>()?;
+            options.push((dim, keys));
+        }
+        Ok(RangeSpend {
+            buckets,
+            by,
+            options,
+        })
+    }
+
+    /// Blocking: a [`Range`] as CSV, one row per bucket, project, agent, user and model.
+    pub fn export_range_csv(&self, org: &str, r: &Range, pending: &[Row]) -> Result<String> {
+        let mut out = format!(
+            "{},project,agent,user,provider,model,requests,blocked,cost_usd\n",
+            r.bucket.name()
+        );
+        let Some(conn) = self.open_range(org, r.from_us, r.to_us, pending)? else {
+            return Ok(out);
+        };
+        let (filter, params) = r.filter.sql();
+        let step = r.bucket.micros();
+        let mut stmt = conn.prepare(&format!(
+            r#"SELECT (ts_us // {step}) * {step}, project, agent, coalesce("user", ''),
+                      coalesce(provider, ''), model, count(*),
+                      count_if(starts_with(decision, 'blocked')), CAST(sum(cost_micros) AS BIGINT)
+               FROM e WHERE ts_us >= {} AND ts_us < {}{filter}
+               GROUP BY ALL ORDER BY 1, 9 DESC"#,
+            r.from_us, r.to_us
+        ))?;
+        let mut rows = stmt.query(duckdb::params_from_iter(params.iter()))?;
+        while let Some(row) = rows.next()? {
+            let start = DateTime::from_timestamp_micros(row.get::<_, i64>(0)?)
+                .map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                .unwrap_or_default();
+            let mut cells = vec![start];
+            for i in 1..6 {
+                cells.push(csv_cell(&row.get::<_, String>(i)?));
+            }
+            cells.push(row.get::<_, i64>(6)?.to_string());
+            cells.push(row.get::<_, i64>(7)?.to_string());
+            cells.push(format!("{:.6}", row.get::<_, i64>(8)? as f64 / 1e6));
+            out.push_str(&cells.join(","));
+            out.push('\n');
+        }
+        Ok(out)
     }
 
     /// Blocking: spend between `from` and `to` as CSV, one row per day, project, agent, user and
