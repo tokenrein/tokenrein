@@ -5,7 +5,7 @@
 //! period, then delivers in the background with retries and records the last result per channel
 //! for the dashboard. Events: a budget passed 80% ([`spawn_budget_watch`]), a request was refused
 //! because a budget is used up (from the activity stream), a run waits for approval, a run looks
-//! like a loop.
+//! like a loop, and a weekly insights digest ([`spawn_insights_digest`]).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -64,6 +64,7 @@ pub fn event_name(e: AlertEvent) -> &'static str {
         AlertEvent::ApprovalRequested => "approval_requested",
         AlertEvent::LoopDetected => "loop_detected",
         AlertEvent::License => "license",
+        AlertEvent::Insights => "insights",
     }
 }
 
@@ -129,8 +130,8 @@ pub async fn notify(st: &AppState, org: &str, alert: Alert) {
     let Some(o) = rt.cfg.orgs.iter().find(|o| o.id == org) else {
         return;
     };
-    // PagerDuty is a paid feature, and nobody should be paged about the license.
-    let pagerduty_ok = alert.event != AlertEvent::License
+    // PagerDuty is a paid feature, and nobody should be paged about the license or a digest.
+    let pagerduty_ok = !matches!(alert.event, AlertEvent::License | AlertEvent::Insights)
         && crate::license::allows(st, crate::license::Feature::Pagerduty);
     let wanted: Vec<&AlertChannel> = o
         .alert_channels
@@ -552,6 +553,139 @@ pub async fn watch_budgets(st: &AppState) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Once a week per org, send the top insights (cache misses, failing tools) to the channels that
+/// want them. Needs the usage history; orgs with nothing worth fixing get no message.
+pub fn spawn_insights_digest(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
+    let weak = Arc::downgrade(&state);
+    drop(state);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(300)).await;
+        let mut tick = tokio::time::interval(Duration::from_secs(3600));
+        loop {
+            tick.tick().await;
+            let Some(state) = weak.upgrade() else { return };
+            insights_digest(&state).await;
+        }
+    })
+}
+
+/// One pass of [`spawn_insights_digest`]; returns the orgs sent a digest.
+pub async fn insights_digest(st: &AppState) -> Vec<String> {
+    let mut sent = Vec::new();
+    let Some(history) = st.history.clone() else {
+        return sent;
+    };
+    let rt = st.rt();
+    for org in &rt.cfg.orgs {
+        let wants = org
+            .alert_channels
+            .iter()
+            .any(|c| c.events.is_empty() || c.events.contains(&AlertEvent::Insights));
+        if !wants {
+            continue;
+        }
+        // One replica, once a week, computes it.
+        let mut conn = st.ledger.conn();
+        let due: Option<String> = redis::cmd("SET")
+            .arg(format!("tl:insights:digest:{}", org.id))
+            .arg(1)
+            .arg("NX")
+            .arg("EX")
+            .arg(7 * 86_400)
+            .query_async(&mut conn)
+            .await
+            .unwrap_or(None);
+        if due.is_none() {
+            continue;
+        }
+        let (h, steps, prices, id) = (
+            history.clone(),
+            st.step_history.clone(),
+            rt.clone(),
+            org.id.clone(),
+        );
+        let to = Utc::now().timestamp_micros();
+        let from = to - 7 * 86_400 * 1_000_000;
+        let report = tokio::task::spawn_blocking(move || {
+            crate::insights::report(&h, steps.as_deref(), &prices.prices, &id, from, to)
+        })
+        .await;
+        let report = match report {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                tracing::warn!(org = %org.id, error = %e, "could not compute the insights digest");
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!(org = %org.id, error = %e, "insights digest panicked");
+                continue;
+            }
+        };
+        let Some(alert) = digest_alert(&report) else {
+            continue;
+        };
+        notify(st, &org.id, alert).await;
+        sent.push(org.id.clone());
+    }
+    sent
+}
+
+/// The digest message for a week's report, or `None` when there is nothing worth fixing.
+pub fn digest_alert(report: &Value) -> Option<Alert> {
+    let findings = report["findings"].as_array().filter(|f| !f.is_empty())?;
+    let usd = |m: u64| format!("${:.2}", m as f64 / 1e6);
+    let lines: Vec<String> = findings
+        .iter()
+        .take(3)
+        .map(|f| {
+            let title = f["title"].as_str().unwrap_or("");
+            match f["impact_micros"].as_u64().unwrap_or(0) {
+                0 => format!("• {title}"),
+                m => format!("• {title} (about {} this week)", usd(m)),
+            }
+        })
+        .collect();
+    let cache = &report["cache"]["totals"];
+    let tools = &report["tools"]["totals"];
+    let mut fields = vec![
+        (
+            "Input from cache".to_string(),
+            format!("{:.0}%", cache["hit_rate"].as_f64().unwrap_or(0.0) * 100.0),
+        ),
+        (
+            "Saved by caching".into(),
+            usd(cache["saved_micros"].as_u64().unwrap_or(0)),
+        ),
+        (
+            "Missed (estimate)".into(),
+            usd(cache["missed_micros"].as_u64().unwrap_or(0)),
+        ),
+    ];
+    if tools["calls"].as_u64().unwrap_or(0) > 0 {
+        fields.push((
+            "Tool calls failing".into(),
+            format!(
+                "{:.0}%",
+                tools["error_rate"].as_f64().unwrap_or(0.0) * 100.0
+            ),
+        ));
+    }
+    Some(Alert {
+        event: AlertEvent::Insights,
+        severity: Severity::Info,
+        title: format!(
+            "{} thing{} to fix in your agents this week",
+            findings.len(),
+            if findings.len() == 1 { "" } else { "s" }
+        ),
+        text: lines.join("\n"),
+        dedup: "insights".into(),
+        quiet_secs: 6 * 86_400,
+        tab: Some("insights"),
+        fields,
+    })
 }
 
 #[cfg(test)]

@@ -390,6 +390,7 @@ pub fn model_call_entry(e: &Value) -> Value {
         "duration_ms": e.get("upstream_ms"),
         "cost_micros": e.get("actual_micros"),
         "tokens": tokens("input") + tokens("cached_input") + tokens("cache_write") + tokens("output"),
+        "usage": usage,
     })
 }
 

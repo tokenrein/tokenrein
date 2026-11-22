@@ -252,3 +252,16 @@ describe('agent steps', () => {
     expect(() => guard.log('x', { kind: 'other' as any })).toThrow(TypeError);
   });
 });
+
+describe('usageFrom', () => {
+  it('splits cache writes by lifetime and keeps reasoning tokens', () => {
+    const u = usageFrom({ usage: {
+      input_tokens: 12000, output_tokens: 900,
+      input_tokens_details: { cached_tokens: 4000, cache_write_tokens: 7000, cache_write_tokens_details: { ttl_12h_tokens: 2000 } },
+      output_tokens_details: { reasoning_tokens: 600 },
+    } });
+    expect(u).toEqual({ input_tokens: 1000, output_tokens: 900, cache_read_tokens: 4000, cache_write_tokens: 7000, cache_write_long_tokens: 2000, reasoning_tokens: 600 });
+    const a = usageFrom({ usage: { input_tokens: 5, output_tokens: 1, cache_creation_input_tokens: 300, cache_creation: { ephemeral_1h_input_tokens: 200 } } });
+    expect(a?.cache_write_long_tokens).toBe(200);
+  });
+});

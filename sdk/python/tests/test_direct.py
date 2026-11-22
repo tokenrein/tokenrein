@@ -297,3 +297,20 @@ def test_log_rejects_bad_arguments(env):
     for bad in [dict(name=""), dict(name="x", level="loud"), dict(name="x", kind="other"), dict(name="x", status="maybe")]:
         with pytest.raises(ValueError):
             guard.log(**bad)
+
+
+def test_usage_splits_cache_writes_lifetimes_and_reasoning() -> None:
+    from tokenrein._direct import usage_from
+
+    openai_new = {"usage": {
+        "input_tokens": 12000, "output_tokens": 900,
+        "input_tokens_details": {"cached_tokens": 4000, "cache_write_tokens": 7000,
+                                 "cache_write_tokens_details": {"ttl_30m_tokens": 5000, "ttl_12h_tokens": 2000}},
+        "output_tokens_details": {"reasoning_tokens": 600}}}
+    assert usage_from(openai_new) == {
+        "input_tokens": 1000, "output_tokens": 900, "cache_read_tokens": 4000,
+        "cache_write_tokens": 7000, "cache_write_long_tokens": 2000, "reasoning_tokens": 600,
+    }
+    anthropic_1h = {"usage": {"input_tokens": 5, "output_tokens": 1, "cache_creation_input_tokens": 300,
+                              "cache_creation": {"ephemeral_1h_input_tokens": 200}}}
+    assert usage_from(anthropic_1h)["cache_write_long_tokens"] == 200

@@ -434,9 +434,10 @@ async fn gemini_telemetry_and_hooks() {
     assert_eq!(e["usage"]["cached_input"], 2000);
     // Thinking tokens are billed as output.
     assert_eq!(e["usage"]["output"], 1000);
-    // gemini-2.5-pro: 3000 * $1.25/M + 2000 * $0.31/M + 1000 * $10/M
-    assert_eq!(e["actual_micros"], 14_370);
-    assert_eq!(tl["runs"][0]["budget"]["spent_micros"], 28_740);
+    assert_eq!(e["usage"]["reasoning"], 700);
+    // gemini-2.5-pro: 3000 * $1.25/M + 2000 * $0.125/M + 1000 * $10/M
+    assert_eq!(e["actual_micros"], 14_000);
+    assert_eq!(tl["runs"][0]["budget"]["spent_micros"], 28_000);
 
     // Gemini CLI exports traces and metrics next to the logs over OTLP/HTTP.
     for path in ["/v1/otel/v1/traces", "/v1/otel/v1/metrics"] {

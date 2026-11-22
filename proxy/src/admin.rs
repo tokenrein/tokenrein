@@ -39,6 +39,7 @@ const ASSETS: &[(&str, &str, &str)] = &[
     ("js/connect.js", JS, include_str!("web/js/connect.js")),
     ("js/models.js", JS, include_str!("web/js/models.js")),
     ("js/spend.js", JS, include_str!("web/js/spend.js")),
+    ("js/insights.js", JS, include_str!("web/js/insights.js")),
     ("js/activity.js", JS, include_str!("web/js/activity.js")),
     ("js/logs.js", JS, include_str!("web/js/logs.js")),
     ("js/settings.js", JS, include_str!("web/js/settings.js")),
@@ -75,6 +76,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/admin/orgs/{org}/review", get(review))
         .route("/admin/orgs/{org}/spend", get(spend))
+        .route("/admin/orgs/{org}/insights", get(insights))
         .route("/admin/orgs/{org}/runs/{run}/timeline", get(run_timeline))
         .route("/admin/orgs", post(create_org))
         .route("/admin/orgs/{org}", put(update_org).delete(delete_org))
@@ -1246,6 +1248,58 @@ async fn spend_history(
         .collect();
     Json(json!({ "days": series, "by": breakdown, "source": "history", "history_days": retention }))
         .into_response()
+}
+
+#[derive(Deserialize)]
+struct InsightsQuery {
+    days: Option<u32>,
+}
+
+/// Where the org's agents waste tokens: cache health, tool health and what to fix first, over
+/// the last `days` days (7 by default). Needs the usage history.
+async fn insights(
+    State(st): State<Arc<AppState>>,
+    Path(org): Path<String>,
+    Query(q): Query<InsightsQuery>,
+    admin: Admin,
+) -> Response {
+    if let Err(r) = admin.org(&st, &org, Role::Viewer) {
+        return r;
+    }
+    let Some(history) = st.history.clone() else {
+        return err(
+            StatusCode::CONFLICT,
+            "insights need the usage history: set TOKENREIN_HISTORY_DIR (history.dir), or \
+             history.enabled in the Helm chart",
+        );
+    };
+    let days = q.days.unwrap_or(7).clamp(1, history.retention_days);
+    if days > license::FREE_HISTORY_DAYS
+        && let Err(r) = license::require(&st, Feature::LongHistory)
+    {
+        return r;
+    }
+    let to = Utc::now();
+    let from = to - chrono::Duration::days(i64::from(days));
+    let steps = st.step_history.clone();
+    let rt = st.rt();
+    let o = org.clone();
+    let (from_us, to_us) = (from.timestamp_micros(), to.timestamp_micros());
+    let result = tokio::task::spawn_blocking(move || {
+        crate::insights::report(&history, steps.as_deref(), &rt.prices, &o, from_us, to_us)
+    })
+    .await;
+    match result {
+        Ok(Ok(mut report)) => {
+            report["days"] = json!(days);
+            report["from"] = json!(iso_micros(from_us));
+            report["to"] = json!(iso_micros(to_us));
+            report["steps_history"] = json!(st.step_history.is_some());
+            Json(report).into_response()
+        }
+        Ok(Err(e)) => unavailable(e),
+        Err(e) => unavailable(anyhow::anyhow!(e)),
+    }
 }
 
 async fn spend(

@@ -177,6 +177,13 @@ pub struct UsageEvent {
     pub cache_read_tokens: u64,
     #[serde(default)]
     pub cache_write_tokens: u64,
+    /// The part of `cache_write_tokens` written for the long lifetime (Anthropic's 1 hour,
+    /// OpenAI's 12 hours), which costs more.
+    #[serde(default)]
+    pub cache_write_long_tokens: u64,
+    /// The part of `output_tokens` spent on reasoning.
+    #[serde(default)]
+    pub reasoning_tokens: u64,
     /// Cost the client computed; otherwise Tokenrein prices the tokens.
     pub cost_usd: Option<f64>,
     pub duration_ms: Option<u64>,
@@ -262,6 +269,8 @@ pub(crate) async fn record_usage(
         cached_input: ev.cache_read_tokens,
         cache_write: ev.cache_write_tokens,
         output: ev.output_tokens,
+        cache_write_long: ev.cache_write_long_tokens.min(ev.cache_write_tokens),
+        reasoning: ev.reasoning_tokens.min(ev.output_tokens),
     };
     let (price, price_known) = c.rt.prices.lookup_any(&provider, &ev.model);
     let (actual, price_known) = match ev.cost_usd {
@@ -874,16 +883,18 @@ fn read_record(tool: Tool, event: &str, a: &Map<String, Value>) -> Option<Record
                     if attr_str(a, "event.kind") == Some("response.completed")
                         && a.contains_key("input_token_count") =>
                 {
-                    // OpenAI counts cached input inside the input tokens.
+                    // OpenAI counts cache reads and cache writes inside the input tokens.
                     let input = attr_tokens(a, "input_token_count");
                     let cached = attr_tokens(a, "cached_token_count").min(input);
+                    let written = attr_tokens(a, "cache_write_token_count").min(input - cached);
                     Some(UsageEvent {
                         provider: Some("openai".into()),
                         model: model(),
-                        input_tokens: input - cached,
+                        input_tokens: input - cached - written,
                         output_tokens: attr_tokens(a, "output_token_count"),
                         cache_read_tokens: cached,
-                        cache_write_tokens: attr_tokens(a, "cache_write_token_count"),
+                        cache_write_tokens: written,
+                        reasoning_tokens: attr_tokens(a, "reasoning_token_count"),
                         ..UsageEvent::default()
                     })
                 }
@@ -911,6 +922,7 @@ fn read_record(tool: Tool, event: &str, a: &Map<String, Value>) -> Option<Record
                         input_tokens: input - cached,
                         output_tokens: attr_tokens(a, "output_token_count")
                             + attr_tokens(a, "thoughts_token_count"),
+                        reasoning_tokens: attr_tokens(a, "thoughts_token_count"),
                         cache_read_tokens: cached,
                         duration_ms: attr_num(a, "duration_ms").map(|d| d.max(0.0) as u64),
                         status: attr_num(a, "status_code")

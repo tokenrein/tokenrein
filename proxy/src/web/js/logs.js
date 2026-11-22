@@ -48,7 +48,7 @@ function stepFromRequest(e) {
     status: d.startsWith("blocked") ? "blocked" : d === "allowed" ? "ok" : "error",
     detail: e.blocked_scope || (d === "allowed" ? null : d), duration_ms: e.upstream_ms || null,
     cost_micros: d.startsWith("allowed") ? e.actual_micros : 0,
-    tokens: (u.input || 0) + (u.cached_input || 0) + (u.cache_write || 0) + (u.output || 0),
+    tokens: usageTotal(u),
     usage: e.usage, check_exceeded: e.check_exceeded, source: e.source,
   };
 }
@@ -92,6 +92,19 @@ function repeatedCalls(steps) {
   return [...counts.entries()].filter(([, c]) => c.n >= 3).sort((a, b) => b[1].n - a[1].n);
 }
 
+// Every part of a model call's tokens: fresh input, cache reads, cache writes, output.
+function tokenSplit(u) {
+  const n = v => (v || 0).toLocaleString();
+  const parts = [`${n(u.input)} in`, `${n(u.cached_input)} cache read`, `${n(u.cache_write)} cache write${u.cache_write_long ? ` (${n(u.cache_write_long)} long-lived)` : ""}`,
+    `${n(u.output)} out${u.reasoning ? ` (${n(u.reasoning)} reasoning)` : ""}`];
+  return parts.join(" · ");
+}
+
+// All tokens a call processed: the four parts of the bill.
+function usageTotal(u) {
+  return u ? (u.input || 0) + (u.cached_input || 0) + (u.cache_write || 0) + (u.output || 0) : 0;
+}
+
 // The expandable detail under a step: content (when kept), result, attributes and ids.
 function stepDetail(s, captureOn) {
   const rows = [];
@@ -103,7 +116,7 @@ function stepDetail(s, captureOn) {
   if (s.result?.content) add("Output", `<pre class="snip">${esc(s.result.content)}</pre>`);
   else if (s.result?.size) add("Output", `<span class="muted">${bytes(s.result.size)}</span>`);
   if (s.attrs && Object.keys(s.attrs).length) add("Attributes", `<span class="mono">${Object.entries(s.attrs).map(([k, v]) => `${esc(k)}=${esc(typeof v === "string" ? v : JSON.stringify(v))}`).join(" · ")}</span>`);
-  if (s.usage) add("Tokens", `${(s.usage.input || 0).toLocaleString()} in · ${(s.usage.cached_input || 0).toLocaleString()} cached · ${(s.usage.output || 0).toLocaleString()} out`);
+  if (s.usage) add("Tokens", tokenSplit(s.usage));
   if ((s.check_exceeded || []).length) add("Would block", `<span class="badge b-warn">${esc(s.check_exceeded.join(", "))}</span>`);
   add("Detail", s.detail ? `<span class="mono">${esc(s.detail)}</span>` : "");
   add("Run", `<a href="#" class="mono runlink" data-open-run="${esc(s.run_id)}">${esc(s.run_id)}</a>`);

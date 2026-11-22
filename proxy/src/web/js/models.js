@@ -16,7 +16,7 @@ function renderModels() {
   const body = rows.map(r => `<tr>
     <td>${esc(r.provider)}</td><td class="mono">${esc(r.model)}</td>
     <td class="price">${perM(r.price.input)}</td><td class="price">${perM(r.price.output)}</td>
-    <td class="price">${perM(r.price.cached_input)}</td><td class="price">${perM(r.price.cache_write)}</td>
+    <td class="price">${perM(r.price.cached_input)}</td><td class="price">${perM(r.price.cache_write)}${r.price.cache_write_long && r.price.cache_write_long !== r.price.cache_write ? `<div class="muted" title="Writing the cache for the long lifetime (1 hour at Anthropic, 12 hours at OpenAI)">${perM(r.price.cache_write_long)} long</div>` : ""}${r.price.long_context_above ? `<div class="muted" title="Prompts over this length are billed at higher rates">×${r.price.long_input_pct / 100} over ${(r.price.long_context_above / 1000).toLocaleString()}k</div>` : ""}</td>
     <td>${r.source === "override" ? '<span class="badge b-info">your price</span>' : '<span class="badge b-muted">built-in</span>'}</td>
     <td><div class="row-actions">${!edit ? "" : `
       <button class="btn sm" data-price-edit data-provider="${esc(r.provider)}" data-model="${esc(r.model)}">${r.source === "override" ? "Edit" : "Override"}</button>

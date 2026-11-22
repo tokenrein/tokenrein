@@ -428,6 +428,8 @@ pub enum AlertEvent {
     LoopDetected,
     /// A weekly reminder: over the free tier or the license, or the license key expires soon.
     License,
+    /// A weekly digest of where agents waste tokens (see `crate::insights`).
+    Insights,
 }
 
 /// Imports a Cursor team's usage events (see `crate::connectors`).

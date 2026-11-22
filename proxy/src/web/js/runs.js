@@ -84,7 +84,9 @@ function renderRun() {
   for (const r of t.runs.slice(1)) depth.set(r.run_id, (depth.get(r.parent_run_id) ?? 0) + 1);
   const cost = t.events.reduce((a, e) => a + (e.decision?.startsWith("allowed") ? e.actual_micros || 0 : 0), 0);
   const blocked = t.events.filter(e => e.decision?.startsWith("blocked")).length;
-  const tokens = t.events.reduce((a, e) => a + (e.usage ? (e.usage.input || 0) + (e.usage.output || 0) : 0), 0);
+  const tokens = t.events.reduce((a, e) => a + usageTotal(e.usage), 0);
+  const cacheRead = t.events.reduce((a, e) => a + (e.usage?.cached_input || 0), 0);
+  const prompt = t.events.reduce((a, e) => a + (e.usage ? (e.usage.input || 0) + (e.usage.cached_input || 0) + (e.usage.cache_write || 0) : 0), 0);
   const startTs = t.events[0]?.ts, endTs = t.events[t.events.length - 1]?.ts;
   const dur = startTs && endTs ? Math.max(0, (new Date(endTs) - new Date(startTs)) / 1000) : 0;
   const actions = root.state === "killed" || !can("approver") ? "" : `${root.state === "paused"
@@ -109,7 +111,7 @@ function renderRun() {
       ${kpi("Spend", usd(cost), `incl. ${t.runs.length - 1} sub-agent run${t.runs.length === 2 ? "" : "s"}`)}
       ${kpi("Run limit", root.budget.limit_micros != null && root.budget.mode !== "skip" ? usd(root.budget.limit_micros) : "–", root.budget.mode ? esc(root.budget.mode) + " mode" : "no run limit")}
       ${kpi("Requests", String(t.events.length), blocked ? `${blocked} blocked` : "none blocked")}
-      ${kpi("Tokens", tokens.toLocaleString(), dur >= 1 ? `over ${dur < 120 ? Math.round(dur) + "s" : Math.round(dur / 60) + " min"}` : "")}
+      ${kpi("Tokens", tokens.toLocaleString(), [prompt ? `${Math.round(cacheRead / prompt * 100)}% of input from cache` : "", dur >= 1 ? `over ${dur < 120 ? Math.round(dur) + "s" : Math.round(dur / 60) + " min"}` : ""].filter(Boolean).join(" · "))}
       ${kpi("Tool calls", String(toolCalls), steps.length ? `${steps.length} agent steps logged` : "no agent steps logged")}
       ${kpi("Problems", String(problems.length), problems.length ? `<a href="#" data-trace-filter="problems">show them</a>` : "no errors or blocks")}
     </div>

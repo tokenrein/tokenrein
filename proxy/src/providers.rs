@@ -50,12 +50,38 @@ impl Api {
     }
 }
 
+/// Tokens of one model call. `input` is never-cached input; `cached_input` (cache reads),
+/// `cache_write` and `output` are the other parts of the bill, so all four add up to every
+/// token the call processed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct Usage {
     pub input: u64,
     pub cached_input: u64,
     pub cache_write: u64,
     pub output: u64,
+    /// The part of `cache_write` kept for the long lifetime (Anthropic's 1 hour, OpenAI's 12
+    /// hours), which costs more to write.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub cache_write_long: u64,
+    /// The part of `output` spent on reasoning (thinking), when the provider says.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub reasoning: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+impl Usage {
+    /// Every token the call processed.
+    pub fn total(&self) -> u64 {
+        self.input + self.cached_input + self.cache_write + self.output
+    }
+
+    /// The whole prompt: fresh input, cache reads and cache writes.
+    pub fn prompt(&self) -> u64 {
+        self.input + self.cached_input + self.cache_write
+    }
 }
 
 #[derive(Debug)]
@@ -213,39 +239,63 @@ fn openai_chat_usage(us: &Value) -> Option<Usage> {
     if !us.is_object() {
         return None;
     }
-    let prompt = num(us, &["prompt_tokens"]);
-    let cached = num(us, &["prompt_tokens_details", "cached_tokens"]).min(prompt);
-    Some(Usage {
-        input: prompt - cached,
-        cached_input: cached,
-        cache_write: 0,
-        output: num(us, &["completion_tokens"]),
-    })
+    Some(openai_split(
+        us,
+        num(us, &["prompt_tokens"]),
+        "prompt_tokens_details",
+        num(us, &["completion_tokens"]),
+        num(us, &["completion_tokens_details", "reasoning_tokens"]),
+    ))
 }
 
 fn responses_usage(us: &Value) -> Option<Usage> {
     if !us.is_object() {
         return None;
     }
-    let input = num(us, &["input_tokens"]);
-    let cached = num(us, &["input_tokens_details", "cached_tokens"]).min(input);
-    Some(Usage {
-        input: input - cached,
+    Some(openai_split(
+        us,
+        num(us, &["input_tokens"]),
+        "input_tokens_details",
+        num(us, &["output_tokens"]),
+        num(us, &["output_tokens_details", "reasoning_tokens"]),
+    ))
+}
+
+/// OpenAI counts cache reads and cache writes inside the input total. From GPT-5.6 a write is
+/// billed (`cache_write_tokens`, split by lifetime in `cache_write_tokens_details`); the field
+/// is read from the input details and, failing that, from beside them.
+fn openai_split(us: &Value, prompt: u64, details_key: &str, output: u64, reasoning: u64) -> Usage {
+    let details = us.get(details_key).unwrap_or(&Value::Null);
+    let cached = num(details, &["cached_tokens"]).min(prompt);
+    let holder = if details.get("cache_write_tokens").is_some() {
+        details
+    } else {
+        us
+    };
+    let write = num(holder, &["cache_write_tokens"]).min(prompt - cached);
+    let long = num(holder, &["cache_write_tokens_details", "ttl_12h_tokens"]).min(write);
+    Usage {
+        input: prompt - cached - write,
         cached_input: cached,
-        cache_write: 0,
-        output: num(us, &["output_tokens"]),
-    })
+        cache_write: write,
+        output,
+        cache_write_long: long,
+        reasoning: reasoning.min(output),
+    }
 }
 
 fn anthropic_usage(us: &Value) -> Option<Usage> {
     if !us.is_object() {
         return None;
     }
+    let write = num(us, &["cache_creation_input_tokens"]);
     Some(Usage {
         input: num(us, &["input_tokens"]),
         cached_input: num(us, &["cache_read_input_tokens"]),
-        cache_write: num(us, &["cache_creation_input_tokens"]),
+        cache_write: write,
         output: num(us, &["output_tokens"]),
+        cache_write_long: num(us, &["cache_creation", "ephemeral_1h_input_tokens"]).min(write),
+        reasoning: 0,
     })
 }
 
@@ -373,6 +423,10 @@ impl StreamTracker {
                         cur.cache_write = cur
                             .cache_write
                             .max(num(us, &["cache_creation_input_tokens"]));
+                        cur.cache_write_long = cur
+                            .cache_write_long
+                            .max(num(us, &["cache_creation", "ephemeral_1h_input_tokens"]))
+                            .min(cur.cache_write);
                         self.result.usage = Some(cur);
                         self.result.complete = true;
                     }
@@ -533,7 +587,8 @@ mod tests {
                 input: 80,
                 cached_input: 20,
                 cache_write: 0,
-                output: 50
+                output: 50,
+                ..Usage::default()
             })
         );
         assert!(r.approx_output_tokens > 0);
@@ -555,7 +610,8 @@ mod tests {
                 input: 200,
                 cached_input: 30,
                 cache_write: 0,
-                output: 80
+                output: 80,
+                ..Usage::default()
             })
         );
     }
@@ -574,9 +630,47 @@ mod tests {
                 input: 6,
                 cached_input: 4,
                 cache_write: 0,
-                output: 5
+                output: 5,
+                ..Usage::default()
             })
         );
+    }
+
+    #[test]
+    fn cache_writes_lifetimes_and_reasoning_are_read() {
+        // OpenAI from GPT-5.6: reads and writes are both inside the input total.
+        let v = serde_json::json!({"usage": {
+            "input_tokens": 12_000, "output_tokens": 900,
+            "input_tokens_details": {"cached_tokens": 4_000, "cache_write_tokens": 7_000,
+                "cache_write_tokens_details": {"ttl_30m_tokens": 5_000, "ttl_12h_tokens": 2_000}},
+            "output_tokens_details": {"reasoning_tokens": 600}}});
+        let u = usage_from_body(Api::OpenAIResponses, &v).unwrap();
+        assert_eq!(
+            u,
+            Usage {
+                input: 1_000,
+                cached_input: 4_000,
+                cache_write: 7_000,
+                output: 900,
+                cache_write_long: 2_000,
+                reasoning: 600,
+            }
+        );
+        assert_eq!((u.prompt(), u.total()), (12_000, 12_900));
+        // Older OpenAI models: no write field, nothing changes.
+        let v = serde_json::json!({"usage": {"prompt_tokens": 100, "completion_tokens": 5,
+            "prompt_tokens_details": {"cached_tokens": 64}}});
+        let u = usage_from_body(Api::OpenAIChat, &v).unwrap();
+        assert_eq!((u.input, u.cached_input, u.cache_write), (36, 64, 0));
+        // Anthropic splits writes by lifetime.
+        let v = serde_json::json!({"usage": {"input_tokens": 50, "output_tokens": 10,
+            "cache_read_input_tokens": 0, "cache_creation_input_tokens": 3_000,
+            "cache_creation": {"ephemeral_5m_input_tokens": 1_000, "ephemeral_1h_input_tokens": 2_000}}});
+        let u = usage_from_body(Api::AnthropicMessages, &v).unwrap();
+        assert_eq!((u.cache_write, u.cache_write_long), (3_000, 2_000));
+        // Zero parts stay out of the stored event.
+        let plain = serde_json::to_value(Usage::default()).unwrap();
+        assert!(plain.get("cache_write_long").is_none() && plain.get("reasoning").is_none());
     }
 
     #[test]

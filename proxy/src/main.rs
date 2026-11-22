@@ -101,9 +101,11 @@ async fn main() -> Result<()> {
     control::spawn_sync(state.clone());
     spawn_sweeper(state.clone());
     tokenrein::alerts::spawn_budget_watch(state.clone());
+    tokenrein::alerts::spawn_insights_digest(state.clone());
     tokenrein::license::spawn_reminders(state.clone());
     tokenrein::history::spawn(state.clone());
     let history = state.history.clone();
+    let step_history = state.step_history.clone();
 
     let proxy_listener = tokio::net::TcpListener::bind(listen)
         .await
@@ -127,6 +129,11 @@ async fn main() -> Result<()> {
             Ok(n) => tracing::info!(rows = n, "usage history written before shutdown"),
             Err(e) => tracing::warn!(error = %e, "could not write usage history before shutdown"),
         }
+    }
+    if let Some(h) = step_history
+        && let Err(e) = h.flush().await
+    {
+        tracing::warn!(error = %e, "could not write step history before shutdown");
     }
     Ok(())
 }

@@ -110,7 +110,7 @@ function showTab(tab) {
   $$("nav.tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
   $$("[data-view]").forEach(v => v.classList.toggle("hide", v.dataset.view !== tab));
   render();
-  if (changed && ["spend", "run", "overview", "models", "connect", "audit", "people", "approvals", "settings", "logs"].includes(tab) && S.me) refresh();
+  if (changed && ["spend", "insights", "run", "overview", "models", "connect", "audit", "people", "approvals", "settings", "logs"].includes(tab) && S.me) refresh();
 }
 function openRun(id) {
   S.runId = id; S.run = null;
@@ -150,6 +150,7 @@ async function refresh() {
       S.runs = runs.runs; S.agents = agents.agents; S.events = events.events; S.review = review;
       if (!S.packs.length) S.packs = (await api("/admin/packs")).packs;
       if (S.tab === "spend") await loadSpend(o);
+      if (S.tab === "insights") await loadInsights(o);
       if (S.tab === "models") S.models = await api(`/admin/models?org=${o}`);
       if (S.tab === "run" && S.runId) S.run = await api(`/admin/orgs/${o}/runs/${encodeURIComponent(S.runId)}/timeline`);
       if (S.tab === "logs") await loadLogs();
@@ -176,6 +177,7 @@ function render() {
   if (S.tab === "runs") renderRuns();
   if (S.tab === "agents") renderAgents();
   if (S.tab === "spend") renderSpend();
+  if (S.tab === "insights") renderInsights();
   if (S.tab === "connect") renderConnect();
   if (S.tab === "models") renderModels();
   if (S.tab === "run") renderRun();

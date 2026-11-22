@@ -40,6 +40,8 @@ pub struct AppState {
     pub activity: mpsc::Sender<Value>,
     /// Long-term usage history (Parquet files read with DuckDB), when a folder is configured.
     pub history: Option<Arc<crate::history::History>>,
+    /// Agent step metadata, kept beside the usage history when it is on.
+    pub step_history: Option<Arc<crate::history::StepHistory>>,
     /// Developers and spend measured for the license, refreshed every few minutes.
     pub license_usage: crate::license::UsageCache,
 }
@@ -53,8 +55,10 @@ impl AppState {
         activity: mpsc::Sender<Value>,
     ) -> Self {
         let history = crate::history::History::from_config(&rt.cfg.history);
+        let step_history = crate::history::StepHistory::from_config(&rt.cfg.history);
         Self {
             history,
+            step_history,
             rt: RwLock::new(Arc::new(rt)),
             control_version: AtomicU64::new(0),
             control_edit: tokio::sync::Mutex::new(()),
@@ -960,6 +964,7 @@ fn emit(st: &AppState, ctx: &Ctx, o: &Outcome) {
         "pre_upstream_us": ctx.pre_upstream_us,
         "upstream_ms": o.upstream_ms,
         "client_disconnected": o.client_disconnected,
+        "source": "proxy",
     });
     println!("{event}");
     if o.blocked_scope.is_none() {

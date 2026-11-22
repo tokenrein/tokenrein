@@ -8,6 +8,26 @@ SDKs; the release workflow refuses a tag that does not match all three.
 ## [Unreleased]
 
 ### Added
+- Insights page and `GET /admin/orgs/{org}/insights?days=`: where agents waste tokens, from the
+  usage and step history, with what to fix first. Cache health compares each call with the
+  previous call of its run and puts misses down to a cause (caching not turned on, the start of
+  the prompt changing, the cache expiring, a model switch, calls sent in parallel), priced as an
+  estimate, alongside what caching saved and the write premium paid for entries never read. Tool
+  health shows each tool's failure rate, repeated identical calls, retries of a failing input,
+  oversized outputs and timings. Agents with no person attached are flagged as Batch API
+  candidates. Rules only; no model is asked. Needs the usage history.
+- Weekly insights digest to Slack, Teams and webhooks (alert event `insights`; never PagerDuty).
+- Agent steps are kept in the usage history folder (`<dir>/steps/`) as metadata only: names,
+  outcomes, sizes, timings and input fingerprints, never content. Tool health covers the whole
+  history retention instead of the 7 days Redis keeps.
+- Token counts include long-lived cache writes (Anthropic 1-hour, OpenAI 12-hour) and reasoning
+  tokens: read from provider responses in proxy mode, from both SDKs, from Codex and Gemini CLI
+  telemetry, and accepted by `POST /v1/usage` as `cache_write_long_tokens` and
+  `reasoning_tokens`. Stored in the usage history and shown in the trace.
+- Long-context prices: Claude Haiku 5.5 prompts over 100k tokens and Gemini 2.5 Pro prompts over
+  200k tokens are billed at their higher rates.
+- Built-in prices for GPT-5.4, GPT-5.5, GPT-5.6 Sol, GPT-6 Luna, GPT-6.1 Terra, GPT-6.2 Sol and
+  Astra, and Claude Fable 5.2 (checked against the providers' pricing pages on 2026-11-23).
 - Spend page: pick the window (last 15 minutes to 12 months, or a custom range), group it by
   minute, hour or day, and filter by project, agent, user, model and status. Breakdowns follow
   the filters, and clicking a row filters by it; the CSV download uses the same window, grouping
@@ -19,6 +39,19 @@ SDKs; the release workflow refuses a tag that does not match all three.
 
 ### Fixed
 - Spend breakdown tables no longer cut off the request count on narrow cards.
+- Anthropic 1-hour cache writes were priced at the 5-minute rate (1.25x input instead of 2x).
+- OpenAI cache writes (GPT-5.6 and later) were ignored and billed as plain input, in the proxy,
+  both SDKs and Codex telemetry.
+- GPT-5.5 and newer OpenAI models matched no price and were charged at the most expensive OpenAI
+  rate.
+- Claude Sonnet 5.5 cache reads were priced at $0.20 per million tokens instead of $0.10, and
+  Gemini 2.5 Pro cache reads at $0.31 instead of $0.125.
+- A custom price without a cached-input price billed every cache read as fresh input; it now
+  defaults to a tenth of input for providers with prompt caching.
+- The run page's Tokens figure left out cache reads and writes, often most of a run's tokens; it
+  now counts all of them and shows how much of the input came from the cache. Log details show
+  cache writes too.
+- Proxy request events carry `source: "proxy"`.
 
 ## [0.2.0] - 2026-11-17
 

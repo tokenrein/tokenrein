@@ -35,6 +35,7 @@ Works with **Claude Code, Codex CLI, Gemini CLI, Cursor, GitHub Copilot CLI** an
 - **Agent logs**: every prompt, tool call (with outcome and duration), sub-agent and model call on one trace per run, searchable across runs. Prompt and tool text is kept only if you turn it on for a project, and then redacted.
 - **Approvals and alerts** in the dashboard, Slack, Microsoft Teams, PagerDuty and signed webhooks.
 - **One command per coding agent**, one line for your app, or a base URL. Prompts never have to pass through Tokenrein.
+- **Insights: where tokens go to waste**: prompt-cache misses with their cause and cost, tools that fail or get called again with the same input, oversized outputs, and what to fix first, in the dashboard and a weekly digest.
 - **Spend you can charge back**: by project, agent, person and model, by the minute, hour or day over up to 13 months, with filters and CSV export.
 - **Built for teams**: SSO (OpenID Connect), roles per org, API tokens, every change versioned and audited, Docker Compose and Helm.
 - **Free to self-host** up to 25 developers and $10,000 of AI spend a month, with every guardrail.

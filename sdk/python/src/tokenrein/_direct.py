@@ -63,29 +63,52 @@ def usage_from(obj: Dict[str, Any]) -> Optional[Dict[str, int]]:
             cur = cur.get(k) if isinstance(cur, dict) else None
         return int(cur) if isinstance(cur, (int, float)) else 0
 
+    def openai(prompt: int, details: str, output: int, reasoning: int) -> Dict[str, int]:
+        # OpenAI counts cache reads and (from GPT-5.6) cache writes inside the input total.
+        d = u.get(details) if isinstance(u.get(details), dict) else {}
+        holder = d if "cache_write_tokens" in d else u
+        cached = min(n(details, "cached_tokens"), prompt)
+        write = int(holder.get("cache_write_tokens") or 0) if isinstance(holder, dict) else 0
+        write = min(write, prompt - cached)
+        wd = holder.get("cache_write_tokens_details") if isinstance(holder, dict) else None
+        long = min(int((wd or {}).get("ttl_12h_tokens") or 0), write)
+        out = {
+            "input_tokens": max(0, prompt - cached - write),
+            "output_tokens": output,
+            "cache_read_tokens": cached,
+            "cache_write_tokens": write,
+        }
+        if long:
+            out["cache_write_long_tokens"] = long
+        if reasoning:
+            out["reasoning_tokens"] = min(reasoning, output)
+        return out
+
     if "prompt_tokens" in u:  # OpenAI Chat Completions (and compatible providers)
-        cached = n("prompt_tokens_details", "cached_tokens")
-        return {
-            "input_tokens": max(0, n("prompt_tokens") - cached),
-            "output_tokens": n("completion_tokens"),
-            "cache_read_tokens": cached,
-            "cache_write_tokens": 0,
-        }
+        return openai(
+            n("prompt_tokens"),
+            "prompt_tokens_details",
+            n("completion_tokens"),
+            n("completion_tokens_details", "reasoning_tokens"),
+        )
     if "input_tokens_details" in u or "output_tokens_details" in u:  # OpenAI Responses
-        cached = n("input_tokens_details", "cached_tokens")
-        return {
-            "input_tokens": max(0, n("input_tokens") - cached),
-            "output_tokens": n("output_tokens"),
-            "cache_read_tokens": cached,
-            "cache_write_tokens": 0,
-        }
+        return openai(
+            n("input_tokens"),
+            "input_tokens_details",
+            n("output_tokens"),
+            n("output_tokens_details", "reasoning_tokens"),
+        )
     if "input_tokens" in u or "output_tokens" in u:  # Anthropic Messages
-        return {
+        out = {
             "input_tokens": n("input_tokens"),
             "output_tokens": n("output_tokens"),
             "cache_read_tokens": n("cache_read_input_tokens"),
             "cache_write_tokens": n("cache_creation_input_tokens"),
         }
+        long = min(n("cache_creation", "ephemeral_1h_input_tokens"), out["cache_write_tokens"])
+        if long:
+            out["cache_write_long_tokens"] = long
+        return out
     return None
 
 

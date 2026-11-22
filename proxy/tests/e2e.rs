@@ -265,6 +265,7 @@ async fn openai_request_is_forwarded_and_actual_cost_is_recorded() {
             cached_input: 20,
             cache_write: 0,
             output: 50,
+            ..Usage::default()
         },
     );
     assert_eq!(h.run_budget("run-a").await, (expected, 0));
@@ -300,6 +301,7 @@ async fn openai_stream_passes_through_and_settles_from_usage_chunk() {
             cached_input: 20,
             cache_write: 0,
             output: 50,
+            ..Usage::default()
         },
     );
     assert_eq!(h.settled_spend("run-s").await, expected);
@@ -401,6 +403,7 @@ async fn child_spend_counts_against_the_parent_run_budget() {
             cached_input: 20,
             cache_write: 0,
             output: 50,
+            ..Usage::default()
         },
     );
     assert_eq!(parent_spent, 2 * per_call);

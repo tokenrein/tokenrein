@@ -9,6 +9,7 @@ pub mod control;
 pub mod db;
 pub mod history;
 pub mod ingest;
+pub mod insights;
 pub mod ledger;
 pub mod license;
 pub mod loops;
@@ -101,6 +102,9 @@ fn spawn_activity_writer(
                 metrics::activity_write_failed(batch.len());
             }
             if let Some(h) = &state.history {
+                h.push(&batch);
+            }
+            if let Some(h) = &state.step_history {
                 h.push(&batch);
             }
             for (org, alert) in batch.iter().filter_map(alerts::blocked_alert) {

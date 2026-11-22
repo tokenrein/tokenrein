@@ -123,6 +123,37 @@ impl H {
         }
         panic!("only {written} of {rows} history rows written");
     }
+
+    /// Like [`flush`](Self::flush), for the step history.
+    async fn flush_steps(&self, rows: usize) {
+        let h = self.state.step_history.clone().unwrap();
+        let mut written = 0;
+        for _ in 0..50 {
+            written += h.flush().await.unwrap();
+            if written >= rows {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("only {written} of {rows} step rows written");
+    }
+
+    async fn steps(&self, steps: Value) {
+        let resp = self
+            .http
+            .post(format!("{}/v1/steps", self.proxy))
+            .bearer_auth(KEY)
+            .json(&json!({ "steps": steps }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "{}",
+            resp.text().await.unwrap()
+        );
+    }
 }
 
 impl Drop for H {
@@ -412,4 +443,106 @@ async fn without_a_history_ranges_are_daily_from_redis() {
         assert_eq!(status, StatusCode::CONFLICT, "{path}: {body}");
         assert!(body.contains("usage history"), "{body}");
     }
+}
+
+#[tokio::test]
+async fn insights_find_cache_misses_and_failing_tools() {
+    let Some(h) = H::start(true).await else {
+        return;
+    };
+    // Ten calls of one run re-send a 40k-token prompt with caching off.
+    let calls: Vec<Value> = (0..10)
+        .map(|_| {
+            json!({"run_id": "loop-1", "agent": "coder", "provider": "anthropic",
+            "model": "claude-opus-5-5", "input_tokens": 40_000, "output_tokens": 200})
+        })
+        .collect();
+    h.report(json!(calls)).await;
+    // A tool that fails most of the time, retried with the same input.
+    let mut steps = Vec::new();
+    for i in 0..10 {
+        let input = if i < 3 {
+            json!({"cmd": "make tset"})
+        } else {
+            json!({"cmd": format!("make test {i}")})
+        };
+        let id = format!("c{i}");
+        steps.push(
+            json!({"run_id": "loop-1", "agent": "coder", "kind": "tool_call", "name": "Bash",
+            "call_id": id, "content": input}),
+        );
+        steps.push(json!({"run_id": "loop-1", "agent": "coder", "kind": "tool_result", "name": "Bash",
+            "call_id": id, "status": if i < 6 { "error" } else { "ok" }, "content": "make: *** No rule"}));
+    }
+    h.steps(json!(steps)).await;
+    h.flush(10).await;
+    h.flush_steps(20).await;
+
+    let r = h.json("/admin/orgs/acme/insights?days=1").await;
+    let rules: Vec<&str> = r["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["rule"].as_str().unwrap())
+        .collect();
+    for want in [
+        "cache.not_cached",
+        "tool.error_rate",
+        "tool.retries_failing_input",
+    ] {
+        assert!(rules.contains(&want), "{want} missing from {rules:?}");
+    }
+    assert_eq!(r["cache"]["totals"]["calls"], 10);
+    assert_eq!(r["cache"]["totals"]["hit_rate"], 0.0);
+    assert!(r["cache"]["totals"]["missed_micros"].as_u64().unwrap() > 1_000_000);
+    assert_eq!(r["tools"]["totals"]["calls"], 10);
+    assert_eq!(r["tools"]["totals"]["errors"], 6);
+    assert_eq!(r["days"], 1);
+    // The weekly digest leads with the costliest finding.
+    let digest = tokenrein::alerts::digest_alert(&r).unwrap();
+    assert!(
+        digest.title.ends_with("to fix in your agents this week"),
+        "{}",
+        digest.title
+    );
+    assert!(
+        digest.text.contains("Prompt caching not turned on"),
+        "{}",
+        digest.text
+    );
+    assert!(
+        digest
+            .fields
+            .iter()
+            .any(|(k, v)| k == "Input from cache" && v == "0%")
+    );
+    assert!(tokenrein::alerts::digest_alert(&json!({"findings": []})).is_none());
+    // Steps are stored as metadata only: the command text never reaches the files.
+    let mut stored = String::new();
+    for e in walk(&h.dir.join("steps")) {
+        stored.push_str(&String::from_utf8_lossy(&std::fs::read(e).unwrap()));
+    }
+    assert!(!stored.is_empty() && !stored.contains("make tset"));
+}
+
+fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.extend(walk(&p));
+        } else {
+            out.push(p);
+        }
+    }
+    out
+}
+
+#[tokio::test]
+async fn insights_need_the_history() {
+    let Some(h) = H::start(false).await else {
+        return;
+    };
+    let (status, body) = h.get("/admin/orgs/acme/insights").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
 }

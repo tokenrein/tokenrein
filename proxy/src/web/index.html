@@ -12,6 +12,7 @@
 <script src="/assets/js/connect.js" defer></script>
 <script src="/assets/js/models.js" defer></script>
 <script src="/assets/js/spend.js" defer></script>
+<script src="/assets/js/insights.js" defer></script>
 <script src="/assets/js/activity.js" defer></script>
 <script src="/assets/js/logs.js" defer></script>
 <script src="/assets/js/settings.js" defer></script>
@@ -65,6 +66,7 @@
       <button role="tab" data-tab="runs" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="12" r="2"/><path d="M6 7v10M6 12h6a4 4 0 0 0 4-4V7"/></svg>Runs</button>
       <button role="tab" data-tab="agents" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6"/></svg>Agents</button>
       <button role="tab" data-tab="spend" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Spend</button>
+      <button role="tab" data-tab="insights" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.5 1 2.5h6c0-1 .3-1.8 1-2.5A6 6 0 0 0 12 3z"/></svg>Insights</button>
       <button role="tab" data-tab="activity" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>Activity</button>
       <button role="tab" data-tab="logs" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h13"/><circle cx="19" cy="12" r="1.5"/></svg>Logs</button>
       <button role="tab" data-tab="approvals" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3 8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg>Approvals<span class="nav-count hide" id="approvals-count"></span></button>
@@ -196,6 +198,15 @@
         </div>
         <div class="table-wrap"><table id="events-table" class="wide"></table></div>
       </div>
+    </section>
+
+    <section data-view="insights" class="hide">
+      <div class="inline" style="justify-content:space-between;align-items:flex-start">
+        <div><h1>Insights</h1>
+          <p class="sub">Where your agents waste tokens: prompt-cache misses, failing and repeated tool calls, and what to fix first.</p></div>
+        <select id="insights-days" aria-label="Time window"></select>
+      </div>
+      <div id="insights"></div>
     </section>
 
     <section data-view="logs" class="hide">

@@ -79,7 +79,11 @@ flush_secs`), and read back with DuckDB for:
   model and status,
 - its 90-day, 6-month and 12-month ranges (`/admin/orgs/{org}/spend?days=`),
 - **Download CSV**: spend per minute, hour or day, project, agent, user and model,
-- run timelines older than 7 days.
+- run timelines older than 7 days,
+- the Insights page (cache and tool health) and its weekly digest.
+
+Agent steps (tool calls and results, prompts) are kept there too, under `steps/`, as metadata
+only: names, outcomes, sizes, timings and input fingerprints, never their content.
 
 The history starts when you turn it on: earlier requests stay in Redis's daily totals, which the
 Spend page still uses for unfiltered daily views of the last 40 days.

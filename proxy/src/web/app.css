@@ -368,3 +368,12 @@ table.trace .wf-h, table.trace .wf-cell { width: 28%; min-width: 180px; }
   .prov-row input { width: 100%; }
   .prov-row .ws { grid-column: 1 / -1; }
 }
+
+/* Insights */
+.insight { padding: 14px 16px; border-top: 1px solid var(--line); }
+.insight:first-of-type { border-top: 0; }
+.insight.warn { box-shadow: inset 3px 0 0 var(--warn); }
+.insight-h { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.insight-impact { margin-left: auto; white-space: nowrap; }
+.insight p { margin: 6px 0 0; }
+.insight-fix { color: var(--text-2); }

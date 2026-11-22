@@ -48,6 +48,10 @@ export interface TokenUsage {
   output_tokens: number;
   cache_read_tokens: number;
   cache_write_tokens: number;
+  /** The part of `cache_write_tokens` written for the long lifetime (1 hour, 12 hours). */
+  cache_write_long_tokens?: number;
+  /** The part of `output_tokens` spent on reasoning. */
+  reasoning_tokens?: number;
 }
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
@@ -57,21 +61,34 @@ export function usageFrom(obj: unknown): TokenUsage | undefined {
   const u = (obj as { usage?: Record<string, unknown> } | null | undefined)?.usage;
   if (!u || typeof u !== 'object') return undefined;
   const nested = (a: string, b: string) => num((u[a] as Record<string, unknown> | undefined)?.[b]);
+  // OpenAI counts cache reads and (from GPT-5.6) cache writes inside the input total.
+  const openai = (prompt: number, details: string, output: number, reasoning: number): TokenUsage => {
+    const d = (u[details] as Record<string, unknown> | undefined) ?? {};
+    const holder = 'cache_write_tokens' in d ? d : u;
+    const cached = Math.min(num(d.cached_tokens), prompt);
+    const write = Math.min(num(holder.cache_write_tokens), prompt - cached);
+    const long = Math.min(num((holder.cache_write_tokens_details as Record<string, unknown> | undefined)?.ttl_12h_tokens), write);
+    const out: TokenUsage = { input_tokens: Math.max(0, prompt - cached - write), output_tokens: output, cache_read_tokens: cached, cache_write_tokens: write };
+    if (long) out.cache_write_long_tokens = long;
+    if (reasoning) out.reasoning_tokens = Math.min(reasoning, output);
+    return out;
+  };
   if ('prompt_tokens' in u) {
-    const cached = nested('prompt_tokens_details', 'cached_tokens');
-    return { input_tokens: Math.max(0, num(u.prompt_tokens) - cached), output_tokens: num(u.completion_tokens), cache_read_tokens: cached, cache_write_tokens: 0 };
+    return openai(num(u.prompt_tokens), 'prompt_tokens_details', num(u.completion_tokens), nested('completion_tokens_details', 'reasoning_tokens'));
   }
   if ('input_tokens_details' in u || 'output_tokens_details' in u) {
-    const cached = nested('input_tokens_details', 'cached_tokens');
-    return { input_tokens: Math.max(0, num(u.input_tokens) - cached), output_tokens: num(u.output_tokens), cache_read_tokens: cached, cache_write_tokens: 0 };
+    return openai(num(u.input_tokens), 'input_tokens_details', num(u.output_tokens), nested('output_tokens_details', 'reasoning_tokens'));
   }
   if ('input_tokens' in u || 'output_tokens' in u) {
-    return {
+    const out: TokenUsage = {
       input_tokens: num(u.input_tokens),
       output_tokens: num(u.output_tokens),
       cache_read_tokens: num(u.cache_read_input_tokens),
       cache_write_tokens: num(u.cache_creation_input_tokens),
     };
+    const long = Math.min(nested('cache_creation', 'ephemeral_1h_input_tokens'), out.cache_write_tokens);
+    if (long) out.cache_write_long_tokens = long;
+    return out;
   }
   return undefined;
 }

@@ -13,6 +13,7 @@ const ALERT_EVENTS = {
   approval_requested: "Run waiting for approval",
   loop_detected: "Runaway loop detected",
   license: "License reminders (weekly)",
+  insights: "Insights digest: what to fix (weekly)",
 };
 
 async function loadAlerts() {

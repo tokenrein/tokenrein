@@ -7,7 +7,9 @@
 //! files are merged into one, and days past the retention period are deleted. Writing is best
 //! effort and off the request path: a failure is logged and counted, never seen by an agent.
 //!
-//! Layout: `<dir>/usage/org=<org>/day=<YYYY-MM-DD>/<node>-<micros>.parquet`.
+//! Layout: `<dir>/usage/org=<org>/day=<YYYY-MM-DD>/<node>-<micros>.parquet`. Agent steps (tool
+//! calls and results, prompts) are kept the same way under `<dir>/steps/`, as metadata only:
+//! names, outcomes, sizes, timings and input fingerprints, never their content.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -34,7 +36,13 @@ const SCHEMA: &str = r#"CREATE TABLE u (
     parent_run_id VARCHAR, provider VARCHAR, model VARCHAR, decision VARCHAR,
     blocked_scope VARCHAR, source VARCHAR, request_id VARCHAR, cost_micros BIGINT,
     input_tokens BIGINT, cached_input_tokens BIGINT, cache_write_tokens BIGINT,
-    output_tokens BIGINT, upstream_ms BIGINT)"#;
+    output_tokens BIGINT, upstream_ms BIGINT, cache_write_long_tokens BIGINT,
+    reasoning_tokens BIGINT)"#;
+
+/// Columns added after the first release, with the value older files are read as.
+const ADDED_COLUMNS: &str =
+    "ALTER TABLE e ADD COLUMN IF NOT EXISTS cache_write_long_tokens BIGINT DEFAULT 0;
+     ALTER TABLE e ADD COLUMN IF NOT EXISTS reasoning_tokens BIGINT DEFAULT 0;";
 
 /// One request event, as stored.
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +67,8 @@ pub struct Row {
     pub cache_write_tokens: i64,
     pub output_tokens: i64,
     pub upstream_ms: i64,
+    pub cache_write_long_tokens: i64,
+    pub reasoning_tokens: i64,
 }
 
 impl Row {
@@ -99,6 +109,8 @@ impl Row {
             cache_write_tokens: u("cache_write"),
             output_tokens: u("output"),
             upstream_ms: n(e.get("upstream_ms")),
+            cache_write_long_tokens: u("cache_write_long"),
+            reasoning_tokens: u("reasoning"),
         })
     }
 }
@@ -126,9 +138,148 @@ fn append_rows(conn: &Connection, rows: &[Row]) -> duckdb::Result<()> {
             r.cache_write_tokens,
             r.output_tokens,
             r.upstream_ms,
+            r.cache_write_long_tokens,
+            r.reasoning_tokens,
         ])?;
     }
     app.flush()
+}
+
+/// One kind of activity event a history store keeps, as Parquet files under `DIR`.
+pub trait Record: Sized + Clone + Send + 'static {
+    /// Folder under the history directory.
+    const DIR: &'static str;
+    /// Table the rows are written through.
+    const TABLE: &'static str;
+    /// Creates `TABLE` with the stored columns.
+    const SCHEMA: &'static str;
+    /// Run on table `e` after files are read: columns added after the first release.
+    const ADDED: &'static str;
+    fn from_event(e: &Value) -> Option<Self>;
+    fn org(&self) -> &str;
+    fn day(&self) -> NaiveDate;
+    fn ts_us(&self) -> i64;
+    fn append(conn: &Connection, rows: &[Self]) -> duckdb::Result<()>;
+}
+
+impl Record for Row {
+    const DIR: &'static str = "usage";
+    const TABLE: &'static str = "u";
+    const SCHEMA: &'static str = SCHEMA;
+    const ADDED: &'static str = ADDED_COLUMNS;
+    fn from_event(e: &Value) -> Option<Self> {
+        Row::from_event(e)
+    }
+    fn org(&self) -> &str {
+        &self.org
+    }
+    fn day(&self) -> NaiveDate {
+        self.day
+    }
+    fn ts_us(&self) -> i64 {
+        self.ts_us
+    }
+    fn append(conn: &Connection, rows: &[Self]) -> duckdb::Result<()> {
+        append_rows(conn, rows)
+    }
+}
+
+const STEP_SCHEMA: &str = r#"CREATE TABLE s (
+    ts_us BIGINT, project VARCHAR, agent VARCHAR, "user" VARCHAR, run_id VARCHAR,
+    parent_run_id VARCHAR, source VARCHAR, kind VARCHAR, name VARCHAR, call_id VARCHAR,
+    status VARCHAR, fingerprint VARCHAR, size BIGINT, duration_ms BIGINT)"#;
+
+/// One agent step, as stored: what happened, never what was said.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StepRow {
+    pub org: String,
+    pub day: NaiveDate,
+    pub ts_us: i64,
+    pub project: String,
+    pub agent: String,
+    pub user: Option<String>,
+    pub run_id: String,
+    pub parent_run_id: Option<String>,
+    pub source: Option<String>,
+    pub kind: String,
+    pub name: Option<String>,
+    pub call_id: Option<String>,
+    pub status: Option<String>,
+    pub fingerprint: Option<String>,
+    pub size: Option<i64>,
+    pub duration_ms: Option<i64>,
+}
+
+impl Record for StepRow {
+    const DIR: &'static str = "steps";
+    const TABLE: &'static str = "s";
+    const SCHEMA: &'static str = STEP_SCHEMA;
+    const ADDED: &'static str = "";
+    /// Step events only; model calls are already in the usage history.
+    fn from_event(e: &Value) -> Option<Self> {
+        let s = |k: &str| e.get(k).and_then(Value::as_str).filter(|v| !v.is_empty());
+        if s("event") != Some("step") {
+            return None;
+        }
+        let kind = s("kind").filter(|k| *k != "model_call")?.to_string();
+        let org = s("org").filter(|o| safe_id(o))?.to_string();
+        let run_id = s("run_id")?.to_string();
+        let ts = s("ts")
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.with_timezone(&Utc))
+            .unwrap_or_else(Utc::now);
+        let opt = |k: &str| s(k).map(str::to_string);
+        let n = |k: &str| e.get(k).and_then(Value::as_i64);
+        Some(StepRow {
+            org,
+            day: ts.date_naive(),
+            ts_us: ts.timestamp_micros(),
+            project: s("project").unwrap_or("").to_string(),
+            agent: s("agent").unwrap_or("").to_string(),
+            user: opt("user"),
+            run_id,
+            parent_run_id: opt("parent_run_id"),
+            source: opt("source"),
+            kind,
+            name: opt("name"),
+            call_id: opt("call_id"),
+            status: opt("status"),
+            fingerprint: opt("fingerprint"),
+            size: n("size"),
+            duration_ms: n("duration_ms"),
+        })
+    }
+    fn org(&self) -> &str {
+        &self.org
+    }
+    fn day(&self) -> NaiveDate {
+        self.day
+    }
+    fn ts_us(&self) -> i64 {
+        self.ts_us
+    }
+    fn append(conn: &Connection, rows: &[Self]) -> duckdb::Result<()> {
+        let mut app = conn.appender("s")?;
+        for r in rows {
+            app.append_row(params![
+                r.ts_us,
+                r.project,
+                r.agent,
+                r.user,
+                r.run_id,
+                r.parent_run_id,
+                r.source,
+                r.kind,
+                r.name,
+                r.call_id,
+                r.status,
+                r.fingerprint,
+                r.size,
+                r.duration_ms,
+            ])?;
+        }
+        app.flush()
+    }
 }
 
 /// Org ids become folder names: no dots in front (`.`, `..`).
@@ -294,18 +445,23 @@ pub struct Spend {
     pub by: Vec<(&'static str, Vec<Totals>)>,
 }
 
-pub struct History {
+/// Usage history: request events.
+pub type History = Store<Row>;
+/// Agent step history: tool calls and results, prompts, sub-agents (metadata only).
+pub type StepHistory = Store<StepRow>;
+
+pub struct Store<R: Record> {
     dir: PathBuf,
     /// Prefix of this process's file names, so replicas sharing a folder never collide.
     node: String,
     pub retention_days: u32,
     pub flush_secs: u64,
-    buffer: Mutex<Vec<Row>>,
+    buffer: Mutex<Vec<R>>,
     flushing: tokio::sync::Mutex<()>,
     wake: tokio::sync::Notify,
 }
 
-impl History {
+impl<R: Record> Store<R> {
     pub fn from_config(cfg: &HistoryConfig) -> Option<Arc<Self>> {
         let dir = cfg
             .dir
@@ -339,7 +495,7 @@ impl History {
     }
 
     fn org_dir(&self, org: &str) -> PathBuf {
-        self.dir.join("usage").join(format!("org={org}"))
+        self.dir.join(R::DIR).join(format!("org={org}"))
     }
 
     fn day_dir(&self, org: &str, day: NaiveDate) -> PathBuf {
@@ -348,7 +504,7 @@ impl History {
 
     /// Queue activity events for the next flush. Never blocks on disk.
     pub fn push(&self, events: &[Value]) {
-        let rows: Vec<Row> = events.iter().filter_map(Row::from_event).collect();
+        let rows: Vec<R> = events.iter().filter_map(R::from_event).collect();
         if rows.is_empty() {
             return;
         }
@@ -390,12 +546,15 @@ impl History {
     }
 
     /// Blocking: one Parquet file per org and day. Returns (rows written, rows not written, error).
-    fn write(&self, rows: Vec<Row>) -> (usize, Vec<Row>, Option<anyhow::Error>) {
-        let mut groups: BTreeMap<(String, NaiveDate), Vec<Row>> = BTreeMap::new();
+    fn write(&self, rows: Vec<R>) -> (usize, Vec<R>, Option<anyhow::Error>) {
+        let mut groups: BTreeMap<(String, NaiveDate), Vec<R>> = BTreeMap::new();
         for r in rows {
-            groups.entry((r.org.clone(), r.day)).or_default().push(r);
+            groups
+                .entry((r.org().to_string(), r.day()))
+                .or_default()
+                .push(r);
         }
-        let conn = match duck().and_then(|c| c.execute_batch(SCHEMA).map(|_| c)) {
+        let conn = match duck().and_then(|c| c.execute_batch(R::SCHEMA).map(|_| c)) {
             Ok(c) => c,
             Err(e) => return (0, groups.into_values().flatten().collect(), Some(e.into())),
         };
@@ -412,15 +571,16 @@ impl History {
         (written, Vec::new(), None)
     }
 
-    fn write_file(&self, conn: &Connection, org: &str, day: NaiveDate, rows: &[Row]) -> Result<()> {
-        conn.execute_batch("DELETE FROM u")?;
-        append_rows(conn, rows)?;
+    fn write_file(&self, conn: &Connection, org: &str, day: NaiveDate, rows: &[R]) -> Result<()> {
+        conn.execute_batch(&format!("DELETE FROM {}", R::TABLE))?;
+        R::append(conn, rows)?;
         let dir = self.day_dir(org, day);
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let name = format!("{}-{}.parquet", self.node, Utc::now().timestamp_micros());
         let tmp = dir.join(format!(".{name}.tmp"));
         conn.execute_batch(&format!(
-            "COPY u TO {} (FORMAT parquet, COMPRESSION zstd)",
+            "COPY {} TO {} (FORMAT parquet, COMPRESSION zstd)",
+            R::TABLE,
             sql_str(&tmp)
         ))?;
         std::fs::rename(&tmp, dir.join(&name)).context("publishing history file")?;
@@ -480,12 +640,62 @@ impl History {
         conn.execute_batch(&format!(
             "CREATE TEMP TABLE e AS
                SELECT *, CAST(day AS DATE) AS d
-               FROM read_parquet([{}], hive_partitioning = true, union_by_name = true)",
-            files.join(", ")
+               FROM read_parquet([{}], hive_partitioning = true, union_by_name = true);
+             {}",
+            files.join(", "),
+            R::ADDED
         ))?;
         Ok(Some(conn))
     }
 
+    /// Blocking: a DuckDB connection with table `e` holding every stored column of the org's
+    /// rows in `[from_us, to_us)`, the queued ones included, or `None` when there are none.
+    pub fn open_window(&self, org: &str, from_us: i64, to_us: i64) -> Result<Option<Connection>> {
+        anyhow::ensure!(safe_id(org), "invalid org id");
+        let day = |us: i64| {
+            DateTime::from_timestamp_micros(us)
+                .unwrap_or_default()
+                .date_naive()
+        };
+        let (from, to) = (day(from_us), day(to_us));
+        let files: Vec<String> = self
+            .days(org)
+            .into_iter()
+            .filter(|d| *d >= from && *d <= to)
+            .flat_map(|d| Self::day_files(&self.day_dir(org, d)))
+            .map(|p| sql_str(&p))
+            .collect();
+        let pending: Vec<R> = {
+            let buf = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+            buf.iter()
+                .filter(|r| r.org() == org && r.ts_us() >= from_us && r.ts_us() < to_us)
+                .cloned()
+                .collect()
+        };
+        if files.is_empty() && pending.is_empty() {
+            return Ok(None);
+        }
+        let conn = duck()?;
+        conn.execute_batch(R::SCHEMA)?;
+        R::append(&conn, &pending)?;
+        let stored = if files.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "SELECT * FROM read_parquet([{}], hive_partitioning = false, union_by_name = true) \
+                 UNION ALL BY NAME ",
+                files.join(", ")
+            )
+        };
+        conn.execute_batch(&format!(
+            "CREATE TEMP TABLE e AS {stored}SELECT * FROM {}",
+            R::TABLE
+        ))?;
+        Ok(Some(conn))
+    }
+}
+
+impl History {
     /// Blocking: daily totals and top keys per dimension between `from` and `to`.
     pub fn spend(&self, org: &str, from: NaiveDate, to: NaiveDate) -> Result<Spend> {
         let Some(conn) = self.open(org, from, to)? else {
@@ -706,7 +916,8 @@ impl History {
         let mut stmt = conn.prepare(
             r#"SELECT ts_us, project, agent, "user", run_id, parent_run_id, provider, model, decision,
                       blocked_scope, source, request_id, cost_micros, input_tokens,
-                      cached_input_tokens, cache_write_tokens, output_tokens, upstream_ms
+                      cached_input_tokens, cache_write_tokens, output_tokens, upstream_ms,
+                      COALESCE(cache_write_long_tokens, 0), COALESCE(reasoning_tokens, 0)
                FROM e WHERE run_id = ? OR parent_run_id = ? ORDER BY ts_us DESC LIMIT ?"#,
         )?;
         let rows = stmt.query_map(params![run, run, RUN_EVENTS_MAX as i64], |r| {
@@ -732,6 +943,8 @@ impl History {
                     "cached_input": r.get::<_, i64>(14)?,
                     "cache_write": r.get::<_, i64>(15)?,
                     "output": r.get::<_, i64>(16)?,
+                    "cache_write_long": r.get::<_, i64>(18)?,
+                    "reasoning": r.get::<_, i64>(19)?,
                 },
                 "upstream_ms": r.get::<_, i64>(17)?,
                 "from_history": true,
@@ -739,13 +952,15 @@ impl History {
         })?;
         Ok(rows.collect::<duckdb::Result<_>>()?)
     }
+}
 
+impl<R: Record> Store<R> {
     /// Blocking: delete the days past retention, and finish any merge a crash interrupted.
     /// Returns the days (org, day) that are ready to be merged.
     fn sweep(&self, today: NaiveDate) -> Vec<(String, NaiveDate)> {
         let cutoff = today - chrono::Duration::days(i64::from(self.retention_days));
         let mut ready = Vec::new();
-        let Ok(orgs) = std::fs::read_dir(self.dir.join("usage")) else {
+        let Ok(orgs) = std::fs::read_dir(self.dir.join(R::DIR)) else {
             return ready;
         };
         let orgs = orgs.filter_map(|e| {
@@ -876,9 +1091,15 @@ fn csv_cell(v: &str) -> String {
 /// Flush every `flush_secs` (sooner when many rows wait), and once an hour delete old days and
 /// merge finished ones. Replicas sharing the folder take turns through a Redis lock per day.
 pub fn spawn(state: Arc<AppState>) {
-    let Some(history) = state.history.clone() else {
-        return;
-    };
+    if let Some(h) = state.history.clone() {
+        spawn_store(&state, h);
+    }
+    if let Some(h) = state.step_history.clone() {
+        spawn_store(&state, h);
+    }
+}
+
+fn spawn_store<R: Record>(state: &Arc<AppState>, history: Arc<Store<R>>) {
     let h = history.clone();
     tokio::spawn(async move {
         loop {
@@ -887,13 +1108,12 @@ pub fn spawn(state: Arc<AppState>) {
                 _ = h.wake.notified() => {}
             }
             if let Err(e) = h.flush().await {
-                tracing::warn!(error = %e, "could not write usage history");
+                tracing::warn!(error = %e, kind = R::DIR, "could not write history");
                 crate::metrics::history_write_failed();
             }
         }
     });
-    let weak = Arc::downgrade(&state);
-    drop(state);
+    let weak = Arc::downgrade(state);
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(60)).await;
         let mut tick = tokio::time::interval(Duration::from_secs(3600));
@@ -901,14 +1121,14 @@ pub fn spawn(state: Arc<AppState>) {
             tick.tick().await;
             let Some(state) = weak.upgrade() else { return };
             if let Err(e) = maintain(&state, &history).await {
-                tracing::warn!(error = %e, "usage history maintenance failed");
+                tracing::warn!(error = %e, kind = R::DIR, "history maintenance failed");
             }
         }
     });
 }
 
 /// Delete days past retention and merge finished days; returns the days merged.
-pub async fn maintain(state: &AppState, history: &Arc<History>) -> Result<usize> {
+pub async fn maintain<R: Record>(state: &AppState, history: &Arc<Store<R>>) -> Result<usize> {
     let h = history.clone();
     let today = Utc::now().date_naive();
     let ready = tokio::task::spawn_blocking(move || h.sweep(today)).await?;
@@ -916,7 +1136,7 @@ pub async fn maintain(state: &AppState, history: &Arc<History>) -> Result<usize>
     for (org, day) in ready {
         let mut conn = state.ledger.conn();
         let got: Option<String> = redis::cmd("SET")
-            .arg(format!("tl:history:merge:{org}:{day}"))
+            .arg(format!("tl:history:merge:{}:{org}:{day}", R::DIR))
             .arg(&history.node)
             .arg("NX")
             .arg("EX")
@@ -932,7 +1152,9 @@ pub async fn maintain(state: &AppState, history: &Arc<History>) -> Result<usize>
         match tokio::task::spawn_blocking(move || h.merge(&o, day)).await? {
             Ok(true) => merged += 1,
             Ok(false) => {}
-            Err(e) => tracing::warn!(org = %org, %day, error = %e, "could not merge usage history"),
+            Err(e) => {
+                tracing::warn!(org = %org, %day, error = %e, kind = R::DIR, "could not merge history")
+            }
         }
     }
     Ok(merged)
