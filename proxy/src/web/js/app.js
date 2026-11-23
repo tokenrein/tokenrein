@@ -187,6 +187,8 @@ function render() {
   if (S.tab === "audit") renderAudit();
   if (S.tab === "people") renderPeople();
   if (S.tab === "approvals") renderApprovals();
+  // Long run ids are cut short in tables; the full id shows on hover.
+  $$("a.runlink:not([title])").forEach(a => { a.title = a.textContent; });
   renderApprovalBadge();
   renderLicenseBanner();
   renderWhoami();

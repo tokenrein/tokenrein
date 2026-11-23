@@ -48,8 +48,18 @@ SDKs; the release workflow refuses a tag that does not match all three.
   docs/api.md). Range reports include requests from the last few seconds that are not yet written
   to the history files.
 
+### Changed
+- Keys & limits is split into tabs (Projects, Org limits, Provider keys, Alerts, License, Orgs)
+  instead of one long page. Projects are a compact list (spend, keys, guardrail pack, agent logs);
+  one project opens at a time, with its keys, pack, agent logs and limits. Loop guard settings fold
+  away until set. The page went from about 4,700 to 1,200 pixels tall.
+- Long run ids are shortened in tables (full id on hover), and Activity links each run.
+- Activity shows each call's total tokens and how much came from the cache.
+- Tool calls whose result never arrived show "no result" after 10 minutes instead of "running".
+
 ### Fixed
 - Spend breakdown tables no longer cut off the request count on narrow cards.
+- The License tab lists fix suggestions with the other paid features.
 - Anthropic 1-hour cache writes were priced at the 5-minute rate (1.25x input instead of 2x).
 - OpenAI cache writes (GPT-5.6 and later) were ignored and billed as plain input, in the proxy,
   both SDKs and Codex telemetry.

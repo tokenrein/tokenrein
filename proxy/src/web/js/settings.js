@@ -37,8 +37,10 @@ function loopEditor(l, inherited) {
   const project = inherited !== undefined;
   const inh = project ? (inherited ? `Inherits from the org: ${esc(LOOP_ACTIONS[inherited.action || "pause"].split(":")[0].toLowerCase())} after ${inherited.max_repeats} repeats` : "Inherits: off") : "";
   const num = (f, v, ph, label, extra = "") => `<label class="field">${label}<input type="number" min="0" step="any" data-loop="${f}" value="${v ?? ""}" placeholder="${ph}" ${extra}></label>`;
-  return `<div class="budget loop-guard" data-policy="loops">
-    <div class="t">Loop guard</div>
+  const state = l?.action ? `${esc(LOOP_ACTIONS[l.action].split(":")[0])} after ${l.max_repeats} repeats`
+    : project ? (inherited ? "inherits the org's" : "inherits: off") : "off";
+  return `<details class="budget loop-guard" data-policy="loops" ${l?.action ? "open" : ""}>
+    <summary><span class="t">Loop guard</span> <span class="muted">· ${state}</span></summary>
     <div class="d">Stops runaway runs early: the same request or tool call repeated, spend per minute, or too many calls in one run.</div>
     <div class="inline">
       <select data-loop="action" aria-label="Loop guard action">
@@ -53,7 +55,7 @@ function loopEditor(l, inherited) {
       ${num("max_calls_per_run", l?.max_calls_per_run, "none", "Max calls per run", 'step="1"')}
     </div>
     ${inh ? `<div class="inherit">${inh}</div>` : ""}
-  </div>`;
+  </details>`;
 }
 
 function readLoops(el) {
@@ -85,70 +87,132 @@ function readBudgets(root) {
   return out;
 }
 
-function renderSettings() {
-  const org = currentOrg();
-  const modeHelp = `<p class="help">Modes: <b>enforce</b> blocks a call that would go over (HTTP 402) · <b>check</b> lets it through and adds an <span class="mono">x-tr-warning</span> header · <b>skip</b> only tracks spend. Leave a limit blank for no limit${org ? " (or to inherit, for projects)" : ""}.</p>`;
-  let html = licenseCard();
-  if (org) {
-    html += `<div class="card" data-org-card>
-      <div class="card-h"><h2>Org <span class="mono">${esc(org.id)}</span> defaults</h2>
+const SETTINGS_TAB_KEY = "tokenrein.settings.tab";
+const SETTINGS_PROJECT_KEY = "tokenrein.settings.project";
+
+function settingsTabs(org) {
+  return [
+    org && ["projects", "Projects", org.projects.length],
+    org && ["org", "Org limits"],
+    org && ["providers", "Provider keys"],
+    org && can("admin") && ["alerts", "Alerts", S.alerts?.channels?.length],
+    S.me?.instance_admin && ["license", "License"],
+    S.me?.instance_admin && ["orgs", "Orgs"],
+  ].filter(Boolean);
+}
+
+const MODE_LEGEND = `<div class="mode-legend"><span><b>Enforce</b> blocks the call (HTTP 402)</span>
+  <span><b>Check</b> lets it through with an <span class="mono">x-tr-warning</span> header</span>
+  <span><b>Skip</b> only tracks spend</span><span><b>Ask</b> (runs) pauses for an approver</span></div>`;
+
+function keyRows(p) {
+  return p.keys.map(k => `<tr>
+    <td>${esc(k.name)}${k.source === "config" ? ' <span class="badge b-muted">config file</span>' : ""}</td>
+    <td class="mono">${k.prefix ? esc(k.prefix) + "…" : `hash ${esc(k.id)}…`}</td>
+    <td class="muted nowrap">${k.created_at ? new Date(k.created_at).toLocaleDateString() : "–"}</td>
+    <td><div class="row-actions"><button class="btn sm danger" data-revoke="${esc(k.id)}" data-project="${esc(p.id)}" data-name="${esc(k.name)}">Revoke</button></div></td></tr>`).join("");
+}
+
+function projectDetail(p, org) {
+  const pack = S.packs.find(k => k.id === p.pack);
+  return `<div class="card" data-project-card="${esc(p.id)}">
+    <div class="card-h"><h2>Project <span class="mono">${esc(p.id)}</span></h2>
+      <span class="muted">${meter(p.spend.project_monthly)}</span>
+      <div class="toolbar"><button class="btn sm danger" data-delete-project="${esc(p.id)}">Delete project</button></div></div>
+    <div class="card-b settings-body">
+      <section class="settings-sec">
+        <div class="settings-sec-h"><h3>Virtual keys</h3><span class="muted">Give one to an agent instead of your real provider key; its calls count against this project.</span></div>
+        <div class="table-wrap boxed"><table>${p.keys.length
+          ? `<thead><tr><th>Name</th><th>Key</th><th>Created</th><th></th></tr></thead><tbody>${keyRows(p)}</tbody>`
+          : `<tr><td class="empty">No keys yet: agents can't use this project.</td></tr>`}</table></div>
+        <form class="inline" data-new-key="${esc(p.id)}">
+          <input type="text" required maxlength="100" placeholder="Key name, e.g. support-bot prod" aria-label="New key name">
+          <button class="btn sm" type="submit">Create key</button>
+        </form>
+      </section>
+      <div class="settings-pair">
+        <section class="settings-sec">
+          <div class="settings-sec-h"><h3>Guardrail pack</h3><span class="muted">${pack ? `Current: ${esc(pack.title)}` : "None applied"}</span></div>
+          <form class="inline" data-project-pack="${esc(p.id)}">
+            <select aria-label="Guardrail pack for ${esc(p.id)}">${S.packs.map(k => `<option value="${esc(k.id)}" ${p.pack === k.id ? "selected" : ""}>${esc(k.title)}</option>`).join("")}</select>
+            <button class="btn sm" type="submit">${p.pack ? "Re-apply" : "Apply"} in Check mode</button>
+          </form>
+        </section>
+        <section class="settings-sec">
+          <div class="settings-sec-h"><h3>Agent logs</h3><span class="muted">${p.capture_content ? "Keeping redacted text" : "Metadata only"}</span></div>
+          <label class="inline check"><input type="checkbox" data-capture="${esc(p.id)}" ${p.capture_content ? "checked" : ""}>
+            <span>Keep a redacted copy of prompts and tool inputs and outputs <span class="muted">(secrets and emails masked, first 2,000 characters, 7 days)</span></span></label>
+        </section>
+      </div>
+      <section class="settings-sec">
+        <div class="settings-sec-h"><h3>Limits</h3><span class="muted">Blank inherits the org's limit.</span></div>
+        ${budgetEditor("project", p.budgets, org.budgets, POLICIES.slice(1))}
+        <div class="settings-save"><button class="btn primary sm" data-save-project="${esc(p.id)}">Save project limits</button></div>
+      </section>
+    </div></div>`;
+}
+
+function projectsView(org) {
+  let selected = store("local", SETTINGS_PROJECT_KEY);
+  if (!org.projects.some(p => p.id === selected)) selected = org.projects[0]?.id;
+  const rows = org.projects.map(p => {
+    const pack = S.packs.find(k => k.id === p.pack);
+    return `<tr class="pick" tabindex="0" data-pick-project="${esc(p.id)}" aria-current="${p.id === selected}">
+      <td class="mono">${esc(p.id)}</td><td>${meter(p.spend.project_monthly)}</td>
+      <td class="num">${p.keys.length}</td><td>${pack ? esc(pack.title) : '<span class="muted">none</span>'}</td>
+      <td>${p.capture_content ? '<span class="badge b-warn">text kept</span>' : '<span class="muted">metadata</span>'}</td></tr>`;
+  }).join("");
+  const list = `<div class="card">
+    <div class="card-h"><h2>Projects in <span class="mono">${esc(org.id)}</span></h2>
+      <form class="inline toolbar" data-new-project>
+        <input type="text" required pattern="[A-Za-z0-9._\\-]{1,128}" placeholder="New project id" aria-label="New project id">
+        <button class="btn sm" type="submit">Create project</button></form></div>
+    <div class="table-wrap"><table class="wide">${org.projects.length
+      ? `<thead><tr><th>Project</th><th>This month</th><th class="num">Keys</th><th>Guardrail pack</th><th>Agent logs</th></tr></thead><tbody>${rows}</tbody>`
+      : `<tr><td class="empty">No projects yet. A project holds keys and limits for a group of agents.</td></tr>`}</table></div></div>`;
+  const p = org.projects.find(x => x.id === selected);
+  return list + (p ? projectDetail(p, org) : "");
+}
+
+function orgView(org) {
+  return `<div class="card" data-org-card>
+      <div class="card-h"><h2>Limits for <span class="mono">${esc(org.id)}</span></h2>
         <div class="toolbar">
           <label class="inline status">If Redis is down
             <select data-f="fail_mode"><option value="open" ${org.fail_mode === "open" ? "selected" : ""}>Keep serving (fail open)</option><option value="closed" ${org.fail_mode === "closed" ? "selected" : ""}>Refuse calls (fail closed)</option></select>
           </label>
-          <button class="btn primary sm" data-save-org>Save org limits</button>
         </div></div>
-      <div class="card-b">${modeHelp}${budgetEditor("org", org.budgets, null, POLICIES)}</div></div>`;
-    html += providerKeysCard(org);
-    if (can("admin")) html += alertsCard();
-    for (const p of org.projects) {
-      const keys = p.keys.map(k => `<tr>
-        <td>${esc(k.name)}${k.source === "config" ? ' <span class="badge b-muted">config file</span>' : ""}</td>
-        <td class="mono">${k.prefix ? esc(k.prefix) + "…" : `hash ${esc(k.id)}…`}</td>
-        <td class="muted">${k.created_at ? new Date(k.created_at).toLocaleString() : "–"}</td>
-        <td><div class="row-actions"><button class="btn sm danger" data-revoke="${esc(k.id)}" data-project="${esc(p.id)}" data-name="${esc(k.name)}">Revoke</button></div></td></tr>`).join("");
-      html += `<div class="card" data-project-card="${esc(p.id)}">
-        <div class="card-h"><h2>Project <span class="mono">${esc(p.id)}</span></h2>
-          <span class="muted">${meter(p.spend.project_monthly)}</span>
-          <div class="toolbar"><button class="btn sm danger" data-delete-project="${esc(p.id)}">Delete project</button></div></div>
-        <div class="card-b">
-          <h2 style="margin-bottom:8px">Virtual keys</h2>
-          <p class="help">Give a key to an agent instead of your real OpenAI or Anthropic key. Calls made with it are counted against this project.</p>
-          <div class="table-wrap" style="border:1px solid var(--line);border-radius:10px;margin-bottom:10px">
-            <table>${p.keys.length ? `<thead><tr><th>Name</th><th>Key</th><th>Created</th><th></th></tr></thead><tbody>${keys}</tbody>` : `<tr><td class="empty">No keys yet: agents can't use this project.</td></tr>`}</table>
-          </div>
-          <form class="inline" data-new-key="${esc(p.id)}">
-            <input type="text" required maxlength="100" placeholder="Key name, e.g. support-bot prod" aria-label="New key name" style="min-width:240px">
-            <button class="btn" type="submit">Create key</button>
-          </form>
-          <h2 style="margin:20px 0 8px">Guardrail pack</h2>
-          <form class="inline" data-project-pack="${esc(p.id)}">
-            <select aria-label="Guardrail pack for ${esc(p.id)}">${S.packs.map(k => `<option value="${esc(k.id)}" ${p.pack === k.id ? "selected" : ""}>${esc(k.title)}</option>`).join("")}</select>
-            <button class="btn sm" type="submit">${p.pack ? "Re-apply" : "Apply"} in Check mode</button>
-            <span class="muted">${p.pack ? `Current: ${esc(S.packs.find(k => k.id === p.pack)?.title || p.pack)}` : "No pack applied"}</span>
-          </form>
-          <h2 style="margin:20px 0 8px">Agent logs</h2>
-          <p class="help">Every prompt, tool call and model call of this project's agents is logged with its outcome, size and timing (Logs page and each run's trace). Off: no prompt or tool text is kept.</p>
-          <label class="inline"><input type="checkbox" data-capture="${esc(p.id)}" ${p.capture_content ? "checked" : ""}> Keep a redacted copy of prompts, tool inputs and outputs <span class="muted">(API keys, tokens, passwords and emails masked; first 2,000 characters; kept 7 days)</span></label>
-          <h2 style="margin:20px 0 8px">Limits for this project</h2>
-          ${budgetEditor("project", p.budgets, org.budgets, POLICIES.slice(1))}
-          <div class="inline" style="justify-content:flex-end;margin-top:12px"><button class="btn primary sm" data-save-project="${esc(p.id)}">Save project limits</button></div>
-        </div></div>`;
-    }
-    html += `<div class="card"><div class="card-h"><h2>New project in ${esc(org.id)}</h2></div>
-      <div class="card-b"><form class="inline" data-new-project>
-        <input type="text" required pattern="[A-Za-z0-9._\\-]{1,128}" placeholder="project id, e.g. research-agent" aria-label="New project id" style="min-width:240px">
-        <button class="btn" type="submit">Create project</button></form></div></div>`;
-  }
-  if (S.me?.instance_admin) html += `<div class="card"><div class="card-h"><h2>New org${S.overview.orgs.length ? paidTag("multiple_orgs") : ""}</h2></div>
+      <div class="card-b settings-body">
+        <p class="help" style="margin:0">Defaults for every project in the org; a project can set its own. Leave a limit blank for no limit.</p>
+        ${MODE_LEGEND}
+        ${budgetEditor("org", org.budgets, null, POLICIES)}
+        <div class="settings-save"><button class="btn primary sm" data-save-org>Save org limits</button></div>
+      </div></div>
+    ${can("owner") ? `<div class="card"><div class="card-h"><h2>Danger zone</h2>
+      <div class="toolbar"><button class="btn sm danger" data-delete-org>Delete org ${esc(org.id)}</button></div></div>
+      <div class="card-b"><p class="help" style="margin:0">Deleting an org or project revokes all of its keys at once. Recorded spend stays in Redis until it expires.</p></div></div>` : ""}`;
+}
+
+function orgsView() {
+  return `<div class="card"><div class="card-h"><h2>New org${S.overview.orgs.length ? paidTag("multiple_orgs") : ""}</h2></div>
     <div class="card-b"><p class="help">An org has its own monthly budget and projects. It uses the proxy's provider keys.</p><form class="inline" data-new-org>
       <input type="text" required pattern="[A-Za-z0-9._\\-]{1,128}" placeholder="org id, e.g. acme" aria-label="New org id" style="min-width:240px">
       <button class="btn" type="submit">Create org</button></form></div></div>`;
-  if (org && can("owner")) {
-    html += `<div class="card"><div class="card-h"><h2>Danger zone</h2>
-      <div class="toolbar"><button class="btn sm danger" data-delete-org>Delete org ${esc(org.id)}</button></div></div>
-      <div class="card-b"><p class="help" style="margin:0">Deleting an org or project revokes all of its keys at once. Recorded spend stays in Redis until it expires.</p></div></div>`;
-  }
+}
+
+function renderSettings() {
+  const org = currentOrg();
+  const tabs = settingsTabs(org);
+  let tab = store("local", SETTINGS_TAB_KEY);
+  if (!tabs.some(([id]) => id === tab)) tab = tabs[0]?.[0];
+  let html = tabs.length > 1 ? `<div class="seg settings-tabs" role="tablist" aria-label="Keys and limits sections">${tabs.map(([id, label, n]) =>
+    `<button role="tab" data-settings-tab="${id}" aria-pressed="${id === tab}" aria-selected="${id === tab}">${esc(label)}${n ? ` <span class="seg-n">${n}</span>` : ""}</button>`).join("")}</div>` : "";
+  if (tab === "projects") html += projectsView(org);
+  else if (tab === "org") html += orgView(org);
+  else if (tab === "providers") html += providerKeysCard(org);
+  else if (tab === "alerts") html += alertsCard();
+  else if (tab === "license") html += licenseCard();
+  else if (tab === "orgs") html += orgsView();
   if (!S.overview.managed) {
     html = `<div class="card"><div class="card-b"><b>Read-only.</b> This proxy has not loaded the managed config, so edits are disabled.</div></div>` + html;
   }
@@ -157,7 +221,7 @@ function renderSettings() {
   }
   if (S.alertsNotice) { html = S.alertsNotice + html; }
   $("#settings").innerHTML = html;
-  if (org && !can("admin")) $$("#settings input, #settings select, #settings button").forEach(el => { el.disabled = true; });
+  if (org && !can("admin")) $$("#settings input, #settings select, #settings button:not([data-settings-tab])").forEach(el => { el.disabled = true; });
 }
 // A mode only means something once a limit is set.
 $("#settings").addEventListener("input", e => {
@@ -225,6 +289,18 @@ $("#settings").addEventListener("focusout", () => { setTimeout(() => { S.editing
 $("#settings").addEventListener("click", async e => {
   const org = encodeURIComponent(S.org);
   const t = e.target;
+  if (t.closest("[data-settings-tab]")) {
+    store("local", SETTINGS_TAB_KEY, t.closest("[data-settings-tab]").dataset.settingsTab);
+    S.editing = false;
+    renderSettings();
+    return;
+  }
+  if (t.closest("[data-pick-project]") && !t.closest("button, a, input, select")) {
+    store("local", SETTINGS_PROJECT_KEY, t.closest("[data-pick-project]").dataset.pickProject);
+    S.editing = false;
+    renderSettings();
+    return;
+  }
   if (t.closest("[data-save-org]")) {
     const card = t.closest("[data-org-card]");
     await mutate(() => api(`/admin/orgs/${org}`, { method: "PUT", body: { fail_mode: $("[data-f=fail_mode]", card).value, budgets: readBudgets(card) } }), "Org limits saved");
@@ -296,3 +372,7 @@ $("#key-copy").addEventListener("click", async () => {
   catch (_) { toast("Copy failed: select the key and copy it manually", true); }
 });
 $("#key-close").addEventListener("click", () => { $("#key-value").textContent = ""; $("#key-dialog").close(); });
+$("#settings").addEventListener("keydown", e => {
+  const row = e.target.closest?.("[data-pick-project]");
+  if (row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); row.click(); }
+});

@@ -25,6 +25,7 @@ function statusBadge(s, level) {
   if (level === "warn") return `<span class="badge b-warn">warn</span>`;
   if (s === "ok") return `<span class="badge b-ok">ok</span>`;
   if (s === "running") return `<span class="badge b-info">running</span>`;
+  if (s === "no_result") return `<span class="muted" title="No result arrived for this call. If this happens for every call, the agent's after-tool hook is missing: re-run its connect script.">no result</span>`;
   return '<span class="muted">–</span>';
 }
 function ms(v) {
@@ -78,6 +79,9 @@ function pairTools(steps) {
       } else out.push(s);
     } else out.push(s);
   }
+  // A call still open after this long will not get a result (or its result was not sent).
+  const stale = Date.now() - 10 * 60 * 1000;
+  for (const row of out) if (row.status === "running" && new Date(row.ts) < stale) row.status = "no_result";
   return out;
 }
 

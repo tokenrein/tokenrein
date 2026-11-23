@@ -8,6 +8,7 @@ const PAID = {
   pagerduty: "PagerDuty alerts",
   cursor_import: "Cursor usage import",
   multiple_orgs: "More than one org",
+  suggestions: "Fix suggestions from a model",
 };
 const PLAN_NAMES = { team: "Team", enterprise: "Enterprise" };
 
@@ -66,6 +67,7 @@ function licenseCard() {
     : `<span class="${used > max ? "err" : ""}">${fmt(used)}</span> <span class="muted">of ${fmt(max)}</span>`;
   const features = Object.entries(PAID).map(([id, label]) => {
     const f = l.features[id];
+    if (!f) return "";
     const tag = f.allowed ? '<span class="badge b-ok">On</span>' : `<span class="badge b-muted">${PLAN_NAMES[f.plan]}</span>`;
     return `<tr><td>${esc(label)}</td><td>${tag}</td></tr>`;
   }).join("");
