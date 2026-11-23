@@ -1257,17 +1257,21 @@ struct InsightsQuery {
 }
 
 /// The Insights report for `org` over the last `days` days, or the error response.
-async fn org_report(st: &Arc<AppState>, org: &str, days: Option<u32>) -> Result<Value, Response> {
+async fn org_report(
+    st: &Arc<AppState>,
+    org: &str,
+    days: Option<u32>,
+) -> Result<Value, Box<Response>> {
     let Some(history) = st.history.clone() else {
-        return Err(err(
+        return Err(Box::new(err(
             StatusCode::CONFLICT,
             "insights need the usage history: set TOKENREIN_HISTORY_DIR (history.dir), or \
              history.enabled in the Helm chart",
-        ));
+        )));
     };
     let days = days.unwrap_or(7).clamp(1, history.retention_days);
     if days > license::FREE_HISTORY_DAYS {
-        license::require(st, Feature::LongHistory)?;
+        license::require(st, Feature::LongHistory).map_err(Box::new)?;
     }
     let to = Utc::now();
     let from = to - chrono::Duration::days(i64::from(days));
@@ -1296,8 +1300,8 @@ async fn org_report(st: &Arc<AppState>, org: &str, days: Option<u32>) -> Result<
             report["steps_history"] = json!(st.step_history.is_some());
             Ok(report)
         }
-        Ok(Err(e)) => Err(unavailable(e)),
-        Err(e) => Err(unavailable(anyhow::anyhow!(e))),
+        Ok(Err(e)) => Err(Box::new(unavailable(e))),
+        Err(e) => Err(Box::new(unavailable(anyhow::anyhow!(e)))),
     }
 }
 
@@ -1314,7 +1318,7 @@ async fn insights(
     }
     let mut report = match org_report(&st, &org, q.days).await {
         Ok(r) => r,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     // Whether this person can ask a model about a finding, and if not, why.
     let endpoint = crate::analysis::endpoint(&st.rt());
@@ -1373,7 +1377,7 @@ async fn insights_suggest(
     };
     let report = match org_report(&st, &org, body.days).await {
         Ok(r) => r,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let same = |v: &Value, want: &Option<String>| v.as_str() == want.as_deref();
     let Some(finding) = report["findings"].as_array().and_then(|fs| {
