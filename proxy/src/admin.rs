@@ -77,6 +77,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/admin/orgs/{org}/review", get(review))
         .route("/admin/orgs/{org}/spend", get(spend))
         .route("/admin/orgs/{org}/insights", get(insights))
+        .route("/admin/orgs/{org}/insights/suggest", post(insights_suggest))
         .route("/admin/orgs/{org}/runs/{run}/timeline", get(run_timeline))
         .route("/admin/orgs", post(create_org))
         .route("/admin/orgs/{org}", put(update_org).delete(delete_org))
@@ -1255,6 +1256,51 @@ struct InsightsQuery {
     days: Option<u32>,
 }
 
+/// The Insights report for `org` over the last `days` days, or the error response.
+async fn org_report(st: &Arc<AppState>, org: &str, days: Option<u32>) -> Result<Value, Response> {
+    let Some(history) = st.history.clone() else {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "insights need the usage history: set TOKENREIN_HISTORY_DIR (history.dir), or \
+             history.enabled in the Helm chart",
+        ));
+    };
+    let days = days.unwrap_or(7).clamp(1, history.retention_days);
+    if days > license::FREE_HISTORY_DAYS {
+        license::require(st, Feature::LongHistory)?;
+    }
+    let to = Utc::now();
+    let from = to - chrono::Duration::days(i64::from(days));
+    let steps = st.step_history.clone();
+    let rt = st.rt();
+    let o = org.to_string();
+    let (from_us, to_us) = (from.timestamp_micros(), to.timestamp_micros());
+    let tool_sets = crate::prompts::tool_usage(st, org, days).await;
+    let result = tokio::task::spawn_blocking(move || {
+        crate::insights::report(
+            &history,
+            steps.as_deref(),
+            &rt.prices,
+            &tool_sets,
+            &o,
+            from_us,
+            to_us,
+        )
+    })
+    .await;
+    match result {
+        Ok(Ok(mut report)) => {
+            report["days"] = json!(days);
+            report["from"] = json!(iso_micros(from_us));
+            report["to"] = json!(iso_micros(to_us));
+            report["steps_history"] = json!(st.step_history.is_some());
+            Ok(report)
+        }
+        Ok(Err(e)) => Err(unavailable(e)),
+        Err(e) => Err(unavailable(anyhow::anyhow!(e))),
+    }
+}
+
 /// Where the org's agents waste tokens: cache health, tool health and what to fix first, over
 /// the last `days` days (7 by default). Needs the usage history.
 async fn insights(
@@ -1266,39 +1312,114 @@ async fn insights(
     if let Err(r) = admin.org(&st, &org, Role::Viewer) {
         return r;
     }
-    let Some(history) = st.history.clone() else {
-        return err(
-            StatusCode::CONFLICT,
-            "insights need the usage history: set TOKENREIN_HISTORY_DIR (history.dir), or \
-             history.enabled in the Helm chart",
-        );
+    let mut report = match org_report(&st, &org, q.days).await {
+        Ok(r) => r,
+        Err(r) => return r,
     };
-    let days = q.days.unwrap_or(7).clamp(1, history.retention_days);
-    if days > license::FREE_HISTORY_DAYS
-        && let Err(r) = license::require(&st, Feature::LongHistory)
-    {
+    // Whether this person can ask a model about a finding, and if not, why.
+    let endpoint = crate::analysis::endpoint(&st.rt());
+    let unavailable = if endpoint.is_none() {
+        Some("not_configured")
+    } else if !license::allows(&st, Feature::Suggestions) {
+        Some("license")
+    } else if admin.org(&st, &org, Role::Admin).is_err() {
+        Some("role")
+    } else {
+        None
+    };
+    report["suggestions"] = json!({
+        "available": unavailable.is_none(),
+        "reason": unavailable,
+        "endpoint": endpoint.as_ref().map(|e| e.host()),
+        "model": endpoint.as_ref().map(|e| e.model.clone()),
+    });
+    Json(report).into_response()
+}
+
+#[derive(Deserialize)]
+struct SuggestBody {
+    rule: String,
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    tool: Option<String>,
+    #[serde(default)]
+    days: Option<u32>,
+}
+
+/// Ask the `[analysis]` model how to fix one finding of the Insights report. Tokenrein finds the
+/// finding again and builds what is sent from its own metrics (never prompts or tool text);
+/// the answer comes back with exactly what was sent.
+async fn insights_suggest(
+    State(st): State<Arc<AppState>>,
+    Path(org): Path<String>,
+    admin: Admin,
+    Json(body): Json<SuggestBody>,
+) -> Response {
+    if let Err(r) = admin.org(&st, &org, Role::Admin) {
         return r;
     }
-    let to = Utc::now();
-    let from = to - chrono::Duration::days(i64::from(days));
-    let steps = st.step_history.clone();
-    let rt = st.rt();
-    let o = org.clone();
-    let (from_us, to_us) = (from.timestamp_micros(), to.timestamp_micros());
-    let result = tokio::task::spawn_blocking(move || {
-        crate::insights::report(&history, steps.as_deref(), &rt.prices, &o, from_us, to_us)
-    })
+    if let Err(r) = license::require(&st, Feature::Suggestions) {
+        return r;
+    }
+    let Some(endpoint) = crate::analysis::endpoint(&st.rt()) else {
+        return err(
+            StatusCode::CONFLICT,
+            "suggestions need a model: set [analysis] base_url and model (or \
+             TOKENREIN_ANALYSIS_BASE_URL and TOKENREIN_ANALYSIS_MODEL)",
+        );
+    };
+    let report = match org_report(&st, &org, body.days).await {
+        Ok(r) => r,
+        Err(r) => return r,
+    };
+    let same = |v: &Value, want: &Option<String>| v.as_str() == want.as_deref();
+    let Some(finding) = report["findings"].as_array().and_then(|fs| {
+        fs.iter().find(|f| {
+            f["rule"] == body.rule.as_str()
+                && same(&f["agent"], &body.agent)
+                && same(&f["model"], &body.model)
+                && same(&f["tool"], &body.tool)
+        })
+    }) else {
+        return err(
+            StatusCode::NOT_FOUND,
+            "that finding is not in the report any more; reload the page",
+        );
+    };
+    let package = crate::analysis::package(&report, finding);
+    let result = crate::analysis::suggest(&st, &endpoint, &package).await;
+    let (status, detail) = match &result {
+        Ok(s) => ("ok", json!({"cost_micros": s.cost_micros})),
+        Err(e) => ("failed", json!({"error": e.to_string()})),
+    };
+    audit::record(
+        &st,
+        admin.entry(
+            "insights.suggest",
+            &org,
+            &body.rule,
+            json!({"endpoint": endpoint.host(), "model": endpoint.model, "status": status, "detail": detail}),
+        ),
+    )
     .await;
     match result {
-        Ok(Ok(mut report)) => {
-            report["days"] = json!(days);
-            report["from"] = json!(iso_micros(from_us));
-            report["to"] = json!(iso_micros(to_us));
-            report["steps_history"] = json!(st.step_history.is_some());
-            Json(report).into_response()
+        Ok(s) => Json(json!({
+            "suggestion": s.text,
+            "model": endpoint.model,
+            "endpoint": endpoint.host(),
+            "cost_micros": s.cost_micros,
+            "spent_micros": s.spent_micros,
+            "budget_micros": endpoint.budget_micros,
+            "sent": package,
+        }))
+        .into_response(),
+        Err(e @ crate::analysis::Error::Budget { .. }) => {
+            err(StatusCode::TOO_MANY_REQUESTS, &e.to_string())
         }
-        Ok(Err(e)) => unavailable(e),
-        Err(e) => unavailable(anyhow::anyhow!(e)),
+        Err(e) => err(StatusCode::BAD_GATEWAY, &e.to_string()),
     }
 }
 

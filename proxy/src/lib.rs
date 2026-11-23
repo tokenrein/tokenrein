@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod alerts;
+pub mod analysis;
 pub mod approvals;
 pub mod audit;
 pub mod auth;
@@ -16,6 +17,7 @@ pub mod loops;
 pub mod metrics;
 pub mod packs;
 pub mod pricing;
+pub mod prompts;
 pub mod providers;
 pub mod proxy;
 pub mod secrets;

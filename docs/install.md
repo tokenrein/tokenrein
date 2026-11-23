@@ -98,6 +98,36 @@ works with any tool that reads Parquet (DuckDB, Spark, pandas).
 `RUST_LOG` sets the log level (`info` by default). Logs are JSON on stderr; stdout carries one
 JSON event per request for an analytics pipeline.
 
+### Fix suggestions
+
+Each Insights finding can get a **Suggest a fix** button: Tokenrein sends the finding and its
+metrics to a model you choose and shows the plan it writes. Any OpenAI-compatible endpoint works:
+[LiteLLM](https://docs.litellm.ai/), a vLLM or Ollama server, OpenAI itself, or your company's
+gateway.
+
+```toml
+[analysis]
+base_url = "http://litellm:4000/v1"   # up to and including /v1
+model = "claude-sonnet-5-5"           # the name your endpoint expects
+api_key_env = "TOKENREIN_ANALYSIS_API_KEY"
+monthly_budget_usd = 20               # suggestions stop for the month at this spend
+```
+
+Or set `TOKENREIN_ANALYSIS_BASE_URL`, `TOKENREIN_ANALYSIS_MODEL` and
+`TOKENREIN_ANALYSIS_API_KEY`. Part of the Team plan; org admins can ask.
+
+- **What is sent:** the finding and Tokenrein's metrics about it (counts, rates, token totals,
+  costs), never prompts, tool input or tool output. Each answer shows exactly what was sent, and
+  every request is in the audit log.
+- **Use a key of its own,** not one your agents use, so suggestions never bill an agent's account
+  or count against its limits. Tokenrein caps the spend itself, from the cost LiteLLM reports or
+  from its own prices.
+- **Suggestions are advice.** Nothing changes until someone acts on one. Check the finding's
+  metrics afterwards to see whether the fix worked.
+- **If you run LiteLLM for this,** pin its image by digest rather than `latest`, give it only the
+  one provider key it needs, and keep it off the internet: LiteLLM releases were compromised twice
+  in 2026 (versions 1.82.7-1.82.8 and 1.107.0) with code that stole stored provider keys.
+
 ## Docker Compose
 
 `deploy/docker-compose.yml` runs Tokenrein, Redis 7.4 and Postgres 17 on one host, with

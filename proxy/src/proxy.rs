@@ -173,6 +173,9 @@ struct Ctx {
     check_exceeded: Vec<String>,
     degraded: bool,
     pre_upstream_us: u64,
+    anatomy: Arc<crate::prompts::Anatomy>,
+    /// The request event's `prompt` field, once the call has answered.
+    prompt: Option<Value>,
 }
 
 struct Outcome<'a> {
@@ -414,6 +417,8 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         check_exceeded: Vec::new(),
         degraded,
         pre_upstream_us: 0,
+        anatomy: Arc::new(prepared.anatomy.clone()),
+        prompt: None,
     };
     if !price_known {
         tracing::warn!(request_id, model = %ctx.model, "unknown model price; reserving at the provider's most expensive rate");
@@ -679,7 +684,7 @@ pub(crate) fn build_scopes(keys: &Keys, b: &Budgets, input: &ScopeInput) -> Vec<
 
 async fn forward(
     st: Arc<AppState>,
-    ctx: Ctx,
+    mut ctx: Ctx,
     url: String,
     headers: HeaderMap,
     body: Vec<u8>,
@@ -775,6 +780,9 @@ async fn forward(
         (0, None, true)
     };
     settle(&st, &ctx, actual).await;
+    if status.is_success() {
+        ctx.prompt = Some(observe_prompt(&st, &ctx).await);
+    }
     emit(
         &st,
         &ctx,
@@ -801,7 +809,7 @@ async fn forward(
 
 async fn stream_through(
     st: Arc<AppState>,
-    ctx: Ctx,
+    mut ctx: Ctx,
     resp: reqwest::Response,
     status: StatusCode,
     headers: HeaderMap,
@@ -864,6 +872,9 @@ async fn stream_through(
     }
     let actual = ctx.price.usage_cost(&usage);
     settle(&st, &ctx, actual).await;
+    if status.is_success() {
+        ctx.prompt = Some(observe_prompt(&st, &ctx).await);
+    }
     emit(
         &st,
         &ctx,
@@ -896,6 +907,19 @@ async fn remember_context(st: &AppState, ctx: &Ctx, response_id: &str, u: &Usage
     {
         tracing::warn!(request_id = %ctx.request_id, error = %e, "could not store response context size");
     }
+}
+
+async fn observe_prompt(st: &AppState, ctx: &Ctx) -> Value {
+    let seen = crate::prompts::Seen {
+        org: &ctx.org,
+        project: &ctx.project,
+        agent: &ctx.agent,
+        user: ctx.user.as_deref(),
+        run: &ctx.run_id,
+        parent: ctx.parent_run_id.as_deref(),
+        model: &ctx.model,
+    };
+    crate::prompts::observe(st, &seen, &ctx.anatomy).await
 }
 
 async fn settle(st: &AppState, ctx: &Ctx, actual: u64) {
@@ -965,6 +989,7 @@ fn emit(st: &AppState, ctx: &Ctx, o: &Outcome) {
         "upstream_ms": o.upstream_ms,
         "client_disconnected": o.client_disconnected,
         "source": "proxy",
+        "prompt": ctx.prompt,
     });
     println!("{event}");
     if o.blocked_scope.is_none() {

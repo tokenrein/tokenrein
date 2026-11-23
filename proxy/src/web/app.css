@@ -377,3 +377,6 @@ table.trace .wf-h, table.trace .wf-cell { width: 28%; min-width: 180px; }
 .insight-impact { margin-left: auto; white-space: nowrap; }
 .insight p { margin: 6px 0 0; }
 .insight-fix { color: var(--text-2); }
+.suggestion { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--info-bg); }
+.suggestion ul { margin: 6px 0; padding-left: 20px; }
+.suggestion details { margin-top: 6px; }

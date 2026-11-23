@@ -89,16 +89,19 @@ pub enum Feature {
     Pagerduty,
     CursorImport,
     MultipleOrgs,
+    /// Fix suggestions from a model of your choice (`[analysis]`).
+    Suggestions,
 }
 
 impl Feature {
-    pub const ALL: [Feature; 6] = [
+    pub const ALL: [Feature; 7] = [
         Feature::Sso,
         Feature::AuditExport,
         Feature::LongHistory,
         Feature::Pagerduty,
         Feature::CursorImport,
         Feature::MultipleOrgs,
+        Feature::Suggestions,
     ];
 
     /// The cheapest plan that includes the feature.
@@ -117,6 +120,7 @@ impl Feature {
             Feature::Pagerduty => "pagerduty",
             Feature::CursorImport => "cursor_import",
             Feature::MultipleOrgs => "multiple_orgs",
+            Feature::Suggestions => "suggestions",
         }
     }
 
@@ -128,6 +132,7 @@ impl Feature {
             Feature::Pagerduty => "PagerDuty alerts",
             Feature::CursorImport => "The Cursor usage import",
             Feature::MultipleOrgs => "More than one org",
+            Feature::Suggestions => "Fix suggestions from a model",
         }
     }
 }

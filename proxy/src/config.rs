@@ -277,6 +277,46 @@ impl Default for HistoryConfig {
     }
 }
 
+/// A model Tokenrein asks for fix suggestions (`[analysis]`): any OpenAI-compatible endpoint, such
+/// as LiteLLM, a vLLM or Ollama server, OpenAI itself or a company gateway. Off unless `base_url`
+/// and `model` are set. Only metrics are sent, never prompts or tool text.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnalysisConfig {
+    /// The endpoint's base URL, up to and including `/v1`.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// The model name the endpoint expects.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Environment variable with the endpoint's API key; a separate key from the ones agents
+    /// use, so suggestions never bill an agent's account.
+    #[serde(default = "default_analysis_key_env")]
+    pub api_key_env: String,
+    /// Most spent on suggestions per calendar month, across all orgs (default $20).
+    #[serde(default = "default_analysis_budget")]
+    pub monthly_budget_usd: f64,
+}
+
+impl Default for AnalysisConfig {
+    fn default() -> Self {
+        Self {
+            base_url: None,
+            model: None,
+            api_key_env: default_analysis_key_env(),
+            monthly_budget_usd: default_analysis_budget(),
+        }
+    }
+}
+
+fn default_analysis_key_env() -> String {
+    "TOKENREIN_ANALYSIS_API_KEY".into()
+}
+
+fn default_analysis_budget() -> f64 {
+    20.0
+}
+
 fn default_history_retention_days() -> u32 {
     400
 }
@@ -481,6 +521,8 @@ pub struct Config {
     #[serde(default)]
     pub history: HistoryConfig,
     #[serde(default)]
+    pub analysis: AnalysisConfig,
+    #[serde(default)]
     pub auth: AuthConfig,
     #[serde(default)]
     pub providers: ProvidersConfig,
@@ -503,6 +545,8 @@ pub const ENV_OVERRIDES: &[(&str, &str)] = &[
     ("TOKENREIN_PROXY_URL", "auth.proxy_url"),
     ("TOKENREIN_HISTORY_DIR", "history.dir"),
     ("TOKENREIN_HISTORY_RETENTION_DAYS", "history.retention_days"),
+    ("TOKENREIN_ANALYSIS_BASE_URL", "analysis.base_url"),
+    ("TOKENREIN_ANALYSIS_MODEL", "analysis.model"),
     (
         "TOKENREIN_DATABASE_MAX_CONNECTIONS",
         "database.max_connections",
@@ -530,6 +574,12 @@ impl Config {
         }
         if let Some(v) = get("TOKENREIN_HISTORY_DIR") {
             self.history.dir = Some(v.trim().to_string());
+        }
+        if let Some(v) = get("TOKENREIN_ANALYSIS_BASE_URL") {
+            self.analysis.base_url = Some(v.trim().trim_end_matches('/').to_string());
+        }
+        if let Some(v) = get("TOKENREIN_ANALYSIS_MODEL") {
+            self.analysis.model = Some(v.trim().to_string());
         }
         if let Some(n) = get("TOKENREIN_HISTORY_RETENTION_DAYS").and_then(|v| v.trim().parse().ok())
         {
@@ -650,6 +700,19 @@ impl Resolved {
         }
         if !(1..=3600).contains(&cfg.history.flush_secs) {
             bail!("history.flush_secs must be 1-3600");
+        }
+        if let Some(u) = cfg
+            .analysis
+            .base_url
+            .as_deref()
+            .filter(|u| !u.trim().is_empty())
+            && !(u.starts_with("https://") || u.starts_with("http://"))
+        {
+            bail!("analysis.base_url must start with https:// or http://");
+        }
+        let budget = cfg.analysis.monthly_budget_usd;
+        if !(budget.is_finite() && budget >= 0.0) {
+            bail!("analysis.monthly_budget_usd must be zero or positive");
         }
         let mut keys = HashMap::new();
         let mut org_ids = HashSet::new();

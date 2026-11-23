@@ -29,16 +29,51 @@ function findingImpact(f) {
   return "";
 }
 
-function findingCard(f) {
+// Suggestions already asked for, kept across refreshes: finding key -> {loading, error, data}.
+const SUGGESTIONS = new Map();
+const findingKey = f => [f.rule, f.agent || "", f.model || "", f.tool || ""].join("|");
+
+// Just enough Markdown for a model's answer: headings, bullets, bold and code, all escaped first.
+function miniMarkdown(text) {
+  const inline = t => esc(t).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  const out = [];
+  let list = false;
+  for (const raw of String(text).split("\n")) {
+    const line = raw.trimEnd();
+    const bullet = line.match(/^\s*(?:[-*]|\d+[.)])\s+(.*)$/);
+    if (bullet) { if (!list) { out.push("<ul>"); list = true; } out.push(`<li>${inline(bullet[1])}</li>`); continue; }
+    if (list) { out.push("</ul>"); list = false; }
+    const heading = line.match(/^#{1,6}\s+(.*)$/);
+    if (heading) out.push(`<p><b>${inline(heading[1])}</b></p>`);
+    else if (line.trim()) out.push(`<p>${inline(line)}</p>`);
+  }
+  if (list) out.push("</ul>");
+  return out.join("");
+}
+
+function suggestionBlock(f, can) {
+  const s = SUGGESTIONS.get(findingKey(f));
+  if (!can && !s) return "";
+  if (!s) return `<div class="row-actions" style="margin-top:8px"><button class="btn sm" data-suggest="${esc(findingKey(f))}">Suggest a fix</button></div>`;
+  if (s.loading) return `<p class="muted" style="margin-top:8px">Asking ${esc(S.insights?.suggestions?.model || "the model")}…</p>`;
+  if (s.error) return `<p class="err" style="margin-top:8px">${esc(s.error)}</p>${can ? `<div class="row-actions"><button class="btn sm" data-suggest="${esc(findingKey(f))}">Try again</button></div>` : ""}`;
+  const d = s.data;
+  return `<div class="suggestion">${miniMarkdown(d.suggestion)}
+    <p class="muted">From ${esc(d.model)} at ${esc(d.endpoint)} · ${usd(d.cost_micros)} · ${usd(d.spent_micros)} of ${usd(d.budget_micros)} this month. Advice only: nothing was changed.</p>
+    <details><summary class="muted">What was sent</summary><pre class="snip">${esc(JSON.stringify(d.sent, null, 2))}</pre></details></div>`;
+}
+
+function findingCard(f, can = false) {
   const scope = [f.agent && `agent <span class="mono">${esc(f.agent)}</span>`, f.model && `model <span class="mono">${esc(f.model)}</span>`,
     f.tool && `tool <span class="mono">${esc(f.tool)}</span>`].filter(Boolean).join(" · ");
-  const area = f.rule.startsWith("tool.") ? "tool" : f.rule.startsWith("cache.") ? "cache" : "cost";
+  const area = f.rule.split(".")[0] || "cost";
   return `<div class="insight ${f.severity === "warning" ? "warn" : ""}">
     <div class="insight-h"><span class="badge ${f.severity === "warning" ? "b-warn" : "b-info"}">${area}</span>
       <b>${esc(f.title)}</b><span class="insight-impact">${findingImpact(f)}</span></div>
     <p>${esc(f.detail)}</p>
     <p class="insight-fix"><b>Fix:</b> ${esc(f.fix)}</p>
     ${scope ? `<p class="muted">${scope}</p>` : ""}
+    ${suggestionBlock(f, can)}
   </div>`;
 }
 
@@ -58,8 +93,9 @@ function renderInsights() {
     ${kpi("Tool calls failing", t.calls ? pct(t.error_rate) : "–", t.calls ? `${tok(t.errors)} of ${tok(t.calls)}` : "none logged")}
     ${kpi("Wasted tool output", t.calls ? tok(t.wasted_tokens) : "–", "tokens")}
   </div>`;
+  const sug = r.suggestions || {};
   const findings = r.findings.length
-    ? r.findings.map(findingCard).join("")
+    ? r.findings.map(f => findingCard(f, !!sug.available)).join("")
     : `<div class="card-b"><b>Nothing to fix.</b> <span class="muted">No cache misses or tool problems worth your time in this window.</span></div>`;
   const causes = r.cache.causes.length ? `<div class="card"><div class="card-h"><h2>Why prompts missed the cache</h2></div>
     <div class="table-wrap"><table><thead><tr><th>Cause</th><th class="num">Calls</th><th class="num">Tokens at full price</th><th class="num">Missed (estimate)</th></tr></thead><tbody>
@@ -85,15 +121,36 @@ function renderInsights() {
     ${r.tools.runs.map(x => `<tr><td><a href="#" class="mono runlink" data-open-run="${esc(x.run)}">${esc(x.run)}</a></td><td>${esc(x.agent || "–")}</td>
       <td class="num">${tok(x.calls)}</td><td class="num">${tok(x.errors)}</td><td class="num">${tok(x.repeats)}</td><td class="num">${tok(x.fail_retries)}</td></tr>`).join("")}
     </tbody></table></div></div>` : "";
+  const sugNote = sug.available ? "" : sug.reason === "not_configured"
+    ? `<p class="help" style="margin-top:12px">Fix suggestions: point Tokenrein at a model of your choice (any OpenAI-compatible endpoint, such as LiteLLM) with <span class="mono">[analysis]</span> in the config, and each finding gets a <b>Suggest a fix</b> button. Only metrics are sent, never prompts or tool text.${paidTag("suggestions")}</p>`
+    : sug.reason === "license" ? `<p class="help" style="margin-top:12px">Fix suggestions from ${esc(sug.model || "your model")} are part of the paid plans.${paidTag("suggestions")}</p>` : "";
   const noTools = !t.calls ? `<p class="help">No tool calls logged in this window. Tool health comes from agent logs: the connect scripts' hooks, or <span class="mono">guard.log</span> / <span class="mono">POST /v1/steps</span> from the SDKs.</p>` : "";
   el.innerHTML = `${kpis}
     <div class="card"><div class="card-h"><h2>What to fix first</h2><span class="status">${r.findings.length} finding${r.findings.length === 1 ? "" : "s"}</span></div>${findings}</div>
-    ${causes}${byModel}${byAgent}${tools}${runs}${noTools}
+    ${sugNote}${causes}${byModel}${byAgent}${tools}${runs}${noTools}
     <p class="help" style="margin-top:16px">Estimates: Tokenrein sees token counts, not prompts, so the prompt two calls of a run share is taken as the smaller of the two. Steps are kept as metadata only (names, outcomes, sizes, timings, input fingerprints).${r.sampled ? " This window has over a million rows, so the report covers the first million." : ""}</p>`;
 }
 
 $("#insights-days").addEventListener("change", e => {
   store("local", INSIGHT_DAYS_KEY, e.target.value);
   if (S.org) loadInsights(encodeURIComponent(S.org), true).then(renderInsights);
+  renderInsights();
+});
+
+$("#insights").addEventListener("click", async e => {
+  const btn = e.target.closest("[data-suggest]");
+  if (!btn || !S.insights || !S.org) return;
+  const key = btn.dataset.suggest;
+  const f = S.insights.findings.find(x => findingKey(x) === key);
+  if (!f) return;
+  SUGGESTIONS.set(key, { loading: true });
+  renderInsights();
+  try {
+    const data = await api(`/admin/orgs/${encodeURIComponent(S.org)}/insights/suggest`, { method: "POST",
+      body: { rule: f.rule, agent: f.agent, model: f.model, tool: f.tool, days: S.insights.days } });
+    SUGGESTIONS.set(key, { data });
+  } catch (err) {
+    SUGGESTIONS.set(key, { error: err.message });
+  }
   renderInsights();
 });

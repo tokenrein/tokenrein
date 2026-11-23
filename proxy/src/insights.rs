@@ -13,7 +13,7 @@
 //! Estimates are labelled as such: Tokenrein sees token counts, not prompts, so the shared prefix
 //! of two calls is taken as the smaller of their prompts.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use anyhow::Result;
 use serde::Serialize;
@@ -47,7 +47,16 @@ pub struct Call {
     pub usage: Usage,
     pub upstream_ms: i64,
     pub cost_micros: i64,
+    /// Proxy only: what changed since the run's previous request ("tools", "system", "params",
+    /// "history", "model"), or empty.
+    pub prompt_change: String,
+    /// Proxy only: full tool definitions sent, and about how many tokens they take.
+    pub tool_defs: Option<u64>,
+    pub tool_def_tokens: Option<u64>,
 }
+
+/// Per agent: the tools it defines and the tools it called (see `crate::prompts::tool_usage`).
+pub type ToolSets = BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)>;
 
 /// One tool call or result, as the tool report needs it.
 #[derive(Debug, Clone, Default)]
@@ -78,11 +87,23 @@ pub enum Cause {
     ModelSwitch,
     /// Sent before the call before it had answered, so its cache entry did not exist yet.
     Parallel,
+    /// Proxy only: the tool definitions changed since the run's previous request.
+    ToolsChanged,
+    /// Proxy only: the system prompt changed.
+    SystemChanged,
+    /// Proxy only: a setting the cache depends on changed (tool choice, thinking, effort).
+    ParamsChanged,
+    /// Proxy only: earlier messages were edited, trimmed or compacted.
+    HistoryEdited,
 }
 
 impl Cause {
-    const ALL: [Cause; 5] = [
+    const ALL: [Cause; 9] = [
         Cause::NotCached,
+        Cause::ToolsChanged,
+        Cause::SystemChanged,
+        Cause::ParamsChanged,
+        Cause::HistoryEdited,
         Cause::PrefixChanged,
         Cause::Expired,
         Cause::ModelSwitch,
@@ -96,6 +117,10 @@ impl Cause {
             Cause::Expired => "expired",
             Cause::ModelSwitch => "model_switch",
             Cause::Parallel => "parallel",
+            Cause::ToolsChanged => "tools_changed",
+            Cause::SystemChanged => "system_changed",
+            Cause::ParamsChanged => "params_changed",
+            Cause::HistoryEdited => "history_edited",
         }
     }
 
@@ -106,6 +131,10 @@ impl Cause {
             Cause::Expired => "The cache expired between calls",
             Cause::ModelSwitch => "Runs switch model",
             Cause::Parallel => "Calls sent in parallel before the cache existed",
+            Cause::ToolsChanged => "The tool list changes within runs",
+            Cause::SystemChanged => "The system prompt changes within runs",
+            Cause::ParamsChanged => "Cache-relevant settings change within runs",
+            Cause::HistoryEdited => "Earlier messages are edited or compacted",
         }
     }
 
@@ -131,6 +160,18 @@ impl Cause {
             }
             (Cause::Parallel, _) => {
                 "A cache entry exists only once the first response has started: send one request on the shared prefix first, then fan out."
+            }
+            (Cause::ToolsChanged, _) => {
+                "Tool definitions come first in the prompt, so any change re-sends everything at full price. Keep the same tools in the same order for the whole run (watch for MCP servers reconnecting); to hide a tool, defer or mask it instead of removing it."
+            }
+            (Cause::SystemChanged, _) => {
+                "Something in the system prompt changes from call to call, often a timestamp, request ID or user detail. Move anything that changes to the end, after the conversation, or into the latest message."
+            }
+            (Cause::ParamsChanged, _) => {
+                "Changing tool_choice, thinking or reasoning effort, or the response format mid-run starts a new cache. Keep them fixed for the run."
+            }
+            (Cause::HistoryEdited, _) => {
+                "Earlier messages change between calls, so everything after the edit is re-sent at full price. Append instead of editing; if you compact or trim the conversation, do it rarely, at a planned point."
             }
         }
     }
@@ -234,10 +275,31 @@ struct Group {
     totals: CacheTotals,
     follow_ups: u64,
     causes: BTreeMap<Cause, CauseTotals>,
+    /// Calls with a known prompt shape (proxy), their tool-definition tokens and prompt tokens.
+    shaped: u64,
+    tool_def_tokens: u64,
+    shaped_prompt_tokens: u64,
+    tool_defs: u64,
+}
+
+impl Group {
+    /// What a prompt token costs this group on average, given how much came from the cache.
+    fn prompt_rate(&self) -> u64 {
+        let (Some(p), t) = (self.price, &self.totals) else {
+            return 0;
+        };
+        if t.prompt_tokens == 0 {
+            return p.input;
+        }
+        let paid = tokens_cost(t.fresh_tokens, p.input)
+            + tokens_cost(t.cache_read_tokens, p.cached_input)
+            + tokens_cost(t.cache_write_tokens, p.cache_write);
+        (paid as u128 * 1_000_000 / t.prompt_tokens as u128) as u64
+    }
 }
 
 /// Cache health over `calls`, which must be ordered by run, then time.
-pub fn cache_report(calls: &[Call], prices: &Catalog) -> Value {
+pub fn cache_report(calls: &[Call], prices: &Catalog, tool_sets: &ToolSets) -> Value {
     let mut totals = CacheTotals::default();
     let mut causes: BTreeMap<Cause, CauseTotals> = BTreeMap::new();
     // (agent, provider, model)
@@ -263,6 +325,12 @@ pub fn cache_report(calls: &[Call], prices: &Catalog) -> Value {
         g.family = provider_family(&c.provider, &c.model).to_string();
         g.price = Some(price);
         g.totals.add(c, saved);
+        if let Some(tok) = c.tool_def_tokens {
+            g.shaped += 1;
+            g.tool_def_tokens += tok;
+            g.shaped_prompt_tokens += c.usage.prompt();
+            g.tool_defs = g.tool_defs.max(c.tool_defs.unwrap_or(0));
+        }
         let b = batch.entry(c.agent.clone()).or_insert((0, 0, false));
         b.0 += 1;
         b.1 += c.cost_micros;
@@ -358,6 +426,75 @@ pub fn cache_report(calls: &[Call], prices: &Catalog) -> Value {
             });
         }
     }
+    // Tool definitions are re-sent with every call; a large share of every prompt adds up.
+    for ((agent, _, model), g) in &groups {
+        if g.shaped < 10 || g.tool_def_tokens == 0 {
+            continue;
+        }
+        let avg = g.tool_def_tokens / g.shaped;
+        let share = g.tool_def_tokens as f64 / g.shaped_prompt_tokens.max(1) as f64;
+        if avg < 5_000 || share < 0.2 {
+            continue;
+        }
+        let cost = tokens_cost(g.tool_def_tokens, g.prompt_rate());
+        findings.push(Finding {
+            rule: "prompt.tool_overhead".into(),
+            severity: if cost >= 1_000_000 { "warning" } else { "info" },
+            title: format!(
+                "Tool definitions are {}% of {agent}'s prompts on {model}",
+                (share * 100.0).round()
+            ),
+            detail: format!(
+                "Up to {} tool definitions, about {} tokens, sent with each of {} calls.",
+                g.tool_defs,
+                fmt_n(avg),
+                fmt_n(g.shaped)
+            ),
+            fix: "Load rarely used tools on demand (defer_loading with tool search), shorten long descriptions and schemas, or give each task only the tools it needs. Keep the definitions first and unchanged so they are read from the cache.".into(),
+            agent: Some(agent.clone()),
+            model: Some(model.clone()),
+            tool: None,
+            impact_micros: cost,
+            impact_tokens: g.tool_def_tokens,
+        });
+    }
+    // Tools an agent is given but never calls only add to every prompt.
+    for (agent, (defined, called)) in tool_sets {
+        let unused: Vec<&String> = defined.difference(called).collect();
+        if defined.len() < 5 || unused.len() < 3 || unused.len() * 10 < defined.len() * 3 {
+            continue;
+        }
+        let share = unused.len() as f64 / defined.len() as f64;
+        let (mut tokens, mut cost) = (0u64, 0u64);
+        for ((a, _, _), g) in groups.iter().filter(|((a, _, _), _)| a == agent) {
+            debug_assert_eq!(a, agent);
+            let t = (g.tool_def_tokens as f64 * share) as u64;
+            tokens += t;
+            cost += tokens_cost(t, g.prompt_rate());
+        }
+        let names: Vec<&str> = unused.iter().take(8).map(|s| s.as_str()).collect();
+        findings.push(Finding {
+            rule: "prompt.unused_tools".into(),
+            severity: if cost >= 1_000_000 { "warning" } else { "info" },
+            title: format!(
+                "{agent} is given {} tools it never calls",
+                unused.len()
+            ),
+            detail: format!(
+                "{} of {} defined tools were not called in the last week: {}{}.",
+                unused.len(),
+                defined.len(),
+                names.join(", "),
+                if unused.len() > names.len() { ", …" } else { "" }
+            ),
+            fix: "Leave these tools out of this agent's requests, or mark them defer_loading so their definitions load only when the model looks for them.".into(),
+            agent: Some(agent.clone()),
+            model: None,
+            tool: None,
+            impact_micros: cost,
+            impact_tokens: tokens,
+        });
+    }
     // Agents with no person behind them and no coding-agent source may not need an answer now.
     for (agent, (n, cost, interactive)) in &batch {
         if *interactive || *n < 50 || *cost < 1_000_000 {
@@ -447,7 +584,13 @@ fn miss(prev: &Call, c: &Call, price: &Price, family: &str) -> Option<(Cause, u6
     } else if family == "anthropic" && c.usage.cached_input == 0 && c.usage.cache_write == 0 {
         Cause::NotCached
     } else {
-        Cause::PrefixChanged
+        match c.prompt_change.as_str() {
+            "tools" => Cause::ToolsChanged,
+            "system" => Cause::SystemChanged,
+            "params" => Cause::ParamsChanged,
+            "history" => Cause::HistoryEdited,
+            _ => Cause::PrefixChanged,
+        }
     };
     Some((cause, missed, tokens_cost(missed, p.input - p.cached_input)))
 }
@@ -524,7 +667,8 @@ fn pair(steps: &[ToolStep]) -> Vec<Paired<'_>> {
         p.duration_ms = p
             .duration_ms
             .or(s.duration_ms)
-            .or(Some((s.ts_us - p.step.ts_us).max(0) / 1_000));
+            // Steps read from a conversation arrive together: no gap, no duration.
+            .or(Some((s.ts_us - p.step.ts_us) / 1_000).filter(|d| *d > 0));
     }
     out
 }
@@ -763,7 +907,8 @@ pub fn read_calls(h: &History, org: &str, from_us: i64, to_us: i64) -> Result<(V
         r#"SELECT run_id, ts_us, COALESCE(provider, ''), model, agent, COALESCE("user", ''),
                   COALESCE(source, ''), input_tokens, cached_input_tokens, cache_write_tokens,
                   COALESCE(cache_write_long_tokens, 0), output_tokens,
-                  COALESCE(reasoning_tokens, 0), upstream_ms, cost_micros
+                  COALESCE(reasoning_tokens, 0), upstream_ms, cost_micros,
+                  COALESCE(prompt_change, ''), tool_defs, tool_def_tokens
            FROM e
            WHERE ts_us >= ? AND ts_us < ? AND decision LIKE 'allowed%'
              AND input_tokens + cached_input_tokens + cache_write_tokens + output_tokens > 0
@@ -789,6 +934,9 @@ pub fn read_calls(h: &History, org: &str, from_us: i64, to_us: i64) -> Result<(V
             },
             upstream_ms: r.get(13)?,
             cost_micros: r.get(14)?,
+            prompt_change: r.get(15)?,
+            tool_defs: r.get::<_, Option<i64>>(16)?.map(n),
+            tool_def_tokens: r.get::<_, Option<i64>>(17)?.map(n),
         })
     })?;
     let mut calls: Vec<Call> = rows.collect::<duckdb::Result<_>>()?;
@@ -813,6 +961,10 @@ pub fn read_tool_steps(
                   size, duration_ms
            FROM e
            WHERE ts_us >= ? AND ts_us < ? AND kind IN ('tool_call', 'tool_result')
+             -- Steps the proxy read from a conversation, unless the agent logs its own.
+             AND NOT (COALESCE(source, '') = 'proxy' AND run_id IN (
+                 SELECT run_id FROM e WHERE kind IN ('tool_call', 'tool_result')
+                   AND COALESCE(source, '') <> 'proxy'))
            ORDER BY run_id, ts_us LIMIT ?"#,
     )?;
     let rows = stmt.query_map(duckdb::params![from_us, to_us, MAX_ROWS as i64 + 1], |r| {
@@ -840,6 +992,7 @@ pub fn report(
     usage: &History,
     steps: Option<&StepHistory>,
     prices: &Catalog,
+    tool_sets: &ToolSets,
     org: &str,
     from_us: i64,
     to_us: i64,
@@ -849,7 +1002,7 @@ pub fn report(
         Some(s) => read_tool_steps(s, org, from_us, to_us)?,
         None => (Vec::new(), false),
     };
-    let cache = cache_report(&calls, prices);
+    let cache = cache_report(&calls, prices, tool_sets);
     let tools = tool_report(&tool_steps);
     let mut findings: Vec<Value> = cache["findings"]
         .as_array()
@@ -897,6 +1050,9 @@ mod tests {
             },
             upstream_ms: 2_000,
             cost_micros: 1_000,
+            prompt_change: String::new(),
+            tool_defs: None,
+            tool_def_tokens: None,
         }
     }
 
@@ -931,7 +1087,7 @@ mod tests {
                 )
             })
             .collect();
-        let r = cache_report(&calls, &Catalog::builtin());
+        let r = cache_report(&calls, &Catalog::builtin(), &ToolSets::new());
         assert!(rules(&r).is_empty(), "{r}");
         assert!(r["totals"]["hit_rate"].as_f64().unwrap() > 0.9);
         assert!(r["totals"]["saved_micros"].as_u64().unwrap() > 0);
@@ -941,11 +1097,12 @@ mod tests {
     #[test]
     fn misses_are_put_down_to_their_cause() {
         let catalog = Catalog::builtin();
+        let none = ToolSets::new();
         // Never cached at all: opt-in caching is off.
         let off: Vec<Call> = (0..10)
             .map(|i| call("r1", i * 10, "claude-opus-5-5", 40_000, 0, 0))
             .collect();
-        let r = cache_report(&off, &catalog);
+        let r = cache_report(&off, &catalog, &none);
         assert_eq!(rules(&r), ["cache.not_cached"]);
         assert_eq!(r["causes"][0]["calls"], 9);
         // 9 follow-ups x 40k shared tokens x ($4 - $0.20) per million.
@@ -954,14 +1111,14 @@ mod tests {
         let churn: Vec<Call> = (0..10)
             .map(|i| call("r1", i * 10, "claude-opus-5-5", 500, 0, 40_000))
             .collect();
-        let found = rules(&cache_report(&churn, &catalog));
+        let found = rules(&cache_report(&churn, &catalog, &none));
         assert!(found.contains(&"cache.unread_writes".into()), "{found:?}");
         assert!(found.contains(&"cache.prefix_changed".into()), "{found:?}");
         // Ten minutes between calls: the cache expired.
         let slow: Vec<Call> = (0..10)
             .map(|i| call("r1", i * 600, "claude-opus-5-5", 500, 0, 40_000))
             .collect();
-        assert!(has_cause(&cache_report(&slow, &catalog), "expired"));
+        assert!(has_cause(&cache_report(&slow, &catalog, &none), "expired"));
         // Alternating models.
         let switch: Vec<Call> = (0..10)
             .map(|i| {
@@ -973,17 +1130,81 @@ mod tests {
                 call("r1", i * 10, m, 40_000, 0, 0)
             })
             .collect();
-        assert!(has_cause(&cache_report(&switch, &catalog), "model_switch"));
+        assert!(has_cause(
+            &cache_report(&switch, &catalog, &none),
+            "model_switch"
+        ));
         // Fired together before the first answer.
         let fan: Vec<Call> = (0..10)
             .map(|_| call("r1", 100, "claude-opus-5-5", 500, 0, 40_000))
             .collect();
-        assert!(has_cause(&cache_report(&fan, &catalog), "parallel"));
+        assert!(has_cause(&cache_report(&fan, &catalog, &none), "parallel"));
         // Calls of different runs are never compared.
         let runs: Vec<Call> = (0..10)
             .map(|i| call(&format!("r{i}"), i, "claude-opus-5-5", 40_000, 0, 0))
             .collect();
-        assert_eq!(cache_report(&runs, &catalog)["totals"]["missed_micros"], 0);
+        assert_eq!(
+            cache_report(&runs, &catalog, &none)["totals"]["missed_micros"],
+            0
+        );
+    }
+
+    #[test]
+    fn proxy_prompt_shapes_name_the_cause_and_tool_costs() {
+        let catalog = Catalog::builtin();
+        // The tool list changes on every call of the run, and takes most of the prompt.
+        let calls: Vec<Call> = (0..12)
+            .map(|i| Call {
+                prompt_change: if i == 0 {
+                    String::new()
+                } else {
+                    "tools".into()
+                },
+                tool_defs: Some(60),
+                tool_def_tokens: Some(30_000),
+                ..call("r1", i * 10, "claude-opus-5-5", 500, 0, 40_000)
+            })
+            .collect();
+        let mut sets = ToolSets::new();
+        let defined: BTreeSet<String> = (0..10).map(|i| format!("tool{i}")).collect();
+        let called: BTreeSet<String> = ["tool0", "tool1"].iter().map(|s| s.to_string()).collect();
+        sets.insert("coder".into(), (defined, called));
+        let r = cache_report(&calls, &catalog, &sets);
+        let found = rules(&r);
+        for want in [
+            "cache.tools_changed",
+            "prompt.tool_overhead",
+            "prompt.unused_tools",
+        ] {
+            assert!(
+                found.contains(&want.to_string()),
+                "{want} missing from {found:?}"
+            );
+        }
+        assert!(
+            !found.contains(&"cache.prefix_changed".to_string()),
+            "{found:?}"
+        );
+        let unused = r["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["rule"] == "prompt.unused_tools")
+            .unwrap();
+        assert!(
+            unused["title"].as_str().unwrap().contains("8 tools"),
+            "{unused}"
+        );
+        // 80% of 12 x 30k definition tokens.
+        assert_eq!(unused["impact_tokens"], 288_000);
+        // Agents that use most of their tools are left alone.
+        let mut sets = ToolSets::new();
+        let all: BTreeSet<String> = (0..10).map(|i| format!("tool{i}")).collect();
+        sets.insert("coder".into(), (all.clone(), all));
+        assert!(
+            !rules(&cache_report(&calls, &catalog, &sets))
+                .contains(&"prompt.unused_tools".to_string())
+        );
     }
 
     #[test]
@@ -994,7 +1215,7 @@ mod tests {
                 ..call("r1", i * 10, "mistral-large", 40_000, 0, 0)
             })
             .collect();
-        assert!(rules(&cache_report(&calls, &Catalog::builtin())).is_empty());
+        assert!(rules(&cache_report(&calls, &Catalog::builtin(), &ToolSets::new())).is_empty());
     }
 
     #[test]
@@ -1006,7 +1227,7 @@ mod tests {
                 ..call(&format!("job{i}"), i, "claude-opus-5-5", 500, 0, 0)
             })
             .collect();
-        let r = cache_report(&calls, &Catalog::builtin());
+        let r = cache_report(&calls, &Catalog::builtin(), &ToolSets::new());
         assert_eq!(rules(&r), ["cost.batch_candidate"]);
         assert_eq!(r["findings"][0]["impact_micros"], 3_000_000);
     }

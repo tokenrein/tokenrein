@@ -568,3 +568,96 @@ async fn headers_named_before_the_rename_still_work() {
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.headers()["x-tr-run-id"], "new-run");
 }
+
+#[tokio::test]
+async fn proxied_requests_record_their_shape_and_tool_results() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    let send = |body: Value| {
+        h.http
+            .post(format!("{}/v1/messages", h.proxy))
+            .header("x-api-key", KEY)
+            .header("x-tr-run-id", "shape-1")
+            .json(&body)
+            .send()
+    };
+    let bash =
+        json!({"name": "Bash", "description": "Run a command", "input_schema": {"type": "object"}});
+    let read =
+        json!({"name": "Read", "description": "Read a file", "input_schema": {"type": "object"}});
+    let first = json!({"model": "claude-haiku-4-5", "max_tokens": 50, "system": "Be careful.",
+        "tools": [bash.clone()], "messages": hi()});
+    assert_eq!(send(first).await.unwrap().status(), 200);
+    // The next turn answers a failed Bash call, and the tool list grew.
+    let second = json!({"model": "claude-haiku-4-5", "max_tokens": 50, "system": "Be careful.",
+    "tools": [bash, read],
+    "messages": [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"cmd": "ls"}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "is_error": true, "content": "denied"}]},
+    ]});
+    assert_eq!(send(second).await.unwrap().status(), 200);
+
+    let mut timeline = Value::Null;
+    for _ in 0..100 {
+        timeline = h
+            .http
+            .get(format!("{}/admin/orgs/acme/runs/shape-1/timeline", h.admin))
+            .bearer_auth(ADMIN_TOKEN)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let events = timeline["events"].as_array().map_or(0, Vec::len);
+        let steps = timeline["steps"].as_array().map_or(0, Vec::len);
+        if events == 2 && steps == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let events = timeline["events"].as_array().unwrap();
+    let prompts: Vec<&Value> = events.iter().map(|e| &e["prompt"]).collect();
+    // Oldest first or newest first, one of them saw the tool list change.
+    assert!(
+        prompts
+            .iter()
+            .any(|p| p["change"] == "tools" && p["tool_defs"] == 2),
+        "{prompts:?}"
+    );
+    assert!(
+        prompts
+            .iter()
+            .any(|p| p["change"].is_null() && p["tool_defs"] == 1),
+        "{prompts:?}"
+    );
+    assert!(prompts.iter().all(|p| p["system_tokens"] == 3));
+    let steps = timeline["steps"].as_array().unwrap();
+    let kinds: Vec<(&str, &str, &str)> = steps
+        .iter()
+        .map(|s| {
+            (
+                s["kind"].as_str().unwrap(),
+                s["name"].as_str().unwrap(),
+                s["source"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert!(kinds.contains(&("tool_call", "Bash", "proxy")), "{kinds:?}");
+    let result = steps.iter().find(|s| s["kind"] == "tool_result").unwrap();
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["size"], 6);
+    // Tool names are kept per agent for the unused-tools check.
+    let sets = tokenrein::prompts::tool_usage(&h.state, "acme", 1).await;
+    let (defined, called) = sets.values().next().unwrap();
+    assert_eq!(
+        defined.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["Bash", "Read"]
+    );
+    assert_eq!(
+        called.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["Bash"]
+    );
+}

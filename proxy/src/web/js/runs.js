@@ -97,7 +97,7 @@ function renderRun() {
     <td><span class="tree-indent" style="width:${(depth.get(r.run_id) || 1) * 16}px">↳</span><a href="#" class="mono runlink" data-open-run="${esc(r.run_id)}">${esc(r.run_id)}</a></td>
     <td>${stateBadge(r.state)}</td><td class="nowrap">${esc(r.agent || "–")}</td>
     <td class="num">${r.requests}</td><td>${meter(r.budget)}</td><td class="muted nowrap">${ago(r.last_seen)}</td></tr>`).join("");
-  const steps = t.steps || [];
+  const steps = dropDerivedSteps(t.steps || []);
   const trace = pairTools([...t.events.map(stepFromRequest), ...steps].sort((a, b) => traceStart(a) - traceStart(b)));
   const toolCalls = trace.filter(x => x.kind === "tool_call").length;
   const problems = trace.filter(x => x.status === "error" || x.status === "blocked");

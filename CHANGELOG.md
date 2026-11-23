@@ -16,6 +16,17 @@ SDKs; the release workflow refuses a tag that does not match all three.
   health shows each tool's failure rate, repeated identical calls, retries of a failing input,
   oversized outputs and timings. Agents with no person attached are flagged as Batch API
   candidates. Rules only; no model is asked. Needs the usage history.
+- Proxy mode reads each request's shape without keeping it: hashes and sizes of the tool
+  definitions, system prompt, cache-relevant settings and conversation. Insights then names what
+  broke the cache (the tool list, the system prompt, a setting or an earlier message changed),
+  shows tool definitions that take much of every prompt, and lists tools an agent is given but
+  never calls. Request events carry it as `prompt`, and the trace shows it on each model call.
+- Proxy-only runs get tool health too: tool calls answered in a proxied conversation are logged as
+  steps (metadata only), unless the run's agent logs its own through hooks or an SDK.
+- Fix suggestions (Team): **Suggest a fix** on an Insights finding asks a model you choose, behind
+  any OpenAI-compatible endpoint such as LiteLLM (`[analysis]`), for a concrete plan. Only the
+  finding and its metrics are sent, never prompts or tool text; each answer shows what was sent,
+  every request is audited, and spend is capped per month (`monthly_budget_usd`, default $20).
 - Weekly insights digest to Slack, Teams and webhooks (alert event `insights`; never PagerDuty).
 - Agent steps are kept in the usage history folder (`<dir>/steps/`) as metadata only: names,
   outcomes, sizes, timings and input fingerprints, never content. Tool health covers the whole

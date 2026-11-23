@@ -31,6 +31,11 @@ async fn serve(router: axum::Router) -> String {
 
 impl H {
     async fn start(with_history: bool) -> Option<Self> {
+        Self::start_with(with_history, "", false).await
+    }
+
+    /// `extra` goes into the config before the orgs; `licensed` adds an Enterprise license.
+    async fn start_with(with_history: bool, extra: &str, licensed: bool) -> Option<Self> {
         let redis = common::RedisServer::start()?;
         let dir = std::env::temp_dir().join(format!(
             "tokenrein-history-it-{}",
@@ -52,6 +57,7 @@ impl H {
             [redis]
             url = "{redis}"
             {section}
+            {extra}
             [[orgs]]
             id = "acme"
             [[orgs.projects]]
@@ -61,8 +67,10 @@ impl H {
             redis = redis.url,
             hash = sha256_hex(KEY),
         );
-        let rt = Resolved::from_toml(&toml, |name| match name {
+        let rt = Resolved::from_toml(&toml, move |name| match name {
             "ADMIN" => Some(ADMIN_TOKEN.into()),
+            "TOKENREIN_ANALYSIS_API_KEY" => Some("sk-analysis".into()),
+            other if licensed => common::licensed(other),
             _ => None,
         })
         .unwrap();
@@ -545,4 +553,132 @@ async fn insights_need_the_history() {
     };
     let (status, body) = h.get("/admin/orgs/acme/insights").await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
+/// What the fake endpoint was sent: the authorization header and the body.
+type Seen = Arc<std::sync::Mutex<Vec<(String, Value)>>>;
+
+/// A stand-in for an OpenAI-compatible endpoint such as LiteLLM: answers, reports a cost, and
+/// keeps what it was sent.
+async fn fake_analysis(
+    axum::extract::State(seen): axum::extract::State<Seen>,
+    headers: axum::http::HeaderMap,
+    axum::Json(body): axum::Json<Value>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let auth = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    seen.lock().unwrap().push((auth, body));
+    (
+        [("x-litellm-response-cost", "0.0042")],
+        axum::Json(json!({
+            "choices": [{"message": {"role": "assistant", "content": "- Return the valid targets in the error."}}],
+            "usage": {"prompt_tokens": 900, "completion_tokens": 120},
+        })),
+    )
+        .into_response()
+}
+
+#[tokio::test]
+async fn suggestions_send_metrics_only_and_are_capped() {
+    let seen: Seen = Arc::default();
+    let endpoint = serve(
+        axum::Router::new()
+            .route("/v1/chat/completions", axum::routing::post(fake_analysis))
+            .with_state(seen.clone()),
+    )
+    .await;
+    let extra = format!(
+        "[analysis]\nbase_url = \"{endpoint}/v1\"\nmodel = \"house-model\"\nmonthly_budget_usd = 0.006"
+    );
+    let Some(h) = H::start_with(true, &extra, true).await else {
+        return;
+    };
+    let mut steps = Vec::new();
+    for i in 0..10 {
+        let id = format!("c{i}");
+        steps.push(
+            json!({"run_id": "r1", "agent": "coder", "kind": "tool_call", "name": "Deploy",
+            "call_id": id, "content": {"target": "prod-secret-cluster"}}),
+        );
+        steps.push(json!({"run_id": "r1", "agent": "coder", "kind": "tool_result", "name": "Deploy",
+            "call_id": id, "status": if i < 5 { "error" } else { "ok" }, "content": "no such target"}));
+    }
+    h.steps(json!(steps)).await;
+    h.flush_steps(20).await;
+    let r = h.json("/admin/orgs/acme/insights?days=1").await;
+    assert_eq!(r["suggestions"]["available"], true, "{}", r["suggestions"]);
+    assert_eq!(r["suggestions"]["model"], "house-model");
+
+    let ask = |body: Value| {
+        h.http
+            .post(format!("{}/admin/orgs/acme/insights/suggest", h.admin))
+            .bearer_auth(ADMIN_TOKEN)
+            .json(&body)
+            .send()
+    };
+    let resp = ask(json!({"rule": "tool.error_rate", "tool": "Deploy", "days": 1}))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: Value = resp.json().await.unwrap();
+    assert!(v["suggestion"].as_str().unwrap().contains("valid targets"));
+    assert_eq!(v["cost_micros"], 4_200);
+    assert_eq!(v["sent"]["tool_metrics"]["calls"], 10);
+    {
+        let seen = seen.lock().unwrap();
+        let (auth, body) = &seen[0];
+        assert_eq!(auth, "Bearer sk-analysis");
+        assert_eq!(body["model"], "house-model");
+        let sent = body.to_string();
+        assert!(sent.contains("tool.error_rate"));
+        // Tool input and output never leave: only metrics do.
+        assert!(
+            !sent.contains("prod-secret-cluster") && !sent.contains("no such target"),
+            "{sent}"
+        );
+    }
+    // A finding that isn't in the report.
+    let resp = ask(json!({"rule": "tool.error_rate", "tool": "Nope", "days": 1}))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    // The second answer passes the $0.006 monthly cap; the third is refused before calling.
+    assert_eq!(
+        ask(json!({"rule": "tool.error_rate", "tool": "Deploy", "days": 1}))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let resp = ask(json!({"rule": "tool.error_rate", "tool": "Deploy", "days": 1}))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(seen.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn suggestions_need_an_endpoint_and_a_license() {
+    let Some(h) = H::start_with(true, "", false).await else {
+        return;
+    };
+    h.report(json!([{"run_id": "r1", "provider": "openai", "model": "gpt-4o", "input_tokens": 10, "output_tokens": 1}])).await;
+    h.flush(1).await;
+    let r = h.json("/admin/orgs/acme/insights?days=1").await;
+    assert_eq!(r["suggestions"]["available"], false);
+    assert_eq!(r["suggestions"]["reason"], "not_configured");
+    let resp = h
+        .http
+        .post(format!("{}/admin/orgs/acme/insights/suggest", h.admin))
+        .bearer_auth(ADMIN_TOKEN)
+        .json(&json!({"rule": "x"}))
+        .send()
+        .await
+        .unwrap();
+    // No license: the paid feature is refused before anything else.
+    assert!(resp.status().is_client_error(), "{}", resp.status());
 }

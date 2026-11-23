@@ -606,10 +606,19 @@ pub async fn insights_digest(st: &AppState) -> Vec<String> {
             rt.clone(),
             org.id.clone(),
         );
+        let tool_sets = crate::prompts::tool_usage(st, &org.id, 7).await;
         let to = Utc::now().timestamp_micros();
         let from = to - 7 * 86_400 * 1_000_000;
         let report = tokio::task::spawn_blocking(move || {
-            crate::insights::report(&h, steps.as_deref(), &prices.prices, &id, from, to)
+            crate::insights::report(
+                &h,
+                steps.as_deref(),
+                &prices.prices,
+                &tool_sets,
+                &id,
+                from,
+                to,
+            )
         })
         .await;
         let report = match report {

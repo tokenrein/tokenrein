@@ -66,7 +66,7 @@ pub struct Step {
 }
 
 impl Step {
-    fn new(kind: Kind) -> Step {
+    pub fn new(kind: Kind) -> Step {
         Step {
             kind,
             name: None,
@@ -391,6 +391,7 @@ pub fn model_call_entry(e: &Value) -> Value {
         "cost_micros": e.get("actual_micros"),
         "tokens": tokens("input") + tokens("cached_input") + tokens("cache_write") + tokens("output"),
         "usage": usage,
+        "prompt": e.get("prompt"),
     })
 }
 

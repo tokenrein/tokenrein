@@ -49,7 +49,7 @@ function stepFromRequest(e) {
     detail: e.blocked_scope || (d === "allowed" ? null : d), duration_ms: e.upstream_ms || null,
     cost_micros: d.startsWith("allowed") ? e.actual_micros : 0,
     tokens: usageTotal(u),
-    usage: e.usage, check_exceeded: e.check_exceeded, source: e.source,
+    usage: e.usage, check_exceeded: e.check_exceeded, source: e.source, prompt: e.prompt,
   };
 }
 
@@ -100,6 +100,27 @@ function tokenSplit(u) {
   return parts.join(" · ");
 }
 
+const PROMPT_CHANGES = {
+  tools: "tool definitions changed since the previous call", system: "system prompt changed since the previous call",
+  params: "cache settings changed since the previous call", history: "earlier messages edited or compacted",
+  model: "model changed since the previous call",
+};
+
+// What a proxied request was made of (proxy mode only), and what broke the cache, if anything.
+function promptShape(p) {
+  const n = v => (v || 0).toLocaleString();
+  const parts = [`${n(p.tool_defs)} tool${p.tool_defs === 1 ? "" : "s"} (~${n(p.tool_def_tokens)} tokens)${p.deferred_tools ? ` + ${n(p.deferred_tools)} deferred` : ""}`,
+    `system ~${n(p.system_tokens)} tokens`, `${n(p.messages)} message${p.messages === 1 ? "" : "s"}`];
+  return parts.join(" · ") + (p.change ? ` · <span class="badge b-warn">${esc(PROMPT_CHANGES[p.change] || p.change)}</span>` : "");
+}
+
+// Tool steps the proxy read from a conversation, unless the run's agent logs its own (hooks, SDK).
+function dropDerivedSteps(steps) {
+  const tool = s => s.kind === "tool_call" || s.kind === "tool_result";
+  const own = new Set(steps.filter(s => tool(s) && s.source !== "proxy").map(s => s.run_id));
+  return steps.filter(s => !(tool(s) && s.source === "proxy" && own.has(s.run_id)));
+}
+
 // All tokens a call processed: the four parts of the bill.
 function usageTotal(u) {
   return u ? (u.input || 0) + (u.cached_input || 0) + (u.cache_write || 0) + (u.output || 0) : 0;
@@ -117,6 +138,7 @@ function stepDetail(s, captureOn) {
   else if (s.result?.size) add("Output", `<span class="muted">${bytes(s.result.size)}</span>`);
   if (s.attrs && Object.keys(s.attrs).length) add("Attributes", `<span class="mono">${Object.entries(s.attrs).map(([k, v]) => `${esc(k)}=${esc(typeof v === "string" ? v : JSON.stringify(v))}`).join(" · ")}</span>`);
   if (s.usage) add("Tokens", tokenSplit(s.usage));
+  if (s.prompt) add("Prompt", promptShape(s.prompt));
   if ((s.check_exceeded || []).length) add("Would block", `<span class="badge b-warn">${esc(s.check_exceeded.join(", "))}</span>`);
   add("Detail", s.detail ? `<span class="mono">${esc(s.detail)}</span>` : "");
   add("Run", `<a href="#" class="mono runlink" data-open-run="${esc(s.run_id)}">${esc(s.run_id)}</a>`);
@@ -175,7 +197,7 @@ function renderLogs() {
     agents.dataset.opts = opts.join("|");
   }
   // Newest first; pairing runs oldest first, folding each result into its call.
-  const entries = pairTools([...LOGS.entries].reverse()).reverse();
+  const entries = pairTools(dropDerivedSteps([...LOGS.entries]).reverse()).reverse();
   const problems = entries.filter(e => e.status === "error" || e.status === "blocked").length;
   const capturing = (currentOrg()?.projects || []).filter(p => p.capture_content).map(p => p.id);
   $("#logs-note").innerHTML = capturing.length

@@ -37,12 +37,17 @@ const SCHEMA: &str = r#"CREATE TABLE u (
     blocked_scope VARCHAR, source VARCHAR, request_id VARCHAR, cost_micros BIGINT,
     input_tokens BIGINT, cached_input_tokens BIGINT, cache_write_tokens BIGINT,
     output_tokens BIGINT, upstream_ms BIGINT, cache_write_long_tokens BIGINT,
-    reasoning_tokens BIGINT)"#;
+    reasoning_tokens BIGINT, prompt_change VARCHAR, tool_defs BIGINT, tool_def_tokens BIGINT,
+    system_tokens BIGINT)"#;
 
 /// Columns added after the first release, with the value older files are read as.
 const ADDED_COLUMNS: &str =
     "ALTER TABLE e ADD COLUMN IF NOT EXISTS cache_write_long_tokens BIGINT DEFAULT 0;
-     ALTER TABLE e ADD COLUMN IF NOT EXISTS reasoning_tokens BIGINT DEFAULT 0;";
+     ALTER TABLE e ADD COLUMN IF NOT EXISTS reasoning_tokens BIGINT DEFAULT 0;
+     ALTER TABLE e ADD COLUMN IF NOT EXISTS prompt_change VARCHAR;
+     ALTER TABLE e ADD COLUMN IF NOT EXISTS tool_defs BIGINT;
+     ALTER TABLE e ADD COLUMN IF NOT EXISTS tool_def_tokens BIGINT;
+     ALTER TABLE e ADD COLUMN IF NOT EXISTS system_tokens BIGINT;";
 
 /// One request event, as stored.
 #[derive(Debug, Clone, PartialEq)]
@@ -69,6 +74,11 @@ pub struct Row {
     pub upstream_ms: i64,
     pub cache_write_long_tokens: i64,
     pub reasoning_tokens: i64,
+    /// Proxy only: what changed since the run's previous request (see `crate::prompts`).
+    pub prompt_change: Option<String>,
+    pub tool_defs: Option<i64>,
+    pub tool_def_tokens: Option<i64>,
+    pub system_tokens: Option<i64>,
 }
 
 impl Row {
@@ -88,6 +98,7 @@ impl Row {
             .unwrap_or_else(Utc::now);
         let usage = e.get("usage");
         let u = |k: &str| n(usage.and_then(|u| u.get(k)));
+        let prompt = e.get("prompt").filter(|p| p.is_object());
         Some(Row {
             org,
             day: ts.date_naive(),
@@ -111,6 +122,19 @@ impl Row {
             upstream_ms: n(e.get("upstream_ms")),
             cache_write_long_tokens: u("cache_write_long"),
             reasoning_tokens: u("reasoning"),
+            prompt_change: prompt
+                .and_then(|p| p.get("change"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            tool_defs: prompt
+                .and_then(|p| p.get("tool_defs"))
+                .and_then(Value::as_i64),
+            tool_def_tokens: prompt
+                .and_then(|p| p.get("tool_def_tokens"))
+                .and_then(Value::as_i64),
+            system_tokens: prompt
+                .and_then(|p| p.get("system_tokens"))
+                .and_then(Value::as_i64),
         })
     }
 }
@@ -140,6 +164,10 @@ fn append_rows(conn: &Connection, rows: &[Row]) -> duckdb::Result<()> {
             r.upstream_ms,
             r.cache_write_long_tokens,
             r.reasoning_tokens,
+            r.prompt_change,
+            r.tool_defs,
+            r.tool_def_tokens,
+            r.system_tokens,
         ])?;
     }
     app.flush()

@@ -92,6 +92,8 @@ pub struct Prepared {
     pub input_tokens_est: u64,
     pub max_output_tokens: u64,
     pub previous_response_id: Option<String>,
+    /// Hashes and sizes of the request's parts, for cache and tool analysis.
+    pub anatomy: crate::prompts::Anatomy,
 }
 
 const IMAGE_TOKENS: u64 = 1_600;
@@ -107,6 +109,7 @@ pub fn estimate_tokens_from_bytes(bytes: u64) -> u64 {
 pub fn prepare(api: Api, raw: &[u8], default_max_out: u64) -> Result<Prepared, String> {
     let mut body: Map<String, Value> = serde_json::from_slice(raw)
         .map_err(|e| format!("request body must be a JSON object: {e}"))?;
+    let anatomy = crate::prompts::anatomy(api, &body);
 
     let model = body
         .get("model")
@@ -184,6 +187,7 @@ pub fn prepare(api: Api, raw: &[u8], default_max_out: u64) -> Result<Prepared, S
         input_tokens_est,
         max_output_tokens: max_out.saturating_mul(choices),
         previous_response_id,
+        anatomy,
     })
 }
 
