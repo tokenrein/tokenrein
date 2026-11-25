@@ -34,7 +34,18 @@ pub struct Seen<'a> {
     pub call: bool,
     /// What it cost, in micro-USD.
     pub cost: u64,
+    /// The model call's whole prompt in tokens, when known: how big the context has grown.
+    pub prompt_tokens: u64,
+    /// A tool result: the tool and its status ("ok", "error"). A changed status is new
+    /// information, like a failing test that starts to pass.
+    pub outcome: Option<(&'a str, &'a str)>,
 }
+
+/// Context growth with nothing new that counts as no progress (with
+/// `max_calls_without_progress` calls in a row).
+const NO_PROGRESS_GROWTH: u64 = 20_000;
+/// How long a nudge waits for the agent's next request or hook before it is dropped.
+const NUDGE_TTL_SECS: u64 = 3_600;
 
 /// The project's loop policy (inherited from the org).
 pub fn policy_for(rt: &Resolved, org: &str, project: &str) -> Option<LoopPolicy> {
@@ -76,6 +87,7 @@ enum Trip {
     Repeats(u64),
     Velocity(u64),
     Calls(u64),
+    NoProgress { calls: u64, growth: u64 },
 }
 
 impl Trip {
@@ -91,8 +103,90 @@ impl Trip {
                 p.max_usd_per_minute.unwrap_or_default()
             ),
             Trip::Calls(n) => format!("{n} model calls in one run"),
+            Trip::NoProgress { calls, growth } => format!(
+                "{calls} model calls in a row added {} tokens of context but nothing new (no new \
+                 tool call, no changed result)",
+                thousands(*growth)
+            ),
         }
     }
+
+    /// What the agent is told when it is nudged instead of stopped.
+    fn nudge(&self) -> String {
+        let body = match self {
+            Trip::Repeats(n) => format!(
+                "You have made the same call {n} times in this run and it is not getting you \
+                 closer. Stop repeating it: re-read the last error or output, then try a different \
+                 approach, or stop and report what is blocking you."
+            ),
+            Trip::NoProgress { calls, growth } => format!(
+                "Your last {calls} steps added about {} tokens of context without new information \
+                 (no new files, tool calls or changed results). Summarise what you know, then try \
+                 a different approach, or stop and report.",
+                thousands(*growth)
+            ),
+            Trip::Velocity(_) | Trip::Calls(_) => "This run is spending fast and is close to its \
+                 limit. Finish the current step, then wrap up and report."
+                .to_string(),
+        };
+        format!(
+            "[Tokenrein] {body} If this continues, the run will be stopped for a person to review."
+        )
+    }
+}
+
+fn thousands(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// The note waiting for a nudged run's next request or hook, taken so it is delivered once.
+pub async fn take_nudge(st: &AppState, org: &str, run: &str) -> Option<String> {
+    let mut conn = st.ledger.conn();
+    redis::cmd("GETDEL")
+        .arg(Keys::new(org).loop_key(run, "nudge"))
+        .query_async::<Option<String>>(&mut conn)
+        .await
+        .unwrap_or(None)
+}
+
+/// Record and announce a nudge (the run goes on).
+async fn nudged(st: &AppState, seen: &Seen<'_>, detail: &str) {
+    let entry = Entry {
+        org: Some(seen.org.to_string()),
+        actor: "system".into(),
+        action: "loop.nudged".into(),
+        target: seen.run.to_string(),
+        detail: json!({ "detail": detail }),
+        ip: None,
+    };
+    audit::record(st, entry).await;
+    let alert = Alert {
+        event: AlertEvent::LoopDetected,
+        severity: Severity::Warning,
+        title: format!("Run {} was nudged", seen.run),
+        text: format!(
+            "{}/{}: {detail}. The agent was told to change course; if it carries on, the run is \
+             stopped.",
+            seen.project, seen.agent
+        ),
+        dedup: format!("nudge:{}", seen.run),
+        quiet_secs: 3600,
+        tab: Some("runs"),
+        fields: vec![
+            ("Run".into(), seen.run.to_string()),
+            ("Project".into(), seen.project.to_string()),
+            ("Agent".into(), seen.agent.to_string()),
+        ],
+    };
+    alerts::notify(st, seen.org, alert).await;
 }
 
 /// Count what the run did. Returns the action when this observation tripped the run's loop
@@ -106,23 +200,65 @@ pub async fn observe(
     let keys = Keys::new(seen.org);
     let mut conn = st.ledger.conn();
     let mut trip = None;
+    // New information: a tool call the run has not made before, or a tool whose result changed.
+    let mut new_info = false;
     if let Some(fp) = seen.fingerprint {
         let key = keys.loop_key(seen.run, &format!("fp:{fp}"));
-        let n: u64 = conn.incr(&key, 1).await?;
+        let counted = keys.loop_key(seen.run, "fps");
+        let (n, added): (u64, u64) = redis::pipe()
+            .incr(&key, 1)
+            .sadd(&counted, fp)
+            .expire(&counted, RUN_TTL_SECS as i64)
+            .ignore()
+            .query_async(&mut conn)
+            .await?;
         if n == 1 {
-            let counted = keys.loop_key(seen.run, "fps");
+            let _: () = conn.expire(&key, i64::from(p.repeat_window_secs)).await?;
+        }
+        new_info |= added == 1;
+        if n >= u64::from(p.max_repeats) {
+            trip = Some(Trip::Repeats(n));
+        }
+    }
+    if let Some((tool, status)) = seen.outcome {
+        let key = keys.loop_key(seen.run, "outcomes");
+        let (before,): (Option<String>,) = redis::pipe()
+            .hget(&key, tool)
+            .hset(&key, tool, status)
+            .ignore()
+            .expire(&key, RUN_TTL_SECS as i64)
+            .ignore()
+            .query_async(&mut conn)
+            .await?;
+        new_info |= before.as_deref() != Some(status);
+    }
+    if let Some(max) = p.max_calls_without_progress {
+        let key = keys.loop_key(seen.run, "progress");
+        if new_info {
             let _: () = redis::pipe()
-                .expire(&key, i64::from(p.repeat_window_secs))
+                .hset(&key, "calls", 0)
                 .ignore()
-                .sadd(&counted, fp)
+                .hdel(&key, "base")
                 .ignore()
-                .expire(&counted, RUN_TTL_SECS as i64)
+                .expire(&key, RUN_TTL_SECS as i64)
                 .ignore()
                 .query_async(&mut conn)
                 .await?;
         }
-        if n >= u64::from(p.max_repeats) {
-            trip = Some(Trip::Repeats(n));
+        if seen.call && seen.prompt_tokens > 0 {
+            let (calls, base): (u64, u64) = redis::pipe()
+                .hincr(&key, "calls", 1)
+                .hset_nx(&key, "base", seen.prompt_tokens)
+                .ignore()
+                .hget(&key, "base")
+                .expire(&key, RUN_TTL_SECS as i64)
+                .ignore()
+                .query_async(&mut conn)
+                .await?;
+            let growth = seen.prompt_tokens.saturating_sub(base);
+            if calls > u64::from(max) && growth >= NO_PROGRESS_GROWTH {
+                trip = trip.or(Some(Trip::NoProgress { calls, growth }));
+            }
         }
     }
     if seen.call {
@@ -152,6 +288,37 @@ pub async fn observe(
     }
     let Some(trip) = trip else { return Ok(None) };
     let detail = trip.describe(&p);
+    // Nudge before stopping: the first trip tells the agent and lets it go on; the counts that
+    // tripped start over, so only carrying on the same way trips it again.
+    if p.nudge && p.action != LoopAction::Warn {
+        let first_nudge: Option<String> = redis::cmd("SET")
+            .arg(keys.loop_key(seen.run, "nudged"))
+            .arg(&detail)
+            .arg("NX")
+            .arg("EX")
+            .arg(RUN_TTL_SECS)
+            .query_async(&mut conn)
+            .await?;
+        if first_nudge.is_some() {
+            let mut stale = vec![keys.loop_key(seen.run, "progress")];
+            if let (Trip::Repeats(_), Some(fp)) = (&trip, seen.fingerprint) {
+                stale.push(keys.loop_key(seen.run, &format!("fp:{fp}")));
+            }
+            let _: () = redis::pipe()
+                .del(&stale)
+                .ignore()
+                .set_ex(
+                    keys.loop_key(seen.run, "nudge"),
+                    trip.nudge(),
+                    NUDGE_TTL_SECS,
+                )
+                .ignore()
+                .query_async(&mut conn)
+                .await?;
+            nudged(st, &seen, &detail).await;
+            return Ok(None);
+        }
+    }
     let first: Option<String> = redis::cmd("SET")
         .arg(keys.loop_key(seen.run, "tripped"))
         .arg(&detail)
@@ -232,7 +399,13 @@ pub async fn reset(st: &AppState, org: &str, run: &str) -> Result<()> {
     let mut conn = st.ledger.conn();
     let counted = keys.loop_key(run, "fps");
     let fingerprints: Vec<String> = conn.smembers(&counted).await?;
-    let mut stale = vec![keys.loop_key(run, "tripped"), keys.loop_key(run, "calls")];
+    let mut stale = vec![
+        keys.loop_key(run, "tripped"),
+        keys.loop_key(run, "calls"),
+        keys.loop_key(run, "progress"),
+        keys.loop_key(run, "nudged"),
+        keys.loop_key(run, "nudge"),
+    ];
     stale.extend(
         fingerprints
             .iter()

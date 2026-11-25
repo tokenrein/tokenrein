@@ -160,7 +160,7 @@ Set under Keys & limits (org default, project override) or as `loops` in the bud
 
 ```toml
 [orgs.budgets]
-loops = { action = "pause", max_repeats = 6, repeat_window_secs = 600, max_usd_per_minute = 2.0, max_calls_per_run = 300 }
+loops = { action = "pause", max_repeats = 6, repeat_window_secs = 600, max_usd_per_minute = 2.0, max_calls_per_run = 300, max_calls_without_progress = 8, nudge = true }
 ```
 
 | Signal | Trips when |
@@ -168,10 +168,62 @@ loops = { action = "pause", max_repeats = 6, repeat_window_secs = 600, max_usd_p
 | Repeats | the same request (model and last message) or the same tool call is seen `max_repeats` times within the window |
 | Velocity | the run spends more than `max_usd_per_minute` within one minute |
 | Calls | the run makes more than `max_calls_per_run` model calls |
+| No progress | `max_calls_without_progress` model calls in a row grow the context by 20,000+ tokens with no new information: no tool call the run has not made before, no tool result whose status changed (a failing test that starts to pass) |
 
 `action`: `warn` (alert only), `pause` (the run waits for an approver; letting it continue resets
 the guard for that run) or `kill`. Calls Tokenrein refuses are not counted, so an agent retrying
 while its run waits for an approver does not look like a loop. Only hashes of requests are kept.
+
+**Nudge before stopping** (`nudge = true`): the first time the guard trips, the run goes on and
+the agent is told, with a short note at the end of its context ("you have made the same call 6
+times in this run... try a different approach, or stop and report"). The counts that tripped start
+over, so only carrying on the same way trips it again, and then the action applies. The note goes
+in through the proxy (appended to the next request, after the cached prefix) or Claude Code's
+hooks (`additionalContext` after a tool call or on the next prompt). The tokens already spent
+are not thrown away by a hard stop the agent could have avoided.
+
+**Run cost forecast.** Each call of a run tends to cost a little more than the last, because the
+context grows, so a run's total grows roughly with the square of its steps. Tokenrein fits a line
+through each run's per-call costs and projects it: the run page shows what the run will have cost
+if it goes on as long again, or how many calls until its run budget is gone. A run on course to
+pass its budget within as many calls as it has made so far (while under half of it), or, with no
+budget, on course for 3x its spend and at least $5, gets one `budget_warning` alert, at $5 rather
+than $60.
+
+## A budget the agent can see (MCP)
+
+The proxy is also an MCP server with one tool, `tokenrein_budget`: what the run has spent and
+has left, where its cost is heading, and the agent, project and org budgets around it. An agent
+that checks it can wrap up cleanly instead of being cut off. Connect it with a project key:
+
+```sh
+claude mcp add --transport http tokenrein http://localhost:8787/mcp \
+  --header "Authorization: Bearer $TOKENREIN_API_KEY"
+```
+
+The run is the one named in the call (`run_id`) or the `x-tr-run-id` header; by default, the
+agent's most recently active run in the key's project. Streamable HTTP with JSON replies:
+`initialize`, `tools/list`, `tools/call`, `ping`.
+
+## Automatic optimisation (proxy mode)
+
+Per project, off by default (Keys & limits, or `optimize` in the project config):
+
+```toml
+[[orgs.projects]]
+id = "support"
+optimize = { cache = true, routes = [{ from = "claude-opus-5-5", to = "claude-haiku-5-5" }] }
+```
+
+- `cache`: a request that leaves out prompt caching gets it. Anthropic requests with no
+  `cache_control` anywhere get a top-level one (automatic caching of the growing conversation);
+  OpenAI requests without a `prompt_cache_key` get one per agent, so its calls share a cache.
+  Prompts under about 1,000 tokens are left alone.
+- `routes`: a simple step (no tools, a prompt under about 2,000 tokens, an answer of at most 1,024
+  tokens, no thinking or stored-response chaining) for `from` (or a dated version of it) goes to
+  `to`. Everything else keeps its model.
+
+Request events record what changed (`optimized`: `cache`, `routed_from`) and nudges (`nudged`).
 
 ## Agent logs
 

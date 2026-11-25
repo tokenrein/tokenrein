@@ -41,13 +41,13 @@ pub(crate) struct Caller {
 }
 
 impl Caller {
-    fn org(&self) -> &config::OrgConfig {
+    pub(crate) fn org(&self) -> &config::OrgConfig {
         &self.rt.cfg.orgs[self.oi]
     }
-    fn project(&self) -> &config::ProjectConfig {
+    pub(crate) fn project(&self) -> &config::ProjectConfig {
         &self.org().projects[self.pi]
     }
-    fn budgets(&self) -> Budgets {
+    pub(crate) fn budgets(&self) -> Budgets {
         Budgets::effective(&self.org().budgets, &self.project().budgets)
     }
 }
@@ -61,7 +61,7 @@ fn error(status: StatusCode, kind: &str, message: &str) -> Response {
 }
 
 #[allow(clippy::result_large_err)]
-fn caller(st: &AppState, headers: &HeaderMap) -> Result<Caller, Response> {
+pub(crate) fn caller(st: &AppState, headers: &HeaderMap) -> Result<Caller, Response> {
     let Some(token) = client_token(headers) else {
         return Err(error(
             StatusCode::UNAUTHORIZED,
@@ -325,11 +325,21 @@ pub(crate) async fn record_usage(
             fingerprint: None,
             call: true,
             cost: actual,
+            prompt_tokens: usage.prompt(),
+            outcome: None,
         };
         if let Err(e) = crate::loops::observe(st, policy, seen).await {
             tracing::warn!(error = %e, "loop detection failed");
         }
     }
+    let call = crate::forecast::Call {
+        org: &c.org().id,
+        project: &c.project().id,
+        agent: &who.agent,
+        run: &who.run,
+        cost: actual,
+    };
+    crate::forecast::record(st, &call).await;
     let failed = ev.status.is_some_and(|s| s >= 400);
     let event = json!({
         "event": "request",
@@ -545,6 +555,8 @@ async fn loop_stop(
         fingerprint,
         call: false,
         cost: 0,
+        prompt_tokens: 0,
+        outcome: None,
     };
     let action = match crate::loops::observe(st, policy, seen).await {
         Ok(a) => a?,
@@ -1479,8 +1491,16 @@ async fn agent_hook(st: &AppState, headers: &HeaderMap, input: &Value, tool: Too
     }
     let step = crate::steps::from_hook(call.event, input, c.project().capture_content);
     let Some(gate) = call.gate else {
+        if let Some(s) = step
+            .as_ref()
+            .filter(|s| s.kind == crate::steps::Kind::ToolResult)
+        {
+            tool_outcome(st, &c, &who, s).await;
+        }
         publish_step(st, &c, &who, step, false);
-        return allow;
+        return nudge_reply(st, &c, &who, tool, call.event)
+            .await
+            .unwrap_or(allow);
     };
     let fingerprint = if gate == Gate::Tool {
         tool_fingerprint(input)
@@ -1502,6 +1522,11 @@ async fn agent_hook(st: &AppState, headers: &HeaderMap, input: &Value, tool: Too
     };
     if v.allowed {
         publish_step(st, &c, &who, step, false);
+        if gate == Gate::Prompt {
+            return nudge_reply(st, &c, &who, tool, call.event)
+                .await
+                .unwrap_or(allow);
+        }
         return allow;
     }
     publish_step(st, &c, &who, step, true);
@@ -1514,6 +1539,78 @@ async fn agent_hook(st: &AppState, headers: &HeaderMap, input: &Value, tool: Too
         .reason
         .unwrap_or_else(|| "Tokenrein: budget used up".into());
     Json(hook_block(tool, gate, call.event, &reason)).into_response()
+}
+
+/// A tool result counts for the loop guard's progress tracking: a changed outcome is new
+/// information. Best effort.
+async fn tool_outcome(st: &AppState, c: &Caller, who: &Who, s: &crate::steps::Step) {
+    // A tool call is new information the first time its input is seen; a result, when its
+    // status changes. Neither counts as a repeat here (hooks count repeats before the call).
+    let fp_key;
+    let outcome = match s.kind {
+        crate::steps::Kind::ToolCall => {
+            let Some(fp) = s.fingerprint.as_deref() else {
+                return;
+            };
+            fp_key = format!("call:{fp}");
+            (fp_key.as_str(), "seen")
+        }
+        crate::steps::Kind::ToolResult => {
+            (s.name.as_deref().unwrap_or(""), s.status.unwrap_or("ok"))
+        }
+        _ => return,
+    };
+    let policy = crate::loops::policy_for(&c.rt, &c.org().id, &c.project().id);
+    if policy
+        .as_ref()
+        .is_none_or(|p| p.max_calls_without_progress.is_none())
+    {
+        return;
+    }
+    let seen = crate::loops::Seen {
+        org: &c.org().id,
+        project: &c.project().id,
+        agent: &who.agent,
+        run: &who.run,
+        fingerprint: None,
+        call: false,
+        cost: 0,
+        prompt_tokens: 0,
+        outcome: Some(outcome),
+    };
+    if let Err(e) = crate::loops::observe(st, policy, seen).await {
+        tracing::warn!(error = %e, "loop detection failed");
+    }
+}
+
+/// Claude Code hooks that can add to the agent's context (after a tool, on a prompt) deliver a
+/// loop-guard nudge waiting for the run.
+async fn nudge_reply(
+    st: &AppState,
+    c: &Caller,
+    who: &Who,
+    tool: Tool,
+    event: &str,
+) -> Option<Response> {
+    if tool != Tool::ClaudeCode
+        || !matches!(
+            event,
+            "PostToolUse" | "PostToolUseFailure" | "UserPromptSubmit"
+        )
+    {
+        return None;
+    }
+    let policy = crate::loops::policy_for(&c.rt, &c.org().id, &c.project().id)?;
+    if !policy.nudge {
+        return None;
+    }
+    let note = crate::loops::take_nudge(st, &c.org().id, &who.run).await?;
+    Some(
+        Json(json!({
+            "hookSpecificOutput": { "hookEventName": event, "additionalContext": note }
+        }))
+        .into_response(),
+    )
 }
 
 /// Queues an agent step for the dashboard's logs (best effort, like request events).
@@ -1591,7 +1688,10 @@ pub async fn steps(
         let step = who_from_event(&ids, "sdk")
             .and_then(|who| crate::steps::from_sdk(raw, capture).map(|s| (who, s)));
         match step {
-            Ok((who, step)) => publish_step(&st, &c, &who, Some(step), false),
+            Ok((who, step)) => {
+                tool_outcome(&st, &c, &who, &step).await;
+                publish_step(&st, &c, &who, Some(step), false)
+            }
             Err(e) => rejected.push(json!({ "index": i, "error": e })),
         }
     }

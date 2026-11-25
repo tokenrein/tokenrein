@@ -37,22 +37,25 @@ function loopEditor(l, inherited) {
   const project = inherited !== undefined;
   const inh = project ? (inherited ? `Inherits from the org: ${esc(LOOP_ACTIONS[inherited.action || "pause"].split(":")[0].toLowerCase())} after ${inherited.max_repeats} repeats` : "Inherits: off") : "";
   const num = (f, v, ph, label, extra = "") => `<label class="field">${label}<input type="number" min="0" step="any" data-loop="${f}" value="${v ?? ""}" placeholder="${ph}" ${extra}></label>`;
-  const state = l?.action ? `${esc(LOOP_ACTIONS[l.action].split(":")[0])} after ${l.max_repeats} repeats`
+  const state = l?.action ? `${esc(LOOP_ACTIONS[l.action].split(":")[0])} after ${l.max_repeats} repeats${l.nudge ? ", nudges first" : ""}${l.max_calls_without_progress ? `, ${l.max_calls_without_progress} calls without progress` : ""}`
     : project ? (inherited ? "inherits the org's" : "inherits: off") : "off";
   return `<details class="budget loop-guard" data-policy="loops" ${l?.action ? "open" : ""}>
     <summary><span class="t">Loop guard</span> <span class="muted">· ${state}</span></summary>
-    <div class="d">Stops runaway runs early: the same request or tool call repeated, spend per minute, or too many calls in one run.</div>
+    <div class="d">Stops runaway runs early: the same request or tool call repeated, context growing with nothing new, spend per minute, or too many calls in one run.</div>
     <div class="inline">
       <select data-loop="action" aria-label="Loop guard action">
         <option value="">${project ? "Inherit" : "Off"}</option>
         ${Object.entries(LOOP_ACTIONS).map(([k, label]) => `<option value="${k}" ${l?.action === k ? "selected" : ""}>${esc(label)}</option>`).join("")}
       </select>
+      <label class="inline check"><input type="checkbox" data-loop="nudge" ${l?.nudge ? "checked" : ""}>
+        <span>Nudge the agent first <span class="muted">(a note in its context; the next trip pauses or kills)</span></span></label>
     </div>
     <div class="loop-fields">
       ${num("max_repeats", l?.max_repeats, "6", "Same request, times", 'min="2" step="1"')}
       ${num("window_min", l ? Math.round((l.repeat_window_secs || 600) / 60) : "", "10", "…within minutes", 'min="1" step="1"')}
       ${num("max_usd_per_minute", l?.max_usd_per_minute, "none", "Max $ per minute")}
       ${num("max_calls_per_run", l?.max_calls_per_run, "none", "Max calls per run", 'step="1"')}
+      ${num("max_calls_without_progress", l?.max_calls_without_progress, "off", "Calls without progress", 'min="2" step="1" title="Model calls in a row that grow the context by 20,000+ tokens with no new tool call or changed result"')}
     </div>
     ${inh ? `<div class="inherit">${inh}</div>` : ""}
   </details>`;
@@ -62,9 +65,12 @@ function readLoops(el) {
   const action = $("[data-loop=action]", el).value;
   if (!action) return undefined;
   const v = f => { const x = $(`[data-loop=${f}]`, el).value.trim(); return x === "" ? undefined : Number(x); };
+  const nudge = $("[data-loop=nudge]", el).checked;
   const out = { action, max_repeats: v("max_repeats") ?? 6, repeat_window_secs: Math.round((v("window_min") ?? 10) * 60) };
   if (v("max_usd_per_minute") !== undefined) out.max_usd_per_minute = v("max_usd_per_minute");
   if (v("max_calls_per_run") !== undefined) out.max_calls_per_run = v("max_calls_per_run");
+  if (v("max_calls_without_progress") !== undefined) out.max_calls_without_progress = v("max_calls_without_progress");
+  if (nudge) out.nudge = true;
   return out;
 }
 function readBudgets(root) {
@@ -113,6 +119,28 @@ function keyRows(p) {
     <td><div class="row-actions"><button class="btn sm danger" data-revoke="${esc(k.id)}" data-project="${esc(p.id)}" data-name="${esc(k.name)}">Revoke</button></div></td></tr>`).join("");
 }
 
+function routeRow(r = {}) {
+  return `<div class="inline opt-route">
+    <input type="text" data-route-from placeholder="claude-opus-5-5" aria-label="Model asked for" value="${esc(r.from || "")}">
+    <span class="muted">→</span>
+    <input type="text" data-route-to placeholder="claude-haiku-5-5" aria-label="Cheaper model" value="${esc(r.to || "")}">
+    <button class="btn sm" type="button" data-opt-remove>Remove</button></div>`;
+}
+
+function optimizeSection(p) {
+  const o = p.optimize || {};
+  const on = [o.cache && "caching", (o.routes || []).length && `${o.routes.length} route${o.routes.length === 1 ? "" : "s"}`].filter(Boolean).join(" · ");
+  return `<section class="settings-sec" data-optimize="${esc(p.id)}">
+    <div class="settings-sec-h"><h3>Automatic optimisation</h3><span class="muted">Proxy mode · ${on || "off"}</span></div>
+    <label class="inline check"><input type="checkbox" data-opt-cache ${o.cache ? "checked" : ""}>
+      <span>Turn on prompt caching when a client leaves it out <span class="muted">(Anthropic <span class="mono">cache_control</span>, OpenAI <span class="mono">prompt_cache_key</span>)</span></span></label>
+    <div class="opt-routes">${(o.routes || []).map(routeRow).join("")}</div>
+    <div class="inline"><button class="btn sm" type="button" data-opt-add>Add a cheaper-model route</button>
+      <span class="muted">Simple steps (no tools, short prompt, short answer) go to the cheaper model.</span></div>
+    <div class="settings-save"><button class="btn primary sm" data-save-optimize="${esc(p.id)}">Save optimisation</button></div>
+  </section>`;
+}
+
 function projectDetail(p, org) {
   const pack = S.packs.find(k => k.id === p.pack);
   return `<div class="card" data-project-card="${esc(p.id)}">
@@ -144,6 +172,7 @@ function projectDetail(p, org) {
             <span>Keep a redacted copy of prompts and tool inputs and outputs <span class="muted">(secrets and emails masked, first 2,000 characters, 7 days)</span></span></label>
         </section>
       </div>
+      ${optimizeSection(p)}
       <section class="settings-sec">
         <div class="settings-sec-h"><h3>Limits</h3><span class="muted">Blank inherits the org's limit.</span></div>
         ${budgetEditor("project", p.budgets, org.budgets, POLICIES.slice(1))}
@@ -299,6 +328,27 @@ $("#settings").addEventListener("click", async e => {
     store("local", SETTINGS_PROJECT_KEY, t.closest("[data-pick-project]").dataset.pickProject);
     S.editing = false;
     renderSettings();
+    return;
+  }
+  if (t.closest("[data-opt-add]")) {
+    t.closest("[data-optimize]").querySelector(".opt-routes").insertAdjacentHTML("beforeend", routeRow());
+    S.editing = true;
+    return;
+  }
+  if (t.closest("[data-opt-remove]")) {
+    t.closest(".opt-route").remove();
+    S.editing = true;
+    return;
+  }
+  if (t.closest("[data-save-optimize]")) {
+    const sec = t.closest("[data-optimize]");
+    const id = sec.dataset.optimize;
+    const routes = $$(".opt-route", sec).map(r => ({ from: $("[data-route-from]", r).value.trim(), to: $("[data-route-to]", r).value.trim() }))
+      .filter(r => r.from || r.to);
+    if (routes.some(r => !r.from || !r.to)) { toast("Each route needs both models", true); return; }
+    await mutate(() => api(`/admin/orgs/${org}/projects/${encodeURIComponent(id)}`, { method: "PUT",
+      body: { optimize: { cache: $("[data-opt-cache]", sec).checked, routes } } }), `Optimisation for ${id} saved`);
+    S.editing = false;
     return;
   }
   if (t.closest("[data-save-org]")) {

@@ -412,3 +412,5 @@ details.loop-guard[open] > summary { margin-bottom: 6px; }
   .settings-tabs { width: 100%; }
 }
 td a.runlink { display: inline-block; max-width: 26ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.opt-routes { display: grid; gap: 8px; }
+.opt-route input[type=text] { min-width: 0; flex: 1 1 180px; max-width: 260px; }

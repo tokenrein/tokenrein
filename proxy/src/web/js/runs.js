@@ -114,6 +114,9 @@ function renderRun() {
       ${kpi("Tokens", tokens.toLocaleString(), [prompt ? `${Math.round(cacheRead / prompt * 100)}% of input from cache` : "", dur >= 1 ? `over ${dur < 120 ? Math.round(dur) + "s" : Math.round(dur / 60) + " min"}` : ""].filter(Boolean).join(" · "))}
       ${kpi("Tool calls", String(toolCalls), steps.length ? `${steps.length} agent steps logged` : "no agent steps logged")}
       ${kpi("Problems", String(problems.length), problems.length ? `<a href="#" data-trace-filter="problems">show them</a>` : "no errors or blocks")}
+      ${t.forecast ? kpi("Forecast", usd(t.forecast.as_long_again_micros), t.forecast.calls_to_limit != null
+        ? `budget gone in ~${t.forecast.calls_to_limit} calls`
+        : `if it runs as long again${t.forecast.growth_per_call_micros > 0 ? ` · +${usd(t.forecast.growth_per_call_micros)}/call` : ""}`) : ""}
     </div>
     ${t.runs.length > 1 ? `<div class="card" style="margin-bottom:16px"><div class="card-h"><h2>Sub-agent runs</h2></div>
       <div class="table-wrap"><table class="wide"><thead><tr><th>Run</th><th>State</th><th>Agent</th><th class="num">Requests</th><th>Spend / run limit</th><th>Last seen</th></tr></thead><tbody>${subRows}</tbody></table></div></div>` : ""}

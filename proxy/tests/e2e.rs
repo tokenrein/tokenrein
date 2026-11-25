@@ -18,6 +18,7 @@ use tokenrein::{AppState, admin, build_state, proxy};
 
 const KEY: &str = "tl_test_bot_key_0001";
 const SHADOW_KEY: &str = "tl_test_shadow_key_0001";
+const TUNED_KEY: &str = "tl_test_tuned_key_0001";
 const ADMIN_TOKEN: &str = "admin-token-0123456789";
 
 #[derive(Clone, Default)]
@@ -155,11 +156,19 @@ impl Harness {
             virtual_key_hashes = ["{shadow}"]
             [orgs.projects.budgets]
             run = {{ limit_usd = 0.000001, mode = "check" }}
+            [[orgs.projects]]
+            id = "tuned"
+            virtual_key_hashes = ["{tuned}"]
+            optimize = {{ cache = true, routes = [{{ from = "claude-opus-5-5", to = "claude-haiku-5-5" }}] }}
+            [orgs.projects.budgets]
+            run = {{ limit_usd = 1.0, mode = "enforce" }}
+            loops = {{ action = "pause", max_repeats = 3, nudge = true, max_calls_without_progress = 4 }}
             "#,
             redis = redis.url,
             up = upstream_url,
             key = sha256_hex(KEY),
             shadow = sha256_hex(SHADOW_KEY),
+            tuned = sha256_hex(TUNED_KEY),
         );
         let rt = Resolved::from_toml(&config, |name| match name {
             "OPENAI_KEY" => Some("sk-test-openai".into()),
@@ -660,4 +669,283 @@ async fn proxied_requests_record_their_shape_and_tool_results() {
         called.iter().map(String::as_str).collect::<Vec<_>>(),
         ["Bash"]
     );
+}
+
+fn tuned(h: &Harness, run: &str, body: Value) -> reqwest::RequestBuilder {
+    h.http
+        .post(format!("{}/v1/messages", h.proxy))
+        .header("x-api-key", TUNED_KEY)
+        .header("x-tr-run-id", run)
+        .json(&body)
+}
+
+/// About 5,000 tokens of conversation: enough to be worth caching.
+fn long_history() -> Value {
+    json!([{"role": "user", "content": "context ".repeat(2_500)}])
+}
+
+#[tokio::test]
+async fn the_proxy_adds_forgotten_caching_and_routes_simple_steps() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    // A long conversation without cache_control gets automatic caching turned on.
+    let resp = tuned(&h, "opt-1", json!({"model": "claude-opus-5-5", "max_tokens": 2000,
+        "tools": [{"name": "Bash", "input_schema": {"type": "object"}}], "messages": long_history()}))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), 200);
+    let (_, _, body) = h.upstream.last();
+    assert_eq!(body["cache_control"], json!({"type": "ephemeral"}));
+    assert_eq!(body["model"], "claude-opus-5-5");
+    // A short step with no tools goes to the cheaper model.
+    let resp = tuned(
+        &h,
+        "opt-1",
+        json!({"model": "claude-opus-5-5", "max_tokens": 200,
+        "messages": [{"role": "user", "content": "Title for this chat?"}]}),
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), 200);
+    let (_, _, body) = h.upstream.last();
+    assert_eq!(body["model"], "claude-haiku-5-5");
+    assert!(body.get("cache_control").is_none());
+    // Other projects are left alone.
+    let resp = h
+        .http
+        .post(format!("{}/v1/messages", h.proxy))
+        .header("x-api-key", KEY)
+        .header("x-tr-run-id", "opt-2")
+        .json(&json!({"model": "claude-opus-5-5", "max_tokens": 200, "messages": long_history()}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let (_, _, body) = h.upstream.last();
+    assert!(body.get("cache_control").is_none());
+    assert_eq!(body["model"], "claude-opus-5-5");
+}
+
+#[tokio::test]
+async fn a_looping_run_is_nudged_once_then_paused() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    let same = json!({"model": "claude-haiku-4-5", "max_tokens": 50, "messages": hi()});
+    // Two identical calls go through untouched.
+    for _ in 0..2 {
+        assert_eq!(
+            tuned(&h, "nudge-1", same.clone())
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+        let (_, _, body) = h.upstream.last();
+        assert_eq!(body["messages"], hi());
+    }
+    // The third trips the guard: with nudge on, the run goes on and the agent is told.
+    assert_eq!(
+        tuned(&h, "nudge-1", same.clone())
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    let (_, _, body) = h.upstream.last();
+    let note = body["messages"][0]["content"][1]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        note.starts_with("[Tokenrein]") && note.contains("same call"),
+        "{body}"
+    );
+    // The first message itself is unchanged, so the cached prefix still matches.
+    assert_eq!(body["messages"][0]["content"][0]["text"], "hi");
+    // Carrying on the same way: three more and the run is paused.
+    for _ in 0..2 {
+        assert_eq!(
+            tuned(&h, "nudge-1", same.clone())
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+    }
+    let resp = tuned(&h, "nudge-1", same.clone()).send().await.unwrap();
+    assert_eq!(resp.status(), 403);
+    let v: Value = resp.json().await.unwrap();
+    assert_eq!(v["error"]["type"], "tokenrein_run_paused");
+}
+
+#[tokio::test]
+async fn growing_context_without_new_information_is_caught() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    let report = |run: &'static str, input: u64| {
+        h.http
+            .post(format!("{}/v1/usage", h.proxy))
+            .bearer_auth(TUNED_KEY)
+            .json(
+                &json!({"events": [{"run_id": run, "agent": "coder", "provider": "anthropic",
+                "model": "claude-haiku-4-5", "input_tokens": input, "output_tokens": 10}]}),
+            )
+            .send()
+    };
+    let step = |run: &'static str, input: Value| {
+        h.http
+            .post(format!("{}/v1/steps", h.proxy))
+            .bearer_auth(TUNED_KEY)
+            .json(
+                &json!({"steps": [{"run_id": run, "agent": "coder", "kind": "tool_call",
+                "name": "Read", "content": input}]}),
+            )
+            .send()
+    };
+    // Each call adds 10k tokens of context. With a new file read between calls, that's progress.
+    for i in 0..8u64 {
+        assert_eq!(
+            step("np-ok", json!({"path": format!("src/{i}.rs")}))
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+        assert_eq!(
+            report("np-ok", 10_000 * (i + 1)).await.unwrap().status(),
+            200
+        );
+    }
+    assert!(
+        tokenrein::loops::take_nudge(&h.state, "acme", "np-ok")
+            .await
+            .is_none()
+    );
+    // The same growth with nothing new: after 4 calls the agent is nudged.
+    for i in 0..6u64 {
+        assert_eq!(
+            report("np-stuck", 10_000 * (i + 1)).await.unwrap().status(),
+            200
+        );
+    }
+    let note = tokenrein::loops::take_nudge(&h.state, "acme", "np-stuck")
+        .await
+        .unwrap();
+    assert!(note.contains("without new information"), "{note}");
+}
+
+#[tokio::test]
+async fn agents_can_read_their_budget_over_mcp() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    let rpc = |key: &'static str, body: Value| {
+        h.http
+            .post(format!("{}/mcp", h.proxy))
+            .bearer_auth(key)
+            .json(&body)
+            .send()
+    };
+    let init: Value = rpc(TUNED_KEY, json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}}))
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(init["result"]["serverInfo"]["name"], "tokenrein");
+    let resp = rpc(
+        TUNED_KEY,
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), 202);
+    let tools: Value = rpc(
+        TUNED_KEY,
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+    )
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(tools["result"]["tools"][0]["name"], "tokenrein_budget");
+    // A run spends some of its $1 budget, then asks what is left.
+    assert_eq!(
+        tuned(
+            &h,
+            "mcp-run",
+            json!({"model": "claude-haiku-4-5", "max_tokens": 50, "messages": hi()})
+        )
+        .send()
+        .await
+        .unwrap()
+        .status(),
+        200
+    );
+    let call: Value = rpc(
+        TUNED_KEY,
+        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+        "params": {"name": "tokenrein_budget", "arguments": {"run_id": "mcp-run"}}}),
+    )
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let r = &call["result"];
+    assert_eq!(r["isError"], false, "{call}");
+    assert!(
+        r["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Run mcp-run"),
+        "{call}"
+    );
+    let b = &r["structuredContent"]["run_budget"];
+    assert_eq!(b["limit_usd"], 1.0);
+    assert!(b["spent_usd"].as_f64().unwrap() > 0.0);
+    assert!(b["left_usd"].as_f64().unwrap() < 1.0);
+    // Without a run id it finds the agent's latest run in the project.
+    let call: Value = rpc(
+        TUNED_KEY,
+        json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+        "params": {"name": "tokenrein_budget", "arguments": {}}}),
+    )
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(
+        call["result"]["structuredContent"]["run"], "mcp-run",
+        "{call}"
+    );
+    // Unknown methods and tools, and a missing key.
+    let unknown: Value = rpc(
+        TUNED_KEY,
+        json!({"jsonrpc": "2.0", "id": 5, "method": "resources/list"}),
+    )
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(unknown["error"]["code"], -32601);
+    let resp = h
+        .http
+        .post(format!("{}/mcp", h.proxy))
+        .json(&json!({"jsonrpc": "2.0", "id": 6, "method": "tools/list"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401);
 }

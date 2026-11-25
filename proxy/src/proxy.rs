@@ -97,6 +97,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/usage", post(crate::ingest::usage))
         .route("/v1/check", post(crate::ingest::check))
         .route("/v1/steps", post(crate::ingest::steps))
+        .route("/mcp", post(crate::mcp::handle).get(crate::mcp::no_stream))
         .route("/v1/otel/v1/logs", post(crate::ingest::otel_logs))
         .route("/v1/otel/v1/traces", post(crate::ingest::otel_traces))
         .route("/v1/otel/v1/metrics", post(crate::ingest::otel_discard))
@@ -176,6 +177,9 @@ struct Ctx {
     anatomy: Arc<crate::prompts::Anatomy>,
     /// The request event's `prompt` field, once the call has answered.
     prompt: Option<Value>,
+    /// What the proxy changed to save money, and whether it passed on a loop-guard nudge.
+    optimized: Option<Value>,
+    nudged: bool,
 }
 
 struct Outcome<'a> {
@@ -279,7 +283,17 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         },
     };
 
-    let prepared = match providers::prepare(api, &body, rt.cfg.server.default_max_output_tokens) {
+    // Calls of one agent share OpenAI's cache through this key (never its name in the clear).
+    let cache_key = format!(
+        "tr-{}",
+        &crate::loops::fingerprint(&[&org.id, &project.id, &agent])[..16]
+    );
+    let prepared = match providers::prepare(
+        api,
+        &body,
+        rt.cfg.server.default_max_output_tokens,
+        Some((&project.optimize, &cache_key)),
+    ) {
         Ok(p) => p,
         Err(m) => return reject(StatusCode::BAD_REQUEST, "tokenrein_invalid_request", &m),
     };
@@ -419,6 +433,8 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         pre_upstream_us: 0,
         anatomy: Arc::new(prepared.anatomy.clone()),
         prompt: None,
+        optimized: (!prepared.optimized.is_empty()).then(|| prepared.optimized.to_json()),
+        nudged: false,
     };
     if !price_known {
         tracing::warn!(request_id, model = %ctx.model, "unknown model price; reserving at the provider's most expensive rate");
@@ -534,6 +550,7 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
     // Loop detection, once the call has been let through: a refused retry is not a call, so a run
     // waiting for an approver does not look like a loop. A run caught looping stops here.
     let loop_policy = crate::loops::policy_for(&rt, &org.id, &project.id);
+    let nudges = loop_policy.as_ref().is_some_and(|p| p.nudge);
     if loop_policy.is_some() {
         let fingerprint = serde_json::from_slice::<serde_json::Value>(&body)
             .ok()
@@ -546,6 +563,8 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
             fingerprint: fingerprint.as_deref(),
             call: true,
             cost: 0,
+            prompt_tokens: ctx.input_est,
+            outcome: None,
         };
         match crate::loops::observe(&st, loop_policy, seen).await {
             Ok(Some(action)) => {
@@ -579,6 +598,15 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         }
     }
 
+    // A run the loop guard nudged gets the note at the end of this request.
+    let mut upstream_body = prepared.body;
+    if nudges
+        && let Some(note) = crate::loops::take_nudge(&st, &org.id, &run_id).await
+        && let Some(b) = crate::optimize::with_note(api, &upstream_body, &note)
+    {
+        upstream_body = b;
+        ctx.nudged = true;
+    }
     ctx.pre_upstream_us = started.elapsed().as_micros() as u64;
 
     let url = format!("{base}{}", api.path());
@@ -589,7 +617,7 @@ async fn handle(st: Arc<AppState>, api: Api, headers: HeaderMap, body: Bytes) ->
         ctx,
         url,
         upstream_headers,
-        prepared.body,
+        upstream_body,
         reply_tx,
     ));
     match reply_rx.await {
@@ -940,11 +968,21 @@ async fn settle(st: &AppState, ctx: &Ctx, actual: u64) {
                         fingerprint: None,
                         call: false,
                         cost: actual,
+                        prompt_tokens: 0,
+                        outcome: None,
                     };
                     if let Err(e) = crate::loops::observe(st, policy, seen).await {
                         tracing::warn!(request_id = %ctx.request_id, error = %e, "loop detection failed");
                     }
                 }
+                let call = crate::forecast::Call {
+                    org: &ctx.org,
+                    project: &ctx.project,
+                    agent: &ctx.agent,
+                    run: &ctx.run_id,
+                    cost: actual,
+                };
+                crate::forecast::record(st, &call).await;
                 return;
             }
             Err(e) => {
@@ -990,6 +1028,8 @@ fn emit(st: &AppState, ctx: &Ctx, o: &Outcome) {
         "client_disconnected": o.client_disconnected,
         "source": "proxy",
         "prompt": ctx.prompt,
+        "optimized": ctx.optimized,
+        "nudged": ctx.nudged.then_some(true),
     });
     println!("{event}");
     if o.blocked_scope.is_none() {

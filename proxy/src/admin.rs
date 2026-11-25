@@ -412,6 +412,7 @@ async fn overview(State(st): State<Arc<AppState>>, admin: Admin) -> Response {
                         "id": p.id,
                         "pack": p.pack,
                         "capture_content": p.capture_content,
+                        "optimize": p.optimize,
                         "budgets": p.budgets,
                         "effective": Budgets::effective(&org.budgets, &p.budgets),
                         "keys": keys,
@@ -462,6 +463,7 @@ struct ProjectBody {
     id: Option<String>,
     budgets: Option<Budgets>,
     capture_content: Option<bool>,
+    optimize: Option<crate::config::Optimize>,
 }
 
 #[derive(Deserialize)]
@@ -627,6 +629,7 @@ async fn create_project(
                 budgets: body.budgets.unwrap_or_default(),
                 pack: None,
                 capture_content: body.capture_content.unwrap_or(false),
+                optimize: body.optimize.unwrap_or_default(),
             });
             Ok(id)
         },
@@ -662,6 +665,17 @@ async fn update_project(
             }
             if let Some(capture) = body.capture_content {
                 p.capture_content = capture;
+            }
+            if let Some(opt) = body.optimize {
+                for r in &opt.routes {
+                    let ok = |m: &str| !m.trim().is_empty() && m.len() <= 200;
+                    if !ok(&r.from) || !ok(&r.to) || r.from == r.to {
+                        return Err(EditError::Invalid(
+                            "a model route needs two different model names".into(),
+                        ));
+                    }
+                }
+                p.optimize = opt;
             }
             Ok(())
         },
@@ -1952,7 +1966,9 @@ async fn run_timeline(
             })
         })
         .collect();
-    Json(json!({ "run_id": run, "runs": runs, "events": events, "steps": steps })).into_response()
+    let forecast = crate::forecast::get(&st, &org, &run).await;
+    Json(json!({ "run_id": run, "runs": runs, "events": events, "steps": steps, "forecast": forecast }))
+        .into_response()
 }
 
 /// `GET /admin/orgs/{org}/activity`: per minute over the last hour, model calls, agent steps,

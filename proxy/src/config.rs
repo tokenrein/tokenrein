@@ -83,6 +83,15 @@ pub struct LoopPolicy {
     /// Model calls in one run, including its sub-agent runs' own counts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_calls_per_run: Option<u32>,
+    /// No progress: this many model calls in a row that add context but no new information
+    /// (no new tool call, no changed tool result).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_calls_without_progress: Option<u32>,
+    /// Nudge before stopping: the first time the guard trips, tell the agent (a short note in its
+    /// context, through the proxy or its hooks) instead of pausing or killing the run; the next
+    /// time, act.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub nudge: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -371,6 +380,37 @@ pub struct ProjectConfig {
     /// only each step's kind, tool name, size, outcome and timing.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub capture_content: bool,
+    /// Changes the proxy may make to this project's requests to save money (proxy mode only).
+    #[serde(default, skip_serializing_if = "Optimize::is_off")]
+    pub optimize: Optimize,
+}
+
+/// Request changes the proxy makes for a project, all off by default.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Optimize {
+    /// Turn on prompt caching when a client leaves it out: Anthropic's automatic caching
+    /// (`cache_control`), OpenAI's cache routing key (`prompt_cache_key`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cache: bool,
+    /// Send simple steps (no tools, a short prompt, a short answer) for `from` to `to`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<ModelRoute>,
+}
+
+impl Optimize {
+    pub fn is_off(&self) -> bool {
+        !self.cache && self.routes.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ModelRoute {
+    /// The model the client asks for (a prefix: `claude-opus-5-5` also covers dated versions).
+    pub from: String,
+    /// The cheaper model simple steps go to.
+    pub to: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

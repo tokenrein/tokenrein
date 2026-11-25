@@ -24,6 +24,8 @@ fn warn_loops(max_repeats: u32, usd_per_minute: f64, max_calls: Option<u32>) -> 
         repeat_window_secs: 600,
         max_usd_per_minute: Some(usd_per_minute),
         max_calls_per_run: max_calls,
+        max_calls_without_progress: None,
+        nudge: false,
     })
 }
 

@@ -8,6 +8,19 @@ SDKs; the release workflow refuses a tag that does not match all three.
 ## [Unreleased]
 
 ### Added
+- No-progress detection in the loop guard (`max_calls_without_progress`): model calls that grow
+  the context by 20,000+ tokens with no new information (no new tool call, no changed tool
+  result) trip it before the repeats start.
+- Nudge before stopping (`nudge`): the first time the loop guard trips, the agent gets a short
+  note in its context (through the proxy, or Claude Code's hooks) and the run goes on; carrying on
+  the same way trips it again and the action applies.
+- Run cost forecast: a line through each run's per-call costs projects where it ends up. The run
+  page shows it, and a run on course to pass its budget gets one early `budget_warning`.
+- Automatic optimisation per project (proxy mode, off by default): prompt caching for requests
+  that leave it out (Anthropic `cache_control`, OpenAI `prompt_cache_key`), and cheaper-model
+  routes for simple steps (no tools, short prompt, short answer).
+- A budget the agent can see: the proxy serves MCP at `/mcp` with a `tokenrein_budget` tool, so an
+  agent can check what its run has left and wrap up cleanly.
 - Insights page and `GET /admin/orgs/{org}/insights?days=`: where agents waste tokens, from the
   usage and step history, with what to fix first. Cache health compares each call with the
   previous call of its run and puts misses down to a cause (caching not turned on, the start of

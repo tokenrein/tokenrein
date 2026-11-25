@@ -94,6 +94,8 @@ pub struct Prepared {
     pub previous_response_id: Option<String>,
     /// Hashes and sizes of the request's parts, for cache and tool analysis.
     pub anatomy: crate::prompts::Anatomy,
+    /// What the proxy changed to save money (see `crate::optimize`).
+    pub optimized: crate::optimize::Applied,
 }
 
 const IMAGE_TOKENS: u64 = 1_600;
@@ -106,12 +108,18 @@ pub fn estimate_tokens_from_bytes(bytes: u64) -> u64 {
     (bytes * 2).div_ceil(5)
 }
 
-pub fn prepare(api: Api, raw: &[u8], default_max_out: u64) -> Result<Prepared, String> {
+/// `optimize` is the project's optimisation settings and the run's cache key (proxy mode).
+pub fn prepare(
+    api: Api,
+    raw: &[u8],
+    default_max_out: u64,
+    optimize: Option<(&crate::config::Optimize, &str)>,
+) -> Result<Prepared, String> {
     let mut body: Map<String, Value> = serde_json::from_slice(raw)
         .map_err(|e| format!("request body must be a JSON object: {e}"))?;
     let anatomy = crate::prompts::anatomy(api, &body);
 
-    let model = body
+    let mut model = body
         .get("model")
         .and_then(Value::as_str)
         .filter(|m| !m.is_empty())
@@ -178,6 +186,18 @@ pub fn prepare(api: Api, raw: &[u8], default_max_out: u64) -> Result<Prepared, S
     }
     let input_tokens_est =
         estimate_tokens_from_bytes(bytes) + extra_tokens + REQUEST_OVERHEAD_TOKENS;
+    let optimized = match optimize {
+        Some((opt, key)) if !opt.is_off() => {
+            let done = crate::optimize::apply(api, &mut body, opt, input_tokens_est, max_out, key);
+            if done.routed_from.is_some()
+                && let Some(m) = body.get("model").and_then(Value::as_str)
+            {
+                model = m.to_string();
+            }
+            done
+        }
+        _ => crate::optimize::Applied::default(),
+    };
 
     let body = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
     Ok(Prepared {
@@ -188,6 +208,7 @@ pub fn prepare(api: Api, raw: &[u8], default_max_out: u64) -> Result<Prepared, S
         max_output_tokens: max_out.saturating_mul(choices),
         previous_response_id,
         anatomy,
+        optimized,
     })
 }
 
@@ -521,7 +542,7 @@ mod tests {
     fn injects_output_cap_and_stream_usage_for_chat() {
         let raw =
             br#"{"model":"gpt-4o-mini","stream":true,"messages":[{"role":"user","content":"hi"}]}"#;
-        let p = prepare(Api::OpenAIChat, raw, 1000).unwrap();
+        let p = prepare(Api::OpenAIChat, raw, 1000, None).unwrap();
         let body = parse(&p.body);
         assert_eq!(body["max_completion_tokens"], 1000);
         assert_eq!(body["stream_options"]["include_usage"], true);
@@ -532,20 +553,21 @@ mod tests {
     #[test]
     fn respects_client_cap_and_multiplies_by_n() {
         let raw = br#"{"model":"gpt-4o","n":3,"max_tokens":200,"messages":[]}"#;
-        let p = prepare(Api::OpenAIChat, raw, 1000).unwrap();
+        let p = prepare(Api::OpenAIChat, raw, 1000, None).unwrap();
         assert_eq!(p.max_output_tokens, 600);
         assert!(parse(&p.body).get("max_completion_tokens").is_none());
     }
 
     #[test]
     fn rejects_bad_requests() {
-        assert!(prepare(Api::OpenAIChat, b"[]", 10).is_err());
-        assert!(prepare(Api::OpenAIChat, br#"{"messages":[]}"#, 10).is_err());
+        assert!(prepare(Api::OpenAIChat, b"[]", 10, None).is_err());
+        assert!(prepare(Api::OpenAIChat, br#"{"messages":[]}"#, 10, None).is_err());
         assert!(
             prepare(
                 Api::AnthropicMessages,
                 br#"{"model":"m","max_tokens":0}"#,
-                10
+                10,
+                None
             )
             .is_err()
         );
@@ -563,7 +585,7 @@ mod tests {
             ]}]
         }))
         .unwrap();
-        let p = prepare(Api::AnthropicMessages, &raw, 10).unwrap();
+        let p = prepare(Api::AnthropicMessages, &raw, 10, None).unwrap();
         assert!(p.input_tokens_est < 2_000, "{}", p.input_tokens_est);
     }
 
@@ -574,7 +596,7 @@ mod tests {
             &json!({"model":"gpt-4o","messages":[{"role":"user","content":text}]}),
         )
         .unwrap();
-        let p = prepare(Api::OpenAIChat, &raw, 10).unwrap();
+        let p = prepare(Api::OpenAIChat, &raw, 10, None).unwrap();
         assert!(p.input_tokens_est >= 8_000, "{}", p.input_tokens_est);
     }
 
