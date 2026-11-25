@@ -28,7 +28,7 @@ month, across orgs.
 
 | Feature | Team | Enterprise |
 |---|---|---|
-| No developer or spend limit (Team is priced per developer) | ✓ | ✓ |
+| No developer or spend limit (both plans are priced per developer) | ✓ | ✓ |
 | Single sign-on (OpenID Connect: Okta, Entra ID, Google, any OIDC provider) | ✓ | ✓ |
 | Audit log export (CSV, for your SIEM) | ✓ | ✓ |
 | Spend reports and exports past 90 days (with `TOKENREIN_HISTORY_DIR`) | ✓ | ✓ |
